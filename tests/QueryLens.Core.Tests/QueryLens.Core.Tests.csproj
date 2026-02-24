@@ -22,6 +22,29 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\QueryLens.Core\QueryLens.Core.csproj" />
+    <ProjectReference Include="..\..\src\QueryLens.MySql\QueryLens.MySql.csproj" />
   </ItemGroup>
+
+  <!-- Build SampleApp and copy its output to the test bin dir so ALC tests
+       can load it dynamically. ReferenceOutputAssembly=false keeps SampleApp
+       out of the test's compile references; the AfterTargets target does the
+       actual file copy after both projects are built. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\samples\SampleApp\SampleApp.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
+  </ItemGroup>
+
+  <Target Name="CopySampleAppToTestOutput" AfterTargets="Build">
+    <PropertyGroup>
+      <SampleAppOutputDir>..\..\samples\SampleApp\bin\$(Configuration)\$(TargetFramework)\</SampleAppOutputDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <SampleAppFiles Include="$(SampleAppOutputDir)**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SampleAppFiles)"
+          DestinationFolder="$(OutputPath)%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>
