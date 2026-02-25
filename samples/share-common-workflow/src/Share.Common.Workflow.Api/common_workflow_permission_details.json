@@ -1,0 +1,37 @@
+[
+  {
+    "code": "api.wf.workflow.get",
+    "name": "GetWorkflowByType",
+    "description": "/{workflowType:alpha}"
+  },
+  {
+    "code": "api.wf.application.assignWorkflowStage",
+    "name": "AssignWorkflowStage",
+    "description": "/applications/{applicationId:guid}/assign-officer"
+  },
+  {
+    "code": "api.wf.application.completeApplicationWorkflow",
+    "name": "CompleteApplicationWorkflow",
+    "description": "/applications/{applicationId:guid}/complete"
+  },
+  {
+    "code": "api.wf.application.create",
+    "name": "CreateApplication",
+    "description": "/{workflowType:alpha}/applications"
+  },
+  {
+    "code": "api.wf.application.get",
+    "name": "GetApplicationWorkflow",
+    "description": "/applications/{applicationId:guid}"
+  },
+  {
+    "code": "api.wf.application.remarks.get",
+    "name": "GetApplicationWorkflowRemarks",
+    "description": "/applications/{applicationId:guid}/remarks"
+  },
+  {
+    "code": "api.wf.application.postWorkflowStageDecision",
+    "name": "PostWorkflowStageDecision",
+    "description": "/applications/{applicationId:guid}"
+  }
+]

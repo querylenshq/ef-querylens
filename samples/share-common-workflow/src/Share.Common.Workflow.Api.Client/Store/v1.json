@@ -1,0 +1,1479 @@
+{
+  "x-generator": "NSwag v14.2.0.0 (NJsonSchema v11.1.0.0 (Newtonsoft.Json v13.0.0.0))",
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Share.Common.Workflow.Api",
+    "version": "v1"
+  },
+  "paths": {
+    "/workflows/{workflowType}": {
+      "get": {
+        "tags": [
+          "{Workflowtype}"
+        ],
+        "operationId": "GetWorkflowByType",
+        "parameters": [
+          {
+            "name": "workflowType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Enums_WorkflowType"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetWorkflowByTypeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTBearerAuth": []
+          },
+          {
+            "HMACAuth": []
+          }
+        ]
+      }
+    },
+    "/workflows/applications/{applicationId}/assign-officer": {
+      "post": {
+        "tags": [
+          "Applications"
+        ],
+        "operationId": "AssignWorkflowStage",
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "x-name": "AssignWorkflowStageRequest",
+          "description": "",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignWorkflowStageRequest"
+              }
+            }
+          },
+          "required": true,
+          "x-position": 1
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTBearerAuth": []
+          },
+          {
+            "HMACAuth": []
+          }
+        ]
+      }
+    },
+    "/workflows/applications/{applicationId}/complete": {
+      "post": {
+        "tags": [
+          "Applications"
+        ],
+        "operationId": "CompleteApplicationWorkflow",
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "x-name": "CompleteApplicationWorkflowRequest",
+          "description": "",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteApplicationWorkflowRequest"
+              }
+            }
+          },
+          "required": true,
+          "x-position": 1
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTBearerAuth": []
+          },
+          {
+            "HMACAuth": []
+          }
+        ]
+      }
+    },
+    "/workflows/{workflowType}/applications": {
+      "post": {
+        "tags": [
+          "{Workflowtype}"
+        ],
+        "operationId": "CreateApplication",
+        "parameters": [
+          {
+            "name": "workflowType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Enums_WorkflowType"
+                }
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "x-name": "CreateApplicationRequest",
+          "description": "",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApplicationRequest"
+              }
+            }
+          },
+          "required": true,
+          "x-position": 1
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTBearerAuth": []
+          },
+          {
+            "HMACAuth": []
+          }
+        ]
+      }
+    },
+    "/workflows/applications/{applicationId}": {
+      "get": {
+        "tags": [
+          "Applications"
+        ],
+        "operationId": "GetApplicationWorkflow",
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetApplicationWorkflowResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTBearerAuth": []
+          },
+          {
+            "HMACAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Applications"
+        ],
+        "operationId": "PostWorkflowStageDecision",
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "x-name": "PostWorkflowStageDecisionRequest",
+          "description": "",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostWorkflowStageDecisionRequest"
+              }
+            }
+          },
+          "required": true,
+          "x-position": 1
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTBearerAuth": []
+          },
+          {
+            "HMACAuth": []
+          }
+        ]
+      }
+    },
+    "/workflows/applications/{applicationId}/remarks": {
+      "get": {
+        "tags": [
+          "Applications"
+        ],
+        "operationId": "GetApplicationWorkflowRemarks",
+        "parameters": [
+          {
+            "name": "applicationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetApplicationWorkflowRemarksResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "JWTBearerAuth": []
+          },
+          {
+            "HMACAuth": []
+          }
+        ]
+      }
+    },
+    "/workflows/dev/permissions": {
+      "get": {
+        "tags": [
+          "Dev"
+        ],
+        "description": "Get app permissions.",
+        "operationId": "GetPermissionsEndpoint",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPermissionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workflows/dev/hmac": {
+      "post": {
+        "tags": [
+          "Dev"
+        ],
+        "description": "Get hmac token for dev testing.",
+        "operationId": "TempHmacTokenEndpoint",
+        "requestBody": {
+          "x-name": "TempLoginEndpointRequest",
+          "description": "",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TempLoginEndpointRequest"
+              }
+            }
+          },
+          "required": true,
+          "x-position": 1
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TempLoginEndpointResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaseEndpointResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "GetWorkflowByTypeResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseEndpointResponse"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "workflow": {
+                "$ref": "#/components/schemas/WorkflowResponse"
+              }
+            }
+          }
+        ]
+      },
+      "WorkflowResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflowType": {
+            "$ref": "#/components/schemas/Enums_WorkflowType"
+          },
+          "levels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowLevelResponse"
+            }
+          }
+        }
+      },
+      "Enums_WorkflowType": {
+        "type": "string",
+        "description": "",
+        "x-enumNames": [
+          "DealerLicenseNew",
+          "DealerLicenseRenewal",
+          "DealerLicenseAmendment",
+          "DealerLicenseCancellation",
+          "DealerLicenseFullfilmentOfApprovalCondition",
+          "DealerLicenseApprovalConditionChange",
+          "DealerLicenseStatusChange",
+          "DealerLicenseFoacExtension",
+          "ProductRegistrationNewImmediate",
+          "ProductRegistrationRenewal",
+          "ProductRegistrationAmendment",
+          "ProductRegistrationNewExpedited",
+          "ProductRegistrationFullfilmentOfApprovalCondition",
+          "ProductRegistrationApprovalConditionChange",
+          "ProductRegistrationStatusChange",
+          "ProductRegistrationFoacExtension",
+          "ChangeOfRegistrantNew",
+          "ChangeNotificationNewAdministrativeOrNotificationSmdr",
+          "ChangeNotificationNewTechnicalOrReview",
+          "SpecialAccessRouteNew",
+          "SpecialAccessRouteFullfilmentOfApprovalCondition",
+          "SpecialAccessRouteApprovalConditionChange",
+          "SpecialAccessRouteDistributionRecord",
+          "SpecialAccessRouteFoacExtension",
+          "ExportCertificateNew",
+          "FreeSaleCertificateNew",
+          "ProductNotificationStatusChange",
+          "ImporterTaggingNew",
+          "AppointmentBookingNew",
+          "ProductNotificationNew",
+          "ProductNotificationAmendment",
+          "DealerNotificationNew",
+          "DealerNotificationAmendment",
+          "ProductRegistrationNew",
+          "ProductRegistrationMajorVariation",
+          "ProductRegistrationMinorVariation",
+          "ProductRegistrationChangeOfRegistrant",
+          "ProductRegistrationDeva",
+          "ProductRegistrationRmp",
+          "ProductRegistrationFulfilment",
+          "ProductRegistrationRetention",
+          "DealerLicenseNewImporterWholesalerLicense",
+          "DealerLicenceUpdateImporterWholesalerLicence",
+          "DealerLicenseNewManufacturerLicense",
+          "DealerLicenceUpdateManufacturerLicence",
+          "DealerLicenseCancelImporterWholesalerLicense",
+          "DealerLicenseCancelManufacturerLicense",
+          "DealerCertificateNewGDP",
+          "DealerCertificateNewGDPWithoutTechnicalAssessment",
+          "DealerCertificateNewGMP",
+          "DealerCertificateNewGMPWithoutTechnicalAssessment",
+          "AuditCaseILWL",
+          "AuditCaseML",
+          "PharmaceuticalProductNew",
+          "FreeSaleNew"
+        ],
+        "enum": [
+          "DealerLicenseNew",
+          "DealerLicenseRenewal",
+          "DealerLicenseAmendment",
+          "DealerLicenseCancellation",
+          "DealerLicenseFullfilmentOfApprovalCondition",
+          "DealerLicenseApprovalConditionChange",
+          "DealerLicenseStatusChange",
+          "DealerLicenseFoacExtension",
+          "ProductRegistrationNewImmediate",
+          "ProductRegistrationRenewal",
+          "ProductRegistrationAmendment",
+          "ProductRegistrationNewExpedited",
+          "ProductRegistrationFullfilmentOfApprovalCondition",
+          "ProductRegistrationApprovalConditionChange",
+          "ProductRegistrationStatusChange",
+          "ProductRegistrationFoacExtension",
+          "ChangeOfRegistrantNew",
+          "ChangeNotificationNewAdministrativeOrNotificationSmdr",
+          "ChangeNotificationNewTechnicalOrReview",
+          "SpecialAccessRouteNew",
+          "SpecialAccessRouteFullfilmentOfApprovalCondition",
+          "SpecialAccessRouteApprovalConditionChange",
+          "SpecialAccessRouteDistributionRecord",
+          "SpecialAccessRouteFoacExtension",
+          "ExportCertificateNew",
+          "FreeSaleCertificateNew",
+          "ProductNotificationStatusChange",
+          "ImporterTaggingNew",
+          "AppointmentBookingNew",
+          "ProductNotificationNew",
+          "ProductNotificationAmendment",
+          "DealerNotificationNew",
+          "DealerNotificationAmendment",
+          "ProductRegistrationNew",
+          "ProductRegistrationMajorVariation",
+          "ProductRegistrationMinorVariation",
+          "ProductRegistrationChangeOfRegistrant",
+          "ProductRegistrationDeva",
+          "ProductRegistrationRmp",
+          "ProductRegistrationFulfilment",
+          "ProductRegistrationRetention",
+          "DealerLicenseNewImporterWholesalerLicense",
+          "DealerLicenceUpdateImporterWholesalerLicence",
+          "DealerLicenseNewManufacturerLicense",
+          "DealerLicenceUpdateManufacturerLicence",
+          "DealerLicenseCancelImporterWholesalerLicense",
+          "DealerLicenseCancelManufacturerLicense",
+          "DealerCertificateNewGDP",
+          "DealerCertificateNewGDPWithoutTechnicalAssessment",
+          "DealerCertificateNewGMP",
+          "DealerCertificateNewGMPWithoutTechnicalAssessment",
+          "AuditCaseILWL",
+          "AuditCaseML",
+          "PharmaceuticalProductNew",
+          "FreeSaleNew"
+        ]
+      },
+      "WorkflowLevelResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "isFinal": {
+            "type": "boolean"
+          },
+          "workflowRole": {
+            "$ref": "#/components/schemas/Enums_WorkflowRole"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowLevelStageResponse"
+            }
+          }
+        }
+      },
+      "Enums_WorkflowRole": {
+        "type": "string",
+        "description": "",
+        "x-enumNames": [
+          "AssignmentOfficer",
+          "VerificationOfficer",
+          "EvaluationOfficer",
+          "SupportingOfficer",
+          "ApprovingOfficer"
+        ],
+        "enum": [
+          "AssignmentOfficer",
+          "VerificationOfficer",
+          "EvaluationOfficer",
+          "SupportingOfficer",
+          "ApprovingOfficer"
+        ]
+      },
+      "WorkflowLevelStageResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stage": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stageIdentifier": {
+            "$ref": "#/components/schemas/Enums_WorkflowStageIdentifier"
+          },
+          "isFinal": {
+            "type": "boolean"
+          },
+          "privileges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowLevelStagePrivilegeResponse"
+            }
+          }
+        }
+      },
+      "Enums_WorkflowStageIdentifier": {
+        "type": "string",
+        "description": "",
+        "x-enumNames": [
+          "None",
+          "Verification",
+          "AcceptForEvaluation",
+          "Evaluation",
+          "Support",
+          "Approval"
+        ],
+        "enum": [
+          "None",
+          "Verification",
+          "AcceptForEvaluation",
+          "Evaluation",
+          "Support",
+          "Approval"
+        ]
+      },
+      "WorkflowLevelStagePrivilegeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "privilegeType": {
+            "$ref": "#/components/schemas/Enums_WorkflowPrivilegeType"
+          },
+          "privilegeRequirementType": {
+            "$ref": "#/components/schemas/Enums_WorkflowPrivilegeRequirementType"
+          }
+        }
+      },
+      "Enums_WorkflowPrivilegeType": {
+        "type": "string",
+        "description": "",
+        "x-enumNames": [
+          "RaiseIr",
+          "CreateChildCase",
+          "ReviewDealerActivities",
+          "ReviewProducts",
+          "Approve",
+          "Reject",
+          "InitiateDeferredPayment",
+          "RaiseQuery",
+          "ExtendIr",
+          "InstantApprove",
+          "InstantReject",
+          "GrantThirdPartyIrAccess"
+        ],
+        "enum": [
+          "RaiseIr",
+          "CreateChildCase",
+          "ReviewDealerActivities",
+          "ReviewProducts",
+          "Approve",
+          "Reject",
+          "InitiateDeferredPayment",
+          "RaiseQuery",
+          "ExtendIr",
+          "InstantApprove",
+          "InstantReject",
+          "GrantThirdPartyIrAccess"
+        ]
+      },
+      "Enums_WorkflowPrivilegeRequirementType": {
+        "type": "string",
+        "description": "",
+        "x-enumNames": [
+          "RequiredToCompleteStage",
+          "RequiredIfInitiated",
+          "Optional"
+        ],
+        "enum": [
+          "RequiredToCompleteStage",
+          "RequiredIfInitiated",
+          "Optional"
+        ]
+      },
+      "BaseEndpointResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "isSuccess": {
+            "type": "boolean"
+          },
+          "errorMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BaseEndpointResponse_BaseValidationError"
+            }
+          }
+        }
+      },
+      "BaseEndpointResponse_BaseValidationError": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "propertyName": {
+            "type": "string"
+          },
+          "errorMessage": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GetWorkflowByTypeRequest": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "AssignWorkflowStageRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "level"
+        ],
+        "properties": {
+          "stage": {
+            "type": "integer",
+            "format": "int32",
+            "minLength": 1,
+            "nullable": false
+          },
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "minLength": 1,
+            "nullable": false
+          },
+          "assingeeAccountId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "assigneerAccountId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "remarks": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CompleteApplicationWorkflowRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "completedAt"
+        ],
+        "properties": {
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1,
+            "nullable": false
+          }
+        }
+      },
+      "CreateApplicationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "applicationId",
+          "applicationNumber"
+        ],
+        "properties": {
+          "applicationId": {
+            "type": "string",
+            "format": "uuid",
+            "minLength": 1,
+            "nullable": false
+          },
+          "applicationNumber": {
+            "type": "string",
+            "minLength": 1,
+            "nullable": false
+          }
+        }
+      },
+      "GetApplicationWorkflowResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseEndpointResponse"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "workflowType": {
+                "$ref": "#/components/schemas/Enums_WorkflowType"
+              },
+              "stages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GetApplicationWorkflowResponse_ApplicationWorkflowStageItem"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "GetApplicationWorkflowResponse_ApplicationWorkflowStageItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stageId": {
+            "type": "string"
+          },
+          "stageName": {
+            "type": "string"
+          },
+          "stageIdentifier": {
+            "$ref": "#/components/schemas/Enums_WorkflowStageIdentifier"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "supportingOfficer": {
+            "type": "string",
+            "nullable": true
+          },
+          "supportingOfficerId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "decision": {
+            "nullable": true,
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Enums_WorkflowDecision"
+              }
+            ]
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "canAssignToMe": {
+            "type": "boolean"
+          },
+          "canReject": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Enums_WorkflowDecision": {
+        "type": "string",
+        "description": "",
+        "x-enumNames": [
+          "Pending",
+          "Reject",
+          "Approve",
+          "ReturnForAmendment",
+          "UnTag",
+          "Assign",
+          "InstantApprove",
+          "InstantReject"
+        ],
+        "enum": [
+          "Pending",
+          "Reject",
+          "Approve",
+          "ReturnForAmendment",
+          "UnTag",
+          "Assign",
+          "InstantApprove",
+          "InstantReject"
+        ]
+      },
+      "GetApplicationWorkflowRequest": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "GetApplicationWorkflowRemarksResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseEndpointResponse"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GetApplicationWorkflowRemarksResponse_ApplicationWorkflowStageItem"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "GetApplicationWorkflowRemarksResponse_ApplicationWorkflowStageItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "remarks": {
+            "type": "string",
+            "nullable": true
+          },
+          "supportingOfficer": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "GetApplicationWorkflowRemarksRequest": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "PostWorkflowStageDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "decisionDate",
+          "nextLevel",
+          "nextStage"
+        ],
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/Enums_WorkflowDecision"
+          },
+          "decisionDate": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1,
+            "nullable": false
+          },
+          "remarks": {
+            "type": "string",
+            "nullable": true
+          },
+          "nextLevel": {
+            "type": "integer",
+            "format": "int32",
+            "minLength": 1,
+            "nullable": false
+          },
+          "nextStage": {
+            "type": "integer",
+            "format": "int32",
+            "minLength": 1,
+            "nullable": false
+          },
+          "isFinalStage": {
+            "type": "boolean"
+          },
+          "accountId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        }
+      },
+      "GetPermissionsResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseEndpointResponse"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "appCode": {
+                "type": "string"
+              },
+              "permissions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PermissionsDetails"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "PermissionsDetails": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "TempLoginEndpointResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BaseEndpointResponse"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "token": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        ]
+      },
+      "TempLoginEndpointRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "allPermission": {
+            "type": "boolean",
+            "default": true
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "JWTBearerAuth": {
+        "type": "http",
+        "description": "Enter a JWT token to authorize the requests...",
+        "scheme": "Bearer",
+        "bearerFormat": "JWT"
+      },
+      "HMACAuth": {
+        "type": "apiKey",
+        "description": "Enter a SHARE HMAC token to authorize the requests...",
+        "name": "Authorization",
+        "in": "header"
+      }
+    }
+  }
+}

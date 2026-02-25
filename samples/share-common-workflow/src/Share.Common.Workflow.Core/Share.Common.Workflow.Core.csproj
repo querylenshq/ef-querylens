@@ -1,0 +1,41 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamesapce>Share.Common.Workflow.Core</RootNamesapce>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Share.Common.AccessControl.Auth.Api.Client" />
+    <PackageReference Include="Share.Lib.Abstractions.FastEndpoints" />
+    <PackageReference Include="Share.Lib.Bootstrap.Api.Core" />
+    <PackageReference Include="Share.Lib.Cloud.S3" />
+    <PackageReference Include="Share.Lib.Cloud.Localstack" />
+    <PackageReference Include="Share.Lib.Kiota.Client" />
+    <PackageReference Include="Share.Lib.MassTransit.AmazonSqs" />
+    <PackageReference Include="Share.Lib.Cloud.StackExchangeRedis" />
+
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="Resources\WorkflowValidation.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>WorkflowValidation.resx</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Update="Resources\WorkflowValidation.resx">
+      <Generator>PublicResXFileCodeGenerator</Generator>
+      <LastGenOutput>WorkflowValidation.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="SonarAnalyzer.CSharp">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

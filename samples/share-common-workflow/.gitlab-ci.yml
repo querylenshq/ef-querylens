@@ -1,0 +1,30 @@
+stages:
+  - schedule
+  - nuget-publish
+  - pre-build
+  - build
+  - test
+  - deploy
+
+include:
+  - project: "hsa-share/util/cicd"
+    ref: "deploy/sit-test"
+    file:
+      - /templates/MAIN.yml
+      - /jobs/container-scanning.yml
+      - /jobs/sast.yml
+      - /jobs/secret-detection.yml
+      - /jobs/dependency-check.yml
+      - /jobs/nuget-publish.yml
+      - /jobs/dotnet-outdated.yml
+      - /jobs/dotnet-outdated-dev.yml
+      - /jobs/dotnet-outdated-prod-rel.yml
+      - /jobs/sync_dev_to_sit.yml
+      - /jobs/sonar-scan.yml
+
+.parallel-matrix:
+  parallel:
+    matrix:
+      - PROJECT_NAME: "Share.Common.Workflow.EFCoreMigrations.Dev"
+      - PROJECT_NAME: "Share.Common.Workflow.Api"
+

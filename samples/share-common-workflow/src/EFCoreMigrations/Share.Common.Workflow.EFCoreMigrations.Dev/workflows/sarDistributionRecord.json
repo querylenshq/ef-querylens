@@ -1,0 +1,42 @@
+{
+  "Name": "Special Access Route - Distribution Record",
+  "WorkflowType": "SpecialAccessRouteDistributionRecord",
+  "Levels": [
+    {
+      "Name": "Evaluation Level",
+      "WorkflowRole": "EvaluationOfficer",
+      "IsFinal": true,
+      "Level": 1,
+      "Stages": [
+        {
+          "Name": "Evaluation",
+          "StageIdentifier": "Evaluation",
+          "Stage": 1,
+          "IsFinal": true,
+          "Privileges": [
+            {
+              "PrivilegeType": "Approve",
+              "PrivilegeRequirementType": "RequiredToCompleteStage"
+            },
+            {
+              "PrivilegeType": "RaiseIr",
+              "PrivilegeRequirementType": "RequiredIfInitiated"
+            },
+            {
+              "PrivilegeType": "RaiseQuery",
+              "PrivilegeRequirementType": "Optional"
+            },
+            {
+              "PrivilegeType": "ExtendIr",
+              "PrivilegeRequirementType": "Optional"
+            },
+            {
+              "PrivilegeType": "GrantThirdPartyIrAccess",
+              "PrivilegeRequirementType": "Optional"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

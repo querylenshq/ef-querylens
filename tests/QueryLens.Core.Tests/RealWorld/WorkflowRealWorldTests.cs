@@ -146,11 +146,12 @@ public class WorkflowRealWorldTests
     }
 
     [SkippableFact]
-    public async Task Workflow_MetadataCreationStrategy_IsBootstrap()
+    public async Task Workflow_MetadataCreationStrategy_IsQueryLensFactory()
     {
         SkipIfNotPresent();
 
-        // No IDesignTimeDbContextFactory in this project → expect bootstrap path.
+        // WorkflowQueryLensFactory : IQueryLensDbContextFactory<WorkflowDbContext> is
+        // now present in Share.Common.Workflow.Core → expect "querylens-factory" path.
         using var ctx = CreateContext();
         var (eval, bootstrap) = CreateEvaluator();
 
@@ -158,7 +159,7 @@ public class WorkflowRealWorldTests
             BuildRequest("db.AppWorkflows"));
 
         Assert.True(result.Success, $"Error: {result.ErrorMessage}");
-        Assert.Equal("bootstrap", result.Metadata.CreationStrategy);
+        Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
 
         Console.WriteLine($"[SQL]\n{result.Sql}");
     }

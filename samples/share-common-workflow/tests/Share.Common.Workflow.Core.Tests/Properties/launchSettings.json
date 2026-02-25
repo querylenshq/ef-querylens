@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Share.Common.Workflow.Core.Tests": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:61079;http://localhost:61080"
+    }
+  }
+}

@@ -35,7 +35,7 @@ namespace QueryLens.Core;
 /// </para>
 /// </summary>
 /// <typeparam name="TContext">The <see cref="Microsoft.EntityFrameworkCore.DbContext"/> type this factory creates.</typeparam>
-public interface IQueryLensDbContextFactory<TContext>
+public interface IQueryLensDbContextFactory<out TContext>
     where TContext : Microsoft.EntityFrameworkCore.DbContext
 {
     /// <summary>

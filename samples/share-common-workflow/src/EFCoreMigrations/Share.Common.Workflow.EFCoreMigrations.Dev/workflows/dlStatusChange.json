@@ -1,0 +1,30 @@
+{
+  "Name": "Dealer License - Status Change",
+  "WorkflowType": "DealerLicenseStatusChange",
+  "Levels": [
+    {
+      "Name": "Approval Level",
+      "WorkflowRole": "ApprovingOfficer",
+      "IsFinal": true,
+      "Level": 1,
+      "Stages": [
+        {
+          "Name": "Approving",
+          "StageIdentifier": "Approval",
+          "Stage": 1,
+          "IsFinal": true,
+          "Privileges": [
+            {
+              "PrivilegeType": "Approve",
+              "PrivilegeRequirementType": "RequiredToCompleteStage"
+            },
+            {
+              "PrivilegeType": "InstantReject",
+              "PrivilegeRequirementType": "Optional"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

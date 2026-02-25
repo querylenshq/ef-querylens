@@ -1,0 +1,36 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- For more info on central package management go to https://devblogs.microsoft.com/nuget/introducing-central-package-management-->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup></ItemGroup>
+  <ItemGroup>
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="JunitXml.TestLogger" Version="6.1.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.11" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageVersion Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.21.2" />
+    <PackageVersion Include="Riok.Mapperly" Version="4.2.0" />
+    <PackageVersion Include="Share.Common.AccessControl.MessageContracts" Version="1.2.0" />
+    <PackageVersion Include="Share.Common.AccessControl.Auth.Api.Client" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Abstractions.Api" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Abstractions.FastEndpoints" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Bootstrap.Api" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Bootstrap.Api.Core" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Cloud.SecretsManager" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Kiota.Client" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Abstractions.Serilog" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Abstractions.Aspire.ServiceDefaults" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Cloud.S3" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Cloud.Localstack" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Cloud.StackExchangeRedis" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.MassTransit.AmazonSqs" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Testing.AutoFixture" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Testing.IntegrationTests.Abstractions" Version="1.2.0" />
+    <PackageVersion Include="Share.Lib.Testing.Xunit.Abstractions" Version="1.2.0" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.7.0.110445" />
+    <PackageVersion Include="System.Text.Json" Version="8.0.5" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.2" />
+  </ItemGroup>
+</Project>

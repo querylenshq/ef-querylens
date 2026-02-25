@@ -1,0 +1,9 @@
+[
+  "api.wf.workflow.get",
+  "api.wf.application.assignWorkflowStage",
+  "api.wf.application.completeApplicationWorkflow",
+  "api.wf.application.create",
+  "api.wf.application.get",
+  "api.wf.application.remarks.get",
+  "api.wf.application.postWorkflowStageDecision"
+]
