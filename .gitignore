@@ -53,3 +53,8 @@ local.settings.json
 
 # Claude Code local settings (keep .claude/launch.json but ignore personal overrides)
 .claude/settings.local.json
+
+# Real-world sample projects — local only, not part of the QueryLens repo.
+# Real-world tests (WorkflowRealWorldTests) discover these via SkipIfNotPresent()
+# and simply skip when the project hasn't been built locally.
+samples/share-common-workflow/

@@ -1,6 +1,0 @@
-{
-  "ConnectionStrings": {
-    "CommonWorkflowDbConnectionString": "server=host.docker.internal;database=common.workflow;uid=tsp_dba;pwd=tsp1234"
-  },
-  "WorkerServiceId": "{349e0fb1-f79a-4011-a122-3ab67f3988b9}"
-}
