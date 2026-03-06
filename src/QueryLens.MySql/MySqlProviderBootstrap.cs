@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
 using QueryLens.Core;
 
 namespace QueryLens.MySql;
@@ -16,7 +17,13 @@ public sealed class MySqlProviderBootstrap : IProviderBootstrap
         // Pomelo requires a ServerVersion hint even for offline usage.
         // Default to MySQL 8.0 — the minimum version this tool targets.
         var serverVersion = new MySqlServerVersion(new Version(8, 0, 0));
-        builder.UseMySql("Server=localhost;Database=__querylens_offline__", serverVersion);
+
+        // Pass a pre-created, CLOSED MySqlConnection instead of a connection string.
+        // Pomelo's UseMySql(DbConnection, ...) overload registers the provided connection
+        // object directly — no connection lifecycle is triggered.
+        // ToQueryString() only needs the ServerVersion for SQL dialect generation;
+        // it never actually opens the connection.
+        var connection = new MySqlConnection("Server=__offline__;Database=__querylens__");
+        builder.UseMySql(connection, serverVersion);
     }
 }
-

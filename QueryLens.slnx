@@ -6,6 +6,7 @@
     <Project Path="src/QueryLens.Analyzer/QueryLens.Analyzer.csproj" />
     <Project Path="src/QueryLens.Cli/QueryLens.Cli.csproj" />
     <Project Path="src/QueryLens.Core/QueryLens.Core.csproj" />
+    <Project Path="src/QueryLens.Lsp/QueryLens.Lsp.csproj" />
     <Project Path="src/QueryLens.Mcp/QueryLens.Mcp.csproj" />
     <Project Path="src/QueryLens.MySql/QueryLens.MySql.csproj" />
     <Project Path="src/QueryLens.Postgres/QueryLens.Postgres.csproj" />

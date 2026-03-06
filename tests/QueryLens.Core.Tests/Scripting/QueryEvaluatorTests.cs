@@ -64,6 +64,16 @@ public class QueryEvaluatorTests : IDisposable
     }
 
     [Fact]
+    public async Task Evaluate_SimpleDbSet_PopulatesCommandsList()
+    {
+        var result = await TranslateAsync("db.Orders");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotEmpty(result.Commands);
+        Assert.Contains("Orders", result.Commands[0].Sql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Evaluate_WhereClause_ContainsWhere()
     {
         var result = await TranslateAsync("db.Orders.Where(o => o.UserId == 5)");
@@ -168,6 +178,48 @@ public class QueryEvaluatorTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Evaluate_MissingCollectionVariable_InContains_DoesNotFallBackToObject()
+    {
+        var result = await TranslateAsync("db.Orders.Where(o => userIds.Contains(o.UserId))");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("'object' does not contain a definition for 'Contains'",
+            result.ErrorMessage ?? string.Empty,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingCollectionVariable_InContains_DoesNotCollapseToWhereFalse()
+    {
+        var result = await TranslateAsync("db.Orders.Where(o => userIds.Contains(o.UserId))");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("WHERE FALSE", result.Sql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingSelectorVariable_InSelect_IsSynthesized()
+    {
+        var result = await TranslateAsync("db.Orders.Select(selector)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingCancellationToken_InAsyncTerminal_IsSynthesized()
+    {
+        var result = await TranslateAsync("db.Orders.SingleOrDefaultAsync(ct)");
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("IQueryable", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compilation error", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ─── Error handling ───────────────────────────────────────────────────────
 
     [Fact]
@@ -200,6 +252,16 @@ public class QueryEvaluatorTests : IDisposable
         Assert.Contains("NoSuchContext", result.ErrorMessage);
     }
 
+    [Fact]
+    public async Task Evaluate_TopLevelServiceMethodInvocation_ReturnsClearUnsupportedMessage()
+    {
+        var result = await TranslateAsync("service.GetWorkflowByTypeAsync(workflowType, expression, ct)");
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("Top-level method invocations", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ─── ScriptState cache ────────────────────────────────────────────────────
 
     [Fact]
@@ -230,6 +292,16 @@ public class QueryEvaluatorTests : IDisposable
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
+    }
+
+    [Fact]
+    public async Task Evaluate_QueryLensFactory_AttemptsExecutionCapture()
+    {
+        var result = await TranslateAsync("db.Orders");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotEmpty(result.Commands);
+        Assert.DoesNotContain(result.Warnings, w => w.Code == "QL_CAPTURE_SKIPPED");
     }
 
     [Fact]

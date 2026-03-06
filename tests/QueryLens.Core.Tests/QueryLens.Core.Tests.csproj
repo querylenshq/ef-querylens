@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\QueryLens.Core\QueryLens.Core.csproj" />
     <ProjectReference Include="..\..\src\QueryLens.MySql\QueryLens.MySql.csproj" />
+    <ProjectReference Include="..\..\src\QueryLens.Lsp\QueryLens.Lsp.csproj" />
   </ItemGroup>
 
   <!-- Build SampleApp and copy its output to the test bin dir so ALC tests

@@ -6,21 +6,21 @@ namespace QueryLens.Core;
 /// </summary>
 public sealed record ExplainNode
 {
-    public required string              OperationType { get; init; }
-    public string?                      TableName     { get; init; }
+    public required string OperationType { get; init; }
+    public string? TableName { get; init; }
 
     /// <summary>null means full scan.</summary>
-    public string?                      IndexUsed     { get; init; }
+    public string? IndexUsed { get; init; }
 
-    public double                       EstimatedCost { get; init; }
-    public long                         EstimatedRows { get; init; }
+    public double EstimatedCost { get; init; }
+    public long EstimatedRows { get; init; }
 
     /// <summary>null when ANALYZE was not used.</summary>
-    public long?                        ActualRows    { get; init; }
+    public long? ActualRows { get; init; }
 
-    public int?                         LoopCount     { get; init; }
-    public IReadOnlyList<ExplainNode>   Children      { get; init; } = [];
-    public IReadOnlyList<QueryWarning>  Warnings      { get; init; } = [];
+    public int? LoopCount { get; init; }
+    public IReadOnlyList<ExplainNode> Children { get; init; } = [];
+    public IReadOnlyList<QueryWarning> Warnings { get; init; } = [];
 
     /// <summary>
     /// Ratio of actual to estimated rows.

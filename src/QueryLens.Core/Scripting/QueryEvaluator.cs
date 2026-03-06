@@ -1,9 +1,12 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using QueryLens.Core.AssemblyContext;
 
 namespace QueryLens.Core.Scripting;
@@ -11,7 +14,7 @@ namespace QueryLens.Core.Scripting;
 /// <summary>
 /// Evaluates a LINQ expression string against an offline <c>DbContext</c>
 /// instance loaded via <see cref="ProjectAssemblyContext"/> and returns the
-/// generated SQL as a <see cref="QueryTranslationResult"/>.
+/// generated SQL commands as a <see cref="QueryTranslationResult"/>.
 ///
 /// No real database connection is ever opened.
 /// </summary>
@@ -30,6 +33,7 @@ public sealed class QueryEvaluator
     // snapshot time), the Resolving handler below probes these directories.
     private static readonly HashSet<string> s_probeDirs =
         new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly object s_probeDirsLock = new();
 
     /// <summary>
@@ -47,15 +51,21 @@ public sealed class QueryEvaluator
 
             string[] dirs;
             lock (s_probeDirsLock)
-                dirs = [..s_probeDirs];
+                dirs = [.. s_probeDirs];
 
             foreach (var dir in dirs)
             {
                 var candidate = Path.Combine(dir, $"{name.Name}.dll");
                 if (File.Exists(candidate))
                 {
-                    try { return alc.LoadFromAssemblyPath(candidate); }
-                    catch { /* wrong version or platform — keep trying other dirs */ }
+                    try
+                    {
+                        return alc.LoadFromAssemblyPath(candidate);
+                    }
+                    catch
+                    {
+                        /* wrong version or platform — keep trying other dirs */
+                    }
                 }
             }
 
@@ -66,7 +76,8 @@ public sealed class QueryEvaluator
     // ─── Public API ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Translates a LINQ expression to SQL via <c>ToQueryString()</c>.
+    /// Translates a LINQ expression to SQL, preferring execution-based capture
+    /// and falling back to <c>ToQueryString()</c> when capture is unavailable.
     /// </summary>
     public async Task<QueryTranslationResult> EvaluateAsync(
         ProjectAssemblyContext alcCtx,
@@ -79,7 +90,7 @@ public sealed class QueryEvaluator
         try
         {
             // 1. Resolve the DbContext type from the user's ALC.
-            var dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName);
+            var dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName, request.Expression);
 
             // 2. Load the same type in the DEFAULT ALC — Roslyn CSharpScript generates
             //    assemblies that execute in the default ALC.  The DbContext instance must
@@ -88,9 +99,25 @@ public sealed class QueryEvaluator
             //    type as the MetadataReference used during compilation.
             var defaultAlcContextType = GetOrLoadTypeInDefaultAlc(dbContextType);
 
+            if (IsUnsupportedTopLevelMethodInvocation(request.Expression, request.ContextVariableName))
+            {
+                return Failure(
+                    "Top-level method invocations (e.g. service.GetXxx(...)) are not supported for SQL preview. " +
+                    "Hover a direct IQueryable chain (for example: dbContext.Entities.Where(...)) or hover inside the method where the query is built.",
+                    sw.Elapsed,
+                    dbContextType,
+                    bootstrap);
+            }
+
             // 3. Build an offline DbContext instance using the default-ALC type.
             //    Try IDesignTimeDbContextFactory<T> first (mirrors EF Core tooling priority).
-            var (dbInstance, creationStrategy) = CreateDbContextInstance(defaultAlcContextType, bootstrap, alcCtx.LoadedAssemblies);
+            var (dbInstance, creationStrategy) =
+                CreateDbContextInstance(defaultAlcContextType, bootstrap, alcCtx.LoadedAssemblies);
+
+            var canCaptureWithExecution = EnsureExecutionCaptureSafety(
+                dbInstance,
+                creationStrategy,
+                out var captureSkipReason);
 
             // 4. Get or build a warm ScriptState for this assembly + context type.
             var scriptState = await GetOrBuildScriptStateAsync(
@@ -99,8 +126,101 @@ public sealed class QueryEvaluator
             // 5. Evaluate the user's LINQ expression.
             //    No EnterContextualReflection needed — both the DbContext instance
             //    and the MetadataReferences resolve from the default ALC.
-            var resultState = await scriptState.ContinueWithAsync<object>(
-                request.Expression, cancellationToken: ct);
+            //
+            //    When the expression references local variables from the user's method
+            //    scope (e.g. applicationId, userId), Roslyn reports CS0103. We detect
+            //    these, auto-declare default-valued stubs, and retry so the SQL shape
+            //    is still generated correctly (values become @p0, @p1, etc.).
+            ScriptState<object> resultState;
+            var currentState = scriptState;
+            var maxRetries = 5; // safety valve
+
+            while (true)
+            {
+                try
+                {
+                    resultState = await currentState.ContinueWithAsync<object>(
+                        request.Expression, cancellationToken: ct);
+                    break;
+                }
+                catch (CompilationErrorException cex) when (maxRetries > 0)
+                {
+                    var missingNames = cex.Diagnostics
+                        .Where(d => d.Id == "CS0103")
+                        .Select(d =>
+                        {
+                            // Diagnostic message: "The name 'xyz' does not exist in the current context"
+                            var msg = d.GetMessage();
+                            var start = msg.IndexOf('\'');
+                            var end = msg.IndexOf('\'', start + 1);
+                            return start >= 0 && end > start
+                                ? msg[(start + 1)..end]
+                                : null;
+                        })
+                        .Where(n => n is not null)
+                        .Distinct()
+                        .ToList();
+
+                    if (missingNames.Count == 0)
+                    {
+                        // Non-CS0103 compilation errors — fall through to the outer catch
+                        return Failure(
+                            $"Compilation error: {string.Join("; ", cex.Diagnostics.Select(d => d.GetMessage()))}",
+                            sw.Elapsed, null, bootstrap);
+                    }
+
+                    // Declare the missing variables with type-inferred default values.
+                    // We search the expression for comparison patterns like
+                    //   w.PropertyName == variableName
+                    // and look up PropertyName's CLR type from the DbContext's entity types.
+                    var rootIdentifier = TryExtractRootIdentifier(request.Expression);
+                    var declarations = string.Join("\n",
+                        missingNames.Select(n =>
+                        {
+                            if (!string.IsNullOrWhiteSpace(rootIdentifier) &&
+                                string.Equals(n, rootIdentifier, StringComparison.Ordinal) &&
+                                !string.Equals(n, request.ContextVariableName, StringComparison.Ordinal))
+                            {
+                                // If the parser picked a different context variable name,
+                                // alias the expression root back to the known typed variable.
+                                return $"var {n} = {request.ContextVariableName};";
+                            }
+
+                            var inferredType = InferVariableType(n!, request.Expression, dbContextType);
+                            if (inferredType is not null)
+                            {
+                                var typeName = ToCSharpTypeName(inferredType);
+                                return $"{typeName} {n} = default({typeName});";
+                            }
+
+                            var containsElementType = InferContainsElementType(n!, request.Expression, dbContextType);
+                            if (containsElementType is not null)
+                            {
+                                var elementTypeName = ToCSharpTypeName(containsElementType);
+                                // Keep placeholder collections non-empty so generated SQL shape
+                                // doesn't collapse into "WHERE FALSE" for unknown Contains inputs.
+                                return $"System.Collections.Generic.List<{elementTypeName}> {n} = new() {{ default({elementTypeName})! }};";
+                            }
+
+                            var selectEntityType = InferSelectEntityType(n!, request.Expression, dbContextType);
+                            if (selectEntityType is not null)
+                            {
+                                var entityTypeName = ToCSharpTypeName(selectEntityType);
+                                return $"System.Linq.Expressions.Expression<System.Func<{entityTypeName}, object>> {n} = _ => default!;";
+                            }
+
+                            if (LooksLikeCancellationTokenArgument(n!, request.Expression))
+                            {
+                                return $"System.Threading.CancellationToken {n} = default;";
+                            }
+
+                            return $"object {n} = default;";
+                        }));
+                    currentState = await currentState.ContinueWithAsync<object>(
+                        declarations, cancellationToken: ct);
+                    maxRetries--;
+                }
+            }
 
             var result = resultState.ReturnValue;
 
@@ -113,7 +233,53 @@ public sealed class QueryEvaluator
                     sw.Elapsed, dbContextType, bootstrap);
             }
 
-            var sql = CallToQueryString(result, dbContextType);
+            var warnings = new List<QueryWarning>();
+            IReadOnlyList<QuerySqlCommand> commands;
+            string sql;
+            IReadOnlyList<QueryParameter> parameters;
+
+            if (canCaptureWithExecution)
+            {
+                var capturedCommands = TryCaptureSqlCommands(result, out var captureError);
+
+                if (capturedCommands.Count > 0)
+                {
+                    commands = capturedCommands
+                        .Select(c => new QuerySqlCommand { Sql = c.Sql, Parameters = c.Parameters })
+                        .ToList();
+
+                    sql = commands[0].Sql;
+                    parameters = commands[0].Parameters;
+                }
+                else
+                {
+                    sql = CallToQueryString(result, dbContextType);
+                    parameters = ParseParameters(sql);
+                    commands = [new QuerySqlCommand { Sql = sql, Parameters = parameters }];
+
+                    warnings.Add(new QueryWarning
+                    {
+                        Severity = WarningSeverity.Warning,
+                        Code = "QL_CAPTURE_FALLBACK",
+                        Message = "Exact SQL command capture was unavailable; fell back to ToQueryString().",
+                        Suggestion = captureError,
+                    });
+                }
+            }
+            else
+            {
+                sql = CallToQueryString(result, dbContextType);
+                parameters = ParseParameters(sql);
+                commands = [new QuerySqlCommand { Sql = sql, Parameters = parameters }];
+
+                warnings.Add(new QueryWarning
+                {
+                    Severity = WarningSeverity.Info,
+                    Code = "QL_CAPTURE_SKIPPED",
+                    Message = "Exact SQL command capture was skipped for this context configuration.",
+                    Suggestion = captureSkipReason,
+                });
+            }
 
             sw.Stop();
 
@@ -121,7 +287,9 @@ public sealed class QueryEvaluator
             {
                 Success = true,
                 Sql = sql,
-                Parameters = ParseParameters(sql),
+                Commands = commands,
+                Parameters = parameters,
+                Warnings = warnings,
                 Metadata = BuildMetadata(dbContextType, bootstrap, sw.Elapsed, creationStrategy),
             };
         }
@@ -156,10 +324,17 @@ public sealed class QueryEvaluator
         string contextVariableName,
         CancellationToken ct)
     {
+        // EagerLoadBinDirAssemblies has been moved to ProjectAssemblyContext constructor
+        // so it happens before DbContext discovery.
+
+        var assemblySetHash = ScriptStateCache.ComputeAssemblySetHash(
+            alcCtx.LoadedAssemblies.ToArray());
+
         var cached = _cache.TryGet(
             alcCtx.AssemblyPath,
             dbContextType.FullName!,
-            alcCtx.AssemblyTimestamp);
+            alcCtx.AssemblyTimestamp,
+            assemblySetHash);
 
         if (cached is not null)
             return cached;
@@ -171,6 +346,7 @@ public sealed class QueryEvaluator
             alcCtx.AssemblyPath,
             dbContextType.FullName!,
             alcCtx.AssemblyTimestamp,
+            assemblySetHash,
             freshState);
 
         return freshState;
@@ -183,7 +359,17 @@ public sealed class QueryEvaluator
         string contextVariableName,
         CancellationToken ct)
     {
-        var refs = CollectMetadataReferences(alcCtx);
+        // EagerLoadBinDirAssemblies has already been called by GetOrBuildScriptStateAsync
+        // before this point, so LoadedAssemblies is fully populated here.
+        var refs = CollectMetadataReferences(alcCtx).ToList();
+
+        // Ensure Queryable and EF Core extension methods are always referenced.
+        // In the LSP host, these assemblies might not be eager-loaded into the ALC 
+        // if the user's ALC hasn't executed EF Core code yet, which causes Roslyn
+        // to bind .Where() to IEnumerable instead of IQueryable.
+        refs.Add(MetadataReference.CreateFromFile(typeof(Queryable).Assembly.Location));
+        refs.Add(MetadataReference.CreateFromFile(
+            typeof(Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions).Assembly.Location));
 
         var scriptOptions = ScriptOptions.Default
             .AddReferences(refs)
@@ -216,6 +402,145 @@ public sealed class QueryEvaluator
 
         return initial;
     }
+
+    /// <summary>
+    /// Attempts to infer the CLR type for a missing variable by searching the LINQ
+    /// expression for comparison patterns like <c>w.PropertyName == variableName</c>
+    /// and looking up <c>PropertyName</c> on the DbContext's entity types (DbSet properties).
+    /// </summary>
+    private static Type? InferVariableType(string variableName, string expression, Type dbContextType)
+    {
+        // Search for patterns: .PropertyName == variableName  OR  variableName == .PropertyName
+        var pattern = $@"\.(\w+)\s*(?:==|!=|>|<|>=|<=)\s*{Regex.Escape(variableName)}(?!\w)" +
+                      "|" +
+                      $@"(?<!\w){Regex.Escape(variableName)}\s*(?:==|!=|>|<|>=|<=)\s*\w+\.(\w+)";
+
+        var match = Regex.Match(expression, pattern);
+        if (!match.Success)
+            return null;
+
+        var propertyName = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+
+        return FindEntityPropertyType(dbContextType, propertyName);
+    }
+
+    /// <summary>
+    /// Attempts to infer a missing variable used as a collection receiver in a
+    /// Contains call, e.g. <c>accountIds.Contains(account.AccountId)</c>.
+    /// </summary>
+    private static Type? InferContainsElementType(string variableName, string expression, Type dbContextType)
+    {
+        var pattern = $@"(?<!\w){Regex.Escape(variableName)}\s*\.\s*Contains\s*\(\s*\w+\s*\.\s*(\w+)";
+        var match = Regex.Match(expression, pattern);
+        if (!match.Success)
+            return null;
+
+        var propertyName = match.Groups[1].Value;
+        return FindEntityPropertyType(dbContextType, propertyName);
+    }
+
+    private static Type? InferSelectEntityType(string variableName, string expression, Type dbContextType)
+    {
+        var selectPattern = $@"\.\s*Select\s*\(\s*{Regex.Escape(variableName)}\s*\)";
+        if (!Regex.IsMatch(expression, selectPattern))
+        {
+            return null;
+        }
+
+        var rootPattern = @"^\s*[A-Za-z_][A-Za-z0-9_]*\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)";
+        var rootMatch = Regex.Match(expression, rootPattern);
+        if (!rootMatch.Success)
+        {
+            return null;
+        }
+
+        var rootMemberName = rootMatch.Groups[1].Value;
+        var rootMember = dbContextType.GetProperty(rootMemberName);
+        if (rootMember?.PropertyType.IsGenericType != true)
+        {
+            return null;
+        }
+
+        return rootMember.PropertyType.GetGenericArguments().FirstOrDefault();
+    }
+
+    private static bool LooksLikeCancellationTokenArgument(string variableName, string expression)
+    {
+        var methodArgPattern = $@"\w+Async\s*\([^\)]*\b{Regex.Escape(variableName)}\b[^\)]*\)";
+        if (Regex.IsMatch(expression, methodArgPattern))
+        {
+            return true;
+        }
+
+        return string.Equals(variableName, "ct", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(variableName, "cancellationToken", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ToCSharpTypeName(Type type)
+    {
+        if (type == typeof(void)) return "void";
+        if (type == typeof(bool)) return "bool";
+        if (type == typeof(byte)) return "byte";
+        if (type == typeof(sbyte)) return "sbyte";
+        if (type == typeof(char)) return "char";
+        if (type == typeof(decimal)) return "decimal";
+        if (type == typeof(double)) return "double";
+        if (type == typeof(float)) return "float";
+        if (type == typeof(int)) return "int";
+        if (type == typeof(uint)) return "uint";
+        if (type == typeof(long)) return "long";
+        if (type == typeof(ulong)) return "ulong";
+        if (type == typeof(object)) return "object";
+        if (type == typeof(short)) return "short";
+        if (type == typeof(ushort)) return "ushort";
+        if (type == typeof(string)) return "string";
+
+        if (type.IsArray)
+        {
+            return $"{ToCSharpTypeName(type.GetElementType()!)}[]";
+        }
+
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Nullable<>))
+        {
+            return $"{ToCSharpTypeName(type.GetGenericArguments()[0])}?";
+        }
+
+        if (type.IsGenericType)
+        {
+            var genericDefName = type.GetGenericTypeDefinition().FullName ?? type.Name;
+            var tick = genericDefName.IndexOf('`');
+            if (tick >= 0)
+            {
+                genericDefName = genericDefName[..tick];
+            }
+
+            genericDefName = genericDefName.Replace('+', '.');
+            var args = string.Join(", ", type.GetGenericArguments().Select(ToCSharpTypeName));
+            return $"{genericDefName}<{args}>";
+        }
+
+        return (type.FullName ?? type.Name).Replace('+', '.');
+    }
+
+    private static Type? FindEntityPropertyType(Type dbContextType, string propertyName)
+    {
+        // Search the DbContext's entity types for a property with this name.
+        foreach (var dbSetProp in dbContextType.GetProperties())
+        {
+            var propType = dbSetProp.PropertyType;
+            if (!propType.IsGenericType) continue;
+
+            var entityType = propType.GetGenericArguments().FirstOrDefault();
+            if (entityType is null) continue;
+
+            var entityProp = entityType.GetProperty(propertyName);
+            if (entityProp is not null)
+                return entityProp.PropertyType;
+        }
+
+        return null;
+    }
+
 
     // ─── Default-ALC type resolution ─────────────────────────────────────────
 
@@ -279,7 +604,10 @@ public sealed class QueryEvaluator
                     AssemblyLoadContext.Default.LoadFromAssemblyPath(loc);
                     defaultLocations.Add(loc);
                 }
-                catch { /* best-effort — some assemblies legitimately can't load in the default ALC */ }
+                catch
+                {
+                    /* best-effort — some assemblies legitimately can't load in the default ALC */
+                }
             }
         }
 
@@ -392,6 +720,10 @@ public sealed class QueryEvaluator
         // Let the bootstrap configure UseMySql / UseNpgsql / etc.
         bootstrap.ConfigureOffline(builderInstance);
 
+        // Force a no-op connection implementation so enumeration never opens
+        // a real network connection while we capture commands offline.
+        builderInstance.ReplaceService<IRelationalConnection, NoOpRelationalConnection>();
+
         // Read .Options — this is DbContextOptions<TContext> in the user's ALC.
         // Use DeclaredOnly to avoid AmbiguousMatchException: DbContextOptionsBuilder<T>
         // hides DbContextOptionsBuilder.Options with a covariant return, so both
@@ -435,6 +767,111 @@ public sealed class QueryEvaluator
     private static bool IsQueryable(object? value) =>
         value?.GetType().GetInterfaces()
             .Any(i => i.FullName == "System.Linq.IQueryable") == true;
+
+    private static string? TryExtractRootIdentifier(string expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(expression, @"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\.|$)");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static bool IsUnsupportedTopLevelMethodInvocation(string expression, string contextVariableName)
+    {
+        var match = Regex.Match(expression,
+            @"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var root = match.Groups[1].Value;
+        var method = match.Groups[2].Value;
+
+        // Allow dbContext.Set<TEntity>() as a valid query root shape.
+        if (string.Equals(root, contextVariableName, StringComparison.Ordinal) &&
+            string.Equals(method, "Set", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool EnsureExecutionCaptureSafety(
+        object dbInstance,
+        string creationStrategy,
+        out string? skipReason)
+    {
+        skipReason = null;
+
+        // Bootstrap already replaces IRelationalConnection with NoOpRelationalConnection.
+        if (string.Equals(creationStrategy, "bootstrap", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (dbInstance is not DbContext dbContext)
+        {
+            skipReason = "DbContext instance could not be cast to Microsoft.EntityFrameworkCore.DbContext.";
+            return false;
+        }
+
+        try
+        {
+            dbContext.Database.SetDbConnection(
+                NoOpRelationalConnection.CreateOfflineDbConnection(),
+                contextOwnsConnection: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            skipReason =
+                $"Could not install offline connection for execution capture ({creationStrategy}): {ex.Message}";
+            return false;
+        }
+    }
+
+    private static IReadOnlyList<CapturedSqlCommand> TryCaptureSqlCommands(
+        object queryable,
+        out string? captureError)
+    {
+        captureError = null;
+
+        if (queryable is not System.Collections.IEnumerable enumerable)
+        {
+            captureError = "Expression result does not implement IEnumerable.";
+            return [];
+        }
+
+        try
+        {
+            using var capture = SqlCaptureScope.Begin();
+            var enumerator = enumerable.GetEnumerator();
+
+            try
+            {
+                var guard = 0;
+                while (guard++ < 32 && enumerator.MoveNext())
+                {
+                }
+            }
+            finally
+            {
+                (enumerator as IDisposable)?.Dispose();
+            }
+
+            return [.. capture.Commands];
+        }
+        catch (Exception ex)
+        {
+            captureError = ex.Message;
+            return [];
+        }
+    }
 
     /// <summary>
     /// Calls <c>EntityFrameworkQueryableExtensions.ToQueryString(IQueryable)</c>
@@ -545,10 +982,10 @@ public sealed class QueryEvaluator
         string creationStrategy = "bootstrap") =>
         new()
         {
-            DbContextType    = dbContextType?.FullName ?? "unknown",
-            ProviderName     = bootstrap?.ProviderName ?? "unknown",
-            EfCoreVersion    = GetEfCoreVersion(dbContextType),
-            TranslationTime  = elapsed,
+            DbContextType = dbContextType?.FullName ?? "unknown",
+            ProviderName = bootstrap?.ProviderName ?? "unknown",
+            EfCoreVersion = GetEfCoreVersion(dbContextType),
+            TranslationTime = elapsed,
             CreationStrategy = creationStrategy,
         };
 

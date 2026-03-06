@@ -14,12 +14,13 @@ public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
 {
     public AppDbContext CreateDbContext(string[] args)
     {
+        // Pass a pre-created, closed MySqlConnection instead of a connection string.
+        // Pomelo holds a reference to the object without calling Open().
+        // ToQueryString() only needs the ServerVersion for SQL dialect - no connection needed.
+        var connection = new MySqlConnector.MySqlConnection("Server=__offline__;Database=__querylens__");
         var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseMySql(
-                "Server=localhost;Database=__querylens_offline__",
-                new MySqlServerVersion(new Version(8, 0, 0)))
+            .UseMySql(connection, new MySqlServerVersion(new Version(8, 0, 0)))
             .Options;
-
         return new AppDbContext(options);
     }
 }

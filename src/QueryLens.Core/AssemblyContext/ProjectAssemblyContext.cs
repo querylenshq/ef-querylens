@@ -35,11 +35,113 @@ public sealed class ProjectAssemblyContext : IDisposable
             throw new FileNotFoundException($"Assembly not found: {assemblyPath}", assemblyPath);
 
         AssemblyPath = Path.GetFullPath(assemblyPath);
-        AssemblyTimestamp = File.GetLastWriteTimeUtc(AssemblyPath);
+        EnsureRuntimeConfigDevExists(AssemblyPath);
 
         var ctx = new IsolatedLoadContext(AssemblyPath);
         _contextRef = new WeakReference<IsolatedLoadContext>(ctx);
         _targetAssembly = ctx.LoadFromAssemblyPath(AssemblyPath);
+
+        EagerLoadBinDirAssemblies();
+    }
+
+    /// <summary>
+    /// Class libraries do not generate a .runtimeconfig.dev.json file by default.
+    /// AssemblyDependencyResolver requires this file to know where the NuGet package
+    /// cache is located. If it is missing, we generate a dummy one pointing to the
+    /// standard NuGet cache so that all third-party dependencies can be resolved.
+    /// </summary>
+    private static void EnsureRuntimeConfigDevExists(string assemblyPath)
+    {
+        var runtimeConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+        var devConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.dev.json");
+
+        if (!File.Exists(runtimeConfigPath))
+        {
+            try
+            {
+                // Create a generic runtimeconfig.json so AssemblyDependencyResolver doesn't abort.
+                // It just needs to exist for the dev.json to be processed.
+                var baseJson = """
+                               {
+                                 "runtimeOptions": {
+                                   "tfm": "net8.0",
+                                   "framework": {
+                                     "name": "Microsoft.NETCore.App",
+                                     "version": "8.0.0"
+                                   }
+                                 }
+                               }
+                               """;
+                File.WriteAllText(runtimeConfigPath, baseJson);
+            }
+            catch
+            {
+            }
+        }
+
+        if (!File.Exists(devConfigPath))
+        {
+            try
+            {
+                var nugetCache = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+                if (string.IsNullOrEmpty(nugetCache))
+                {
+                    nugetCache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        ".nuget", "packages");
+                }
+
+                nugetCache = nugetCache.Replace("\\", "\\\\");
+
+                var devJson = $$"""
+                                {
+                                  "runtimeOptions": {
+                                    "additionalProbingPaths": [
+                                      "{{nugetCache}}"
+                                    ]
+                                  }
+                                }
+                                """;
+
+                File.WriteAllText(devConfigPath, devJson);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Eagerly loads every <c>.dll</c> found in the same directory as the primary
+    /// assembly into the user's isolated ALC. This ensures that lazy-loaded transitive
+    /// dependencies are present in <see cref="LoadedAssemblies"/>
+    /// so that DbContext subclasses in separate class libraries are discoverable,
+    /// and Roslyn sees the full set of extension methods at script-compilation time.
+    /// </summary>
+    private void EagerLoadBinDirAssemblies()
+    {
+        var binDir = Path.GetDirectoryName(AssemblyPath);
+        if (string.IsNullOrEmpty(binDir) || !Directory.Exists(binDir))
+            return;
+
+        foreach (var dll in Directory.EnumerateFiles(binDir, "*.dll", SearchOption.TopDirectoryOnly))
+        {
+            // Skip assemblies that IsolatedLoadContext.Load defers to the default ALC.
+            // Forcing these via LoadFromAssemblyPath bypasses the Load override and causes
+            // a version conflict between the user-bin EF Core and the host's shared EF Core.
+            var name = Path.GetFileNameWithoutExtension(dll);
+            if (name.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("Pomelo.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                LoadAdditionalAssembly(dll);
+            }
+            catch
+            {
+                // Best-effort: some dlls may be native or otherwise unloadable — skip them.
+            }
+        }
     }
 
     // ─── Public API ──────────────────────────────────────────────────────────
@@ -107,7 +209,10 @@ public sealed class ProjectAssemblyContext : IDisposable
                     if (!type.IsAbstract && IsDbContextSubclass(type))
                         results.Add(type);
                 }
-                catch { /* IsDbContextSubclass may throw for partially-loaded types */ }
+                catch
+                {
+                    /* IsDbContextSubclass may throw for partially-loaded types */
+                }
             }
         }
 
@@ -126,7 +231,7 @@ public sealed class ProjectAssemblyContext : IDisposable
     ///   No DbContext found; multiple found with null typeName; or no match
     ///   for the provided typeName.
     /// </exception>
-    public Type FindDbContextType(string? typeName = null)
+    public Type FindDbContextType(string? typeName = null, string? expressionHint = null)
     {
         EnsureNotDisposed();
 
@@ -138,23 +243,81 @@ public sealed class ProjectAssemblyContext : IDisposable
 
         if (typeName is null)
         {
-            if (all.Count > 1)
-                throw new InvalidOperationException(
-                    $"Multiple DbContext types found in '{Path.GetFileName(AssemblyPath)}': " +
-                    $"{string.Join(", ", all.Select(t => t.FullName))}. " +
-                    "Specify --context to disambiguate.");
+            if (all.Count == 1)
+                return all[0];
 
-            return all[0];
+            // Auto-disambiguate using the LINQ expression: extract the first property
+            // access (e.g. "AppWorkflows" from "dbContext.AppWorkflows.Include(...)") and
+            // find which DbContext owns a DbSet/IQueryable property with that name.
+            if (expressionHint is not null)
+            {
+                var dbSetName = ExtractFirstPropertyAccess(expressionHint);
+                if (dbSetName is not null)
+                {
+                    var match = all.FirstOrDefault(t =>
+                        t.GetProperties().Any(p =>
+                            string.Equals(p.Name, dbSetName, StringComparison.Ordinal)));
+
+                    if (match is not null)
+                        return match;
+                }
+            }
+
+            // Fallback: filter out obvious test/utility DbContexts
+            var filtered = all.Where(t =>
+            {
+                var name = t.Name;
+                return !name.Contains("Test", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Contains("Empty", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Contains("Mock", StringComparison.OrdinalIgnoreCase);
+            }).ToList();
+
+            if (filtered.Count == 1)
+                return filtered[0];
+
+            var candidates = filtered.Count > 1 ? filtered : all;
+            throw new InvalidOperationException(
+                $"Multiple DbContext types found in '{Path.GetFileName(AssemblyPath)}': " +
+                $"{string.Join(", ", candidates.Select(t => t.FullName))}. " +
+                "Specify --context to disambiguate.");
         }
 
         // Match on simple name or fully-qualified name.
-        var match = all.FirstOrDefault(t =>
+        var nameMatch = all.FirstOrDefault(t =>
             string.Equals(t.Name, typeName, StringComparison.Ordinal) ||
             string.Equals(t.FullName, typeName, StringComparison.Ordinal));
 
-        return match ?? throw new InvalidOperationException(
+        return nameMatch ?? throw new InvalidOperationException(
             $"DbContext type '{typeName}' not found in '{Path.GetFileName(AssemblyPath)}'. " +
             $"Available: {string.Join(", ", all.Select(t => t.FullName))}");
+    }
+
+    /// <summary>
+    /// Extracts the first member access from a LINQ expression.
+    /// e.g. "dbContext.AppWorkflows.Include(...)" → "AppWorkflows"
+    ///      "db.Orders.Where(...)" → "Orders"
+    /// </summary>
+    private static string? ExtractFirstPropertyAccess(string expression)
+    {
+        // Trim leading whitespace and the variable name prefix (e.g. "dbContext." or "db.")
+        var trimmed = expression.TrimStart();
+
+        // Find the first dot — everything after is the property chain
+        var firstDot = trimmed.IndexOf('.');
+        if (firstDot < 0 || firstDot >= trimmed.Length - 1)
+            return null;
+
+        var afterDot = trimmed[(firstDot + 1)..].TrimStart();
+
+        // The property name is everything up to the next dot, paren, or whitespace
+        var endIndex = 0;
+        while (endIndex < afterDot.Length &&
+               char.IsLetterOrDigit(afterDot[endIndex]) || afterDot[endIndex] == '_')
+        {
+            endIndex++;
+        }
+
+        return endIndex > 0 ? afterDot[..endIndex] : null;
     }
 
     // ─── IDisposable ─────────────────────────────────────────────────────────

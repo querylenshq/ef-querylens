@@ -49,9 +49,9 @@ public sealed class QueryLensEngine : IQueryLensEngine
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(request);
 
-        var alcCtx      = GetOrRefreshContext(request.AssemblyPath);
+        var alcCtx = GetOrRefreshContext(request.AssemblyPath);
         var dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName);
-        var dbInstance  = CreateDbContextForInspection(dbContextType, alcCtx);
+        var dbInstance = CreateDbContextForInspection(dbContextType, alcCtx);
 
         return BuildModelSnapshot(dbInstance, dbContextType);
     }
@@ -63,6 +63,7 @@ public sealed class QueryLensEngine : IQueryLensEngine
         foreach (var ctx in _alcCache.Values)
             ctx.Dispose();
         _alcCache.Clear();
+
     }
 
     // ── ALC cache ─────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ public sealed class QueryLensEngine : IQueryLensEngine
             ?? throw new InvalidOperationException(
                 "Could not locate DbContextOptionsBuilder`1 in EF Core assembly.");
 
-        var builderType     = builderOpenGeneric.MakeGenericType(dbContextType);
+        var builderType = builderOpenGeneric.MakeGenericType(dbContextType);
         var builderInstance = (Microsoft.EntityFrameworkCore.DbContextOptionsBuilder)
             Activator.CreateInstance(builderType)!;
 
@@ -132,7 +133,7 @@ public sealed class QueryLensEngine : IQueryLensEngine
 
         // Find the (DbContextOptions) or (DbContextOptions<T>) constructor.
         const string genericOptionsName = "Microsoft.EntityFrameworkCore.DbContextOptions`1";
-        const string baseOptionsName    = "Microsoft.EntityFrameworkCore.DbContextOptions";
+        const string baseOptionsName = "Microsoft.EntityFrameworkCore.DbContextOptions";
 
         var ctor = dbContextType.GetConstructors().FirstOrDefault(c =>
         {
@@ -156,7 +157,7 @@ public sealed class QueryLensEngine : IQueryLensEngine
             ?? throw new InvalidOperationException(
                 "Could not find Model property on DbContext.");
 
-        var model     = modelProp.GetValue(dbInstance)!;
+        var model = modelProp.GetValue(dbInstance)!;
         var modelType = model.GetType();
 
         // IModel.GetEntityTypes() — navigate via interface to survive EF minor versions.
@@ -177,13 +178,13 @@ public sealed class QueryLensEngine : IQueryLensEngine
         return new ModelSnapshot
         {
             DbContextType = dbContextType.FullName!,
-            Entities      = entities,
+            Entities = entities,
         };
     }
 
     private static EntitySnapshot MapEntity(object entityType)
     {
-        var et      = entityType.GetType();
+        var et = entityType.GetType();
         var clrType = (Type)(et.GetProperty("ClrType")?.GetValue(entityType)
             ?? throw new InvalidOperationException("IEntityType.ClrType not found."));
 
@@ -197,19 +198,19 @@ public sealed class QueryLensEngine : IQueryLensEngine
             var props = (System.Collections.IEnumerable)getProps.Invoke(entityType, null)!;
             foreach (var p in props)
             {
-                var pt          = p.GetType();
-                var name        = (string)(pt.GetProperty("Name")?.GetValue(p) ?? "?");
+                var pt = p.GetType();
+                var name = (string)(pt.GetProperty("Name")?.GetValue(p) ?? "?");
                 var propClrType = (Type)(pt.GetProperty("ClrType")?.GetValue(p) ?? typeof(object));
-                var colName     = GetColumnName(p) ?? name;
-                var isPrimary   = IsKey(p, et, entityType);
-                var isNullable  = (bool)(pt.GetProperty("IsNullable")?.GetValue(p) ?? false);
+                var colName = GetColumnName(p) ?? name;
+                var isPrimary = IsKey(p, et, entityType);
+                var isNullable = (bool)(pt.GetProperty("IsNullable")?.GetValue(p) ?? false);
 
                 properties.Add(new PropertySnapshot
                 {
-                    Name       = name,
-                    ClrType    = propClrType.Name,
+                    Name = name,
+                    ClrType = propClrType.Name,
                     ColumnName = colName,
-                    IsKey      = isPrimary,
+                    IsKey = isPrimary,
                     IsNullable = isNullable,
                 });
             }
@@ -223,18 +224,18 @@ public sealed class QueryLensEngine : IQueryLensEngine
             var navs = (System.Collections.IEnumerable)getNavs.Invoke(entityType, null)!;
             foreach (var n in navs)
             {
-                var nt           = n.GetType();
-                var navName      = (string)(nt.GetProperty("Name")?.GetValue(n) ?? "?");
+                var nt = n.GetType();
+                var navName = (string)(nt.GetProperty("Name")?.GetValue(n) ?? "?");
                 var isCollection = (bool)(nt.GetProperty("IsCollection")?.GetValue(n) ?? false);
-                var targetEt     = nt.GetProperty("TargetEntityType")?.GetValue(n);
-                var targetClr    = targetEt is not null
+                var targetEt = nt.GetProperty("TargetEntityType")?.GetValue(n);
+                var targetClr = targetEt is not null
                     ? (Type)(targetEt.GetType().GetProperty("ClrType")?.GetValue(targetEt)
                              ?? typeof(object))
                     : typeof(object);
 
                 navigations.Add(new NavigationSnapshot
                 {
-                    Name         = navName,
+                    Name = navName,
                     TargetEntity = targetClr.Name,
                     IsCollection = isCollection,
                 });
@@ -249,11 +250,11 @@ public sealed class QueryLensEngine : IQueryLensEngine
             var idxs = (System.Collections.IEnumerable)getIndexes.Invoke(entityType, null)!;
             foreach (var idx in idxs)
             {
-                var it        = idx.GetType();
-                var isUnique  = (bool)(it.GetProperty("IsUnique")?.GetValue(idx) ?? false);
-                var nameVal   = it.GetProperty("Name")?.GetValue(idx) as string;
+                var it = idx.GetType();
+                var isUnique = (bool)(it.GetProperty("IsUnique")?.GetValue(idx) ?? false);
+                var nameVal = it.GetProperty("Name")?.GetValue(idx) as string;
                 var propsList = it.GetProperty("Properties")?.GetValue(idx);
-                var cols      = new List<string>();
+                var cols = new List<string>();
 
                 if (propsList is System.Collections.IEnumerable pEnum)
                 {
@@ -263,20 +264,20 @@ public sealed class QueryLensEngine : IQueryLensEngine
 
                 indexes.Add(new IndexSnapshot
                 {
-                    Columns  = cols,
+                    Columns = cols,
                     IsUnique = isUnique,
-                    Name     = nameVal,
+                    Name = nameVal,
                 });
             }
         }
 
         return new EntitySnapshot
         {
-            ClrType     = clrType.FullName ?? clrType.Name,
-            TableName   = tableName,
-            Properties  = properties,
+            ClrType = clrType.FullName ?? clrType.Name,
+            TableName = tableName,
+            Properties = properties,
             Navigations = navigations,
-            Indexes     = indexes,
+            Indexes = indexes,
         };
     }
 
@@ -305,7 +306,7 @@ public sealed class QueryLensEngine : IQueryLensEngine
 
             var extType = relAsm?.GetType(
                 "Microsoft.EntityFrameworkCore.RelationalEntityTypeExtensions");
-            var method  = extType?.GetMethod("GetTableName",
+            var method = extType?.GetMethod("GetTableName",
                 BindingFlags.Public | BindingFlags.Static);
 
             return method?.Invoke(null, [entityType]) as string;

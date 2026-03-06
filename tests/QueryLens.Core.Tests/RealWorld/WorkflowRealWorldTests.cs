@@ -76,7 +76,7 @@ public class WorkflowRealWorldTests
         Console.WriteLine($"[CreationStrategy] {result.Metadata.CreationStrategy}");
         Console.WriteLine($"[EF Core version]  {result.Metadata.EfCoreVersion}");
         Console.WriteLine($"[SQL]\n{result.Sql}");
-    }
+    } 
 
     [SkippableFact]
     public async Task Workflow_AsNoTracking_WhereIsNotDeleted_GeneratesSql()

@@ -1,0 +1,512 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+
+namespace QueryLens.Lsp.Parsing;
+
+public static class MethodQueryInliner
+{
+    private static readonly HashSet<string> TerminalMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ToList", "ToListAsync", "ToArray", "ToArrayAsync", "ToDictionary", "ToDictionaryAsync",
+        "First", "FirstOrDefault", "FirstAsync", "FirstOrDefaultAsync",
+        "Single", "SingleOrDefault", "SingleAsync", "SingleOrDefaultAsync",
+        "Last", "LastOrDefault", "LastAsync", "LastOrDefaultAsync",
+        "Count", "CountAsync", "LongCount", "LongCountAsync",
+        "Any", "AnyAsync", "All", "AllAsync",
+        "Min", "MinAsync", "Max", "MaxAsync", "Sum", "SumAsync", "Average", "AverageAsync",
+        "ElementAt", "ElementAtOrDefault", "ElementAtAsync", "ElementAtOrDefaultAsync",
+        "AsEnumerable", "AsAsyncEnumerable", "ToLookup", "ToLookupAsync",
+        "ExecuteUpdate", "ExecuteUpdateAsync", "ExecuteDelete", "ExecuteDeleteAsync"
+    };
+
+    public static bool TryInlineTopLevelInvocation(
+        string sourceText,
+        string sourceFilePath,
+        string expression,
+        out string inlinedExpression,
+        out string? contextVariableName,
+        out string? reason)
+    {
+        inlinedExpression = expression;
+        contextVariableName = null;
+        reason = null;
+
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            reason = "Expression was empty.";
+            return false;
+        }
+
+        if (!TryParseTopLevelInvocation(expression, out var topInvocation, out var rootName, out var methodName))
+        {
+            reason = "Expression was not a top-level member invocation.";
+            return false;
+        }
+
+        // Avoid work for already-query-shaped roots.
+        if (string.Equals(rootName, "db", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(rootName, "context", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(rootName, "dbContext", StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "Invocation root already looks like a DbContext variable.";
+            return false;
+        }
+
+        var searchRoot = FindSearchRoot(sourceFilePath);
+        if (searchRoot == null)
+        {
+            reason = "Could not determine source search root.";
+            return false;
+        }
+
+        var argumentExpressions = topInvocation.ArgumentList.Arguments
+            .Select(a => a.Expression)
+            .ToArray();
+
+        var candidates = FindMethodCandidates(searchRoot, sourceFilePath, sourceText, methodName, argumentExpressions.Length)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            reason = "No method candidates were found for invocation.";
+            return false;
+        }
+
+        var best = candidates
+            .Select(c => new { Candidate = c, Score = ScoreCandidate(c.Method, argumentExpressions) })
+            .OrderByDescending(x => x.Score)
+            .First();
+
+        if (best.Score < 0)
+        {
+            reason = "No method candidates matched invocation arguments.";
+            return false;
+        }
+
+        var method = best.Candidate.Method;
+        var calleeQuery = TryExtractReturnedQueryExpression(method);
+        if (calleeQuery == null)
+        {
+            reason = "Candidate method did not expose a supported query return shape.";
+            return false;
+        }
+
+        var map = BuildParameterArgumentMap(method, argumentExpressions);
+        var substituted = (ExpressionSyntax)new ParameterSubstitutionRewriter(map).Visit(calleeQuery)!;
+        var stripped = StripTrailingTerminalMethods(substituted);
+
+        var extractedRoot = TryExtractRootContextVariable(stripped);
+        if (string.IsNullOrWhiteSpace(extractedRoot))
+        {
+            reason = "Inlined expression root could not be determined.";
+            return false;
+        }
+
+        inlinedExpression = stripped.NormalizeWhitespace().ToString();
+        contextVariableName = extractedRoot;
+        return true;
+    }
+
+    private static bool TryParseTopLevelInvocation(
+        string expression,
+        out InvocationExpressionSyntax invocation,
+        out string rootName,
+        out string methodName)
+    {
+        invocation = null!;
+        rootName = string.Empty;
+        methodName = string.Empty;
+
+        if (SyntaxFactory.ParseExpression(expression) is not InvocationExpressionSyntax parsed)
+        {
+            return false;
+        }
+
+        if (parsed.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        if (memberAccess.Expression is not IdentifierNameSyntax rootIdentifier)
+        {
+            return false;
+        }
+
+        invocation = parsed;
+        rootName = rootIdentifier.Identifier.ValueText;
+        methodName = memberAccess.Name.Identifier.ValueText;
+        return true;
+    }
+
+    private static string? FindSearchRoot(string sourceFilePath)
+    {
+        var current = Path.GetDirectoryName(sourceFilePath);
+
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (Directory.GetFiles(current, "*.sln").Length > 0)
+            {
+                return current;
+            }
+
+            current = Directory.GetParent(current)?.FullName;
+        }
+
+        current = Path.GetDirectoryName(sourceFilePath);
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (Directory.GetFiles(current, "*.csproj").Length > 0)
+            {
+                return current;
+            }
+
+            current = Directory.GetParent(current)?.FullName;
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<(string FilePath, MethodDeclarationSyntax Method)> FindMethodCandidates(
+        string searchRoot,
+        string sourceFilePath,
+        string sourceText,
+        string methodName,
+        int argumentCount)
+    {
+        foreach (var filePath in EnumerateCSharpFiles(searchRoot, sourceFilePath))
+        {
+            string text;
+            try
+            {
+                text = string.Equals(filePath, sourceFilePath, StringComparison.OrdinalIgnoreCase)
+                    ? sourceText
+                    : File.ReadAllText(filePath);
+            }
+            catch
+            {
+                continue;
+            }
+
+            var tree = CSharpSyntaxTree.ParseText(text);
+            var root = tree.GetRoot();
+
+            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+            {
+                if (!string.Equals(method.Identifier.ValueText, methodName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var parameterCount = method.ParameterList.Parameters.Count;
+                if (parameterCount < argumentCount)
+                {
+                    continue;
+                }
+
+                yield return (filePath, method);
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateCSharpFiles(string searchRoot, string preferredSourceFile)
+    {
+        var yielded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(preferredSourceFile))
+        {
+            yielded.Add(preferredSourceFile);
+            yield return preferredSourceFile;
+        }
+
+        var dirs = new Stack<string>();
+        dirs.Push(searchRoot);
+
+        while (dirs.Count > 0)
+        {
+            var current = dirs.Pop();
+
+            IEnumerable<string> subDirs;
+            try
+            {
+                subDirs = Directory.EnumerateDirectories(current);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var subDir in subDirs)
+            {
+                var name = Path.GetFileName(subDir);
+                if (ShouldSkipDirectory(name))
+                {
+                    continue;
+                }
+
+                dirs.Push(subDir);
+            }
+
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(current, "*.cs");
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                if (yielded.Add(file))
+                {
+                    yield return file;
+                }
+            }
+        }
+    }
+
+    private static bool ShouldSkipDirectory(string name)
+    {
+        return string.Equals(name, "bin", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(name, "obj", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(name, ".git", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(name, ".vs", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(name, ".vscode", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(name, "node_modules", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ScoreCandidate(MethodDeclarationSyntax method, IReadOnlyList<ExpressionSyntax> arguments)
+    {
+        var parameters = method.ParameterList.Parameters;
+        if (arguments.Count > parameters.Count)
+        {
+            return -1;
+        }
+
+        var score = 0;
+
+        if (arguments.Count == parameters.Count)
+        {
+            score += 20;
+        }
+        else
+        {
+            var remaining = parameters.Skip(arguments.Count);
+            if (remaining.Any(p => p.Default == null))
+            {
+                return -1;
+            }
+
+            score += 10;
+        }
+
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var parameter = parameters[i];
+            var parameterType = parameter.Type?.ToString() ?? string.Empty;
+            var argument = arguments[i];
+
+            if (parameterType.Contains("Expression", StringComparison.Ordinal) &&
+                (argument is LambdaExpressionSyntax || argument is AnonymousMethodExpressionSyntax))
+            {
+                score += 5;
+            }
+
+            if (parameterType.Contains("CancellationToken", StringComparison.Ordinal))
+            {
+                score += argument is IdentifierNameSyntax id &&
+                         (string.Equals(id.Identifier.ValueText, "ct", StringComparison.OrdinalIgnoreCase)
+                          || string.Equals(id.Identifier.ValueText, "cancellationToken", StringComparison.OrdinalIgnoreCase))
+                    ? 4
+                    : 1;
+            }
+        }
+
+        return score;
+    }
+
+    private static ExpressionSyntax? TryExtractReturnedQueryExpression(MethodDeclarationSyntax method)
+    {
+        if (method.ExpressionBody is { Expression: { } expressionBody })
+        {
+            return StripTrailingTerminalMethods(UnwrapAwait(expressionBody));
+        }
+
+        if (method.Body == null)
+        {
+            return null;
+        }
+
+        foreach (var returnStatement in method.Body.Statements.OfType<ReturnStatementSyntax>())
+        {
+            if (returnStatement.Expression is not { } returnExpr)
+            {
+                continue;
+            }
+
+            return StripTrailingTerminalMethods(UnwrapAwait(returnExpr));
+        }
+
+        return null;
+    }
+
+    private static ExpressionSyntax UnwrapAwait(ExpressionSyntax expression)
+    {
+        if (expression is AwaitExpressionSyntax awaited)
+        {
+            return awaited.Expression;
+        }
+
+        return expression;
+    }
+
+    private static Dictionary<string, ExpressionSyntax> BuildParameterArgumentMap(
+        MethodDeclarationSyntax method,
+        IReadOnlyList<ExpressionSyntax> arguments)
+    {
+        var map = new Dictionary<string, ExpressionSyntax>(StringComparer.Ordinal);
+        var parameters = method.ParameterList.Parameters;
+
+        for (var i = 0; i < arguments.Count && i < parameters.Count; i++)
+        {
+            var name = parameters[i].Identifier.ValueText;
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            map[name] = arguments[i];
+        }
+
+        return map;
+    }
+
+    private static ExpressionSyntax StripTrailingTerminalMethods(ExpressionSyntax expression)
+    {
+        var current = expression;
+
+        while (current is InvocationExpressionSyntax invocation &&
+               invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+               TerminalMethods.Contains(memberAccess.Name.Identifier.ValueText))
+        {
+            current = memberAccess.Expression;
+        }
+
+        return current;
+    }
+
+    private static string? TryExtractRootContextVariable(ExpressionSyntax expression)
+    {
+        var current = expression;
+        string? lastMemberName = null;
+
+        while (true)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation:
+                    current = invocation.Expression;
+                    continue;
+
+                case MemberAccessExpressionSyntax memberAccess:
+                    lastMemberName = memberAccess.Name.Identifier.Text;
+                    current = memberAccess.Expression;
+                    continue;
+
+                case ParenthesizedExpressionSyntax parenthesized:
+                    current = parenthesized.Expression;
+                    continue;
+
+                case IdentifierNameSyntax identifier:
+                    return identifier.Identifier.Text;
+
+                case ThisExpressionSyntax:
+                    return lastMemberName;
+
+                default:
+                    return lastMemberName;
+            }
+        }
+    }
+
+    private sealed class ParameterSubstitutionRewriter : CSharpSyntaxRewriter
+    {
+        private readonly IReadOnlyDictionary<string, ExpressionSyntax> _map;
+        private readonly Stack<HashSet<string>> _shadowedNames = new();
+
+        public ParameterSubstitutionRewriter(IReadOnlyDictionary<string, ExpressionSyntax> map)
+        {
+            _map = map;
+        }
+
+        public override SyntaxNode? VisitSimpleLambdaExpression(SimpleLambdaExpressionSyntax node)
+        {
+            _shadowedNames.Push(new HashSet<string>(StringComparer.Ordinal)
+            {
+                node.Parameter.Identifier.ValueText
+            });
+
+            var visited = base.VisitSimpleLambdaExpression(node);
+            _shadowedNames.Pop();
+            return visited;
+        }
+
+        public override SyntaxNode? VisitParenthesizedLambdaExpression(ParenthesizedLambdaExpressionSyntax node)
+        {
+            var scoped = new HashSet<string>(
+                node.ParameterList.Parameters.Select(p => p.Identifier.ValueText),
+                StringComparer.Ordinal);
+            _shadowedNames.Push(scoped);
+
+            var visited = base.VisitParenthesizedLambdaExpression(node);
+            _shadowedNames.Pop();
+            return visited;
+        }
+
+        public override SyntaxNode? VisitAnonymousMethodExpression(AnonymousMethodExpressionSyntax node)
+        {
+            var scoped = new HashSet<string>(StringComparer.Ordinal);
+            if (node.ParameterList != null)
+            {
+                foreach (var parameter in node.ParameterList.Parameters)
+                {
+                    scoped.Add(parameter.Identifier.ValueText);
+                }
+            }
+
+            _shadowedNames.Push(scoped);
+            var visited = base.VisitAnonymousMethodExpression(node);
+            _shadowedNames.Pop();
+            return visited;
+        }
+
+        public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
+        {
+            var name = node.Identifier.ValueText;
+            if (!_map.TryGetValue(name, out var replacement) || IsShadowed(name))
+            {
+                return base.VisitIdentifierName(node);
+            }
+
+            return replacement.WithTriviaFrom(node);
+        }
+
+        private bool IsShadowed(string name)
+        {
+            foreach (var scope in _shadowedNames)
+            {
+                if (scope.Contains(name))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+}

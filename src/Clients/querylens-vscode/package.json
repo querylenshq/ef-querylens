@@ -1,0 +1,39 @@
+{
+  "name": "querylens-vscode",
+  "displayName": "QueryLens",
+  "description": "SQL Analyzer and Preview for EF Core",
+  "version": "1.0.0",
+  "publisher": "QueryLens",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Formatters",
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "querylens.restart",
+        "title": "QueryLens: Restart Language Server"
+      }
+    ]
+  },
+  "activationEvents": [
+    "onLanguage:csharp"
+  ],
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
+}
