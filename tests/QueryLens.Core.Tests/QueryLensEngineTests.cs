@@ -3,8 +3,8 @@ namespace QueryLens.Core.Tests;
 /// <summary>
 /// Tests for <see cref="QueryLensEngine"/> — the top-level orchestrator.
 ///
-/// SampleApp.dll is copied into the test output directory by the MSBuild target
-/// in QueryLens.Core.Tests.csproj, so the assembly is available at runtime
+/// SampleApp.dll is copied into an isolated SampleApp subfolder in the test
+/// output directory by QueryLens.Core.Tests.csproj, so the assembly is available at runtime
 /// via <see cref="GetSampleAppDll"/>.
 /// </summary>
 [Collection("AssemblyLoadContextIsolation")]
@@ -13,11 +13,21 @@ public class QueryLensEngineTests
     private static string GetSampleAppDll()
     {
         var dir = Path.GetDirectoryName(typeof(QueryLensEngineTests).Assembly.Location)!;
-        var dll = Path.Combine(dir, "SampleApp.dll");
+        var dll = ResolveSampleDll(dir, "SampleApp.dll");
         if (!File.Exists(dll))
             throw new FileNotFoundException(
                 $"SampleApp.dll not found in test output dir. Expected: {dll}");
         return dll;
+    }
+
+    private static string ResolveSampleDll(string testOutputDir, string dllName)
+    {
+        var isolated = Path.Combine(testOutputDir, "SampleApp", dllName);
+        if (File.Exists(isolated))
+            return isolated;
+
+        // Backward compatibility for older builds that copied files into root.
+        return Path.Combine(testOutputDir, dllName);
     }
 
     private static QueryLensEngine CreateEngine() => new();

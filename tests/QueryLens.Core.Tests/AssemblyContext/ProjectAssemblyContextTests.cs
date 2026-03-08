@@ -5,8 +5,8 @@ namespace QueryLens.Core.Tests.AssemblyContext;
 /// <summary>
 /// Unit tests for <see cref="ProjectAssemblyContext"/>.
 ///
-/// SampleApp.dll lands next to the test binary at build time because
-/// QueryLens.Core.Tests.csproj references SampleApp with
+/// SampleApp.dll is copied into an isolated SampleApp subfolder at build time
+/// because QueryLens.Core.Tests.csproj references SampleApp with
 /// ReferenceOutputAssembly="false". We locate it relative to this assembly's
 /// location at runtime.
 /// </summary>
@@ -23,7 +23,7 @@ public class ProjectAssemblyContextTests
         var testDir = Path.GetDirectoryName(
             typeof(ProjectAssemblyContextTests).Assembly.Location)!;
 
-        var dll = Path.Combine(testDir, "SampleApp.dll");
+        var dll = ResolveSampleDll(testDir, "SampleApp.dll");
 
         if (!File.Exists(dll))
             throw new FileNotFoundException(
@@ -32,6 +32,28 @@ public class ProjectAssemblyContextTests
                 $"Expected: {dll}");
 
         return dll;
+    }
+
+    private static string ResolveSampleDll(string testOutputDir, string dllName)
+    {
+        var isolated = Path.Combine(testOutputDir, "SampleApp", dllName);
+        if (File.Exists(isolated))
+            return isolated;
+
+        // Backward compatibility for older builds that copied files into root.
+        return Path.Combine(testOutputDir, dllName);
+    }
+
+    private static string GetSampleSqlServerAppDll()
+    {
+        var testDir = Path.GetDirectoryName(
+            typeof(ProjectAssemblyContextTests).Assembly.Location)!;
+
+        var isolated = Path.Combine(testDir, "SampleSqlServerApp", "SampleSqlServerApp.dll");
+        if (File.Exists(isolated))
+            return isolated;
+
+        return Path.Combine(testDir, "SampleSqlServerApp.dll");
     }
 
     // ─── Constructor / basic load ─────────────────────────────────────────────
@@ -63,6 +85,74 @@ public class ProjectAssemblyContextTests
         var dll = GetSampleAppDll();
         using var ctx = new ProjectAssemblyContext(dll);
         Assert.NotEqual(default, ctx.AssemblyTimestamp);
+    }
+
+    [Theory]
+    [InlineData("Microsoft.Build", true)]
+    [InlineData("Microsoft.Build.Framework", true)]
+    [InlineData("NuGet.ProjectModel", true)]
+    [InlineData("Microsoft.VisualStudio.ProjectSystem", true)]
+    [InlineData("Microsoft.CodeAnalysis.Workspaces.MSBuild", true)]
+    [InlineData("Microsoft.TestPlatform.Utilities", true)]
+    [InlineData("testhost", true)]
+    [InlineData("Microsoft.Data.SqlClient", false)]
+    [InlineData("Microsoft.EntityFrameworkCore", false)]
+    [InlineData("Pomelo.EntityFrameworkCore.MySql", false)]
+    [InlineData("SampleApp", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void ShouldPreferDefaultLoadContext_ExpectedPolicy(string? assemblyName, bool expected)
+    {
+        var actual = ProjectAssemblyContext.ShouldPreferDefaultLoadContext(assemblyName);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void TryResolveRuntimeAssemblyPathFromReferencePath_MapsRefToLibWhenAvailable()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "querylens-ref-map-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var packageRoot = Path.Combine(tempRoot, "microsoft.data.sqlclient", "5.2.0");
+            var refDir = Path.Combine(packageRoot, "ref", "net8.0");
+            var libDir = Path.Combine(packageRoot, "lib", "net8.0");
+            Directory.CreateDirectory(refDir);
+            Directory.CreateDirectory(libDir);
+
+            var refPath = Path.Combine(refDir, "Microsoft.Data.SqlClient.dll");
+            var libPath = Path.Combine(libDir, "Microsoft.Data.SqlClient.dll");
+            File.WriteAllText(refPath, "ref");
+            File.WriteAllText(libPath, "runtime");
+
+            var resolved = ProjectAssemblyContext.TryResolveRuntimeAssemblyPathFromReferencePath(
+                refPath,
+                "Microsoft.Data.SqlClient");
+
+            Assert.Equal(libPath, resolved);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SqlServerSample_LoadsSqlClientFromRuntimeRidFolder()
+    {
+        using var ctx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+
+        var sqlClientAssembly = ctx.LoadedAssemblies
+            .FirstOrDefault(a => string.Equals(
+                a.GetName().Name,
+                "Microsoft.Data.SqlClient",
+                StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotNull(sqlClientAssembly);
+        Assert.Contains(
+            $"{Path.DirectorySeparatorChar}runtimes{Path.DirectorySeparatorChar}",
+            sqlClientAssembly!.Location,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     // ─── FindDbContextTypes ───────────────────────────────────────────────────

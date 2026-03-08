@@ -25,6 +25,10 @@ public sealed partial class QueryEvaluator
             if (loaded.Contains(dll))
                 continue;
 
+            var assemblyName = Path.GetFileNameWithoutExtension(dll);
+            if (ProjectAssemblyContext.ShouldPreferDefaultLoadContext(assemblyName))
+                continue;
+
             try
             {
                 alcCtx.LoadAdditionalAssembly(dll);

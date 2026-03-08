@@ -37,6 +37,22 @@ public static class LspSyntaxHelper
         "Last", "LastOrDefault", "LastAsync", "LastOrDefaultAsync"
     };
 
+    private static readonly HashSet<string> TakeOneTerminalMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Any", "AnyAsync",
+        "First", "FirstOrDefault", "FirstAsync", "FirstOrDefaultAsync"
+    };
+
+    private static readonly HashSet<string> TakeTwoTerminalMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Single", "SingleOrDefault", "SingleAsync", "SingleOrDefaultAsync"
+    };
+
+    private static readonly HashSet<string> CountTerminalMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Count", "CountAsync", "LongCount", "LongCountAsync"
+    };
+
     public static string? TryExtractLinqExpression(string sourceText, int line, int character,
         out string? contextVariableName)
     {
@@ -92,17 +108,29 @@ public static class LspSyntaxHelper
                terminalInvocation.Expression is MemberAccessExpressionSyntax terminalAccess &&
                TerminalMethods.Contains(terminalAccess.Name.Identifier.Text))
         {
-            if (TryExtractPredicateArgument(
+            if (TryRewriteTerminalInvocation(
+                    terminalAccess.Expression,
                     terminalAccess.Name.Identifier.Text,
                     terminalInvocation.ArgumentList.Arguments,
-                    out var predicateArgument))
+                    terminalInvocation,
+                    out var rewritten))
             {
-                targetExpression = CreateWhereCall(terminalAccess.Expression, predicateArgument);
+                targetExpression = rewritten;
                 continue;
             }
 
             targetExpression = terminalAccess.Expression;
         }
+
+        // Inline local IQueryable variables for non-terminal chains too, so
+        // expressions like auditTrailQuery.ApplyPaging(...).ToListAsync(...) are
+        // rooted back to dbContext.* and keep DbContext discovery deterministic.
+        if (invocation is not null)
+        {
+            targetExpression = TryInlineLocalQueryRoot(targetExpression, invocation);
+        }
+
+        targetExpression = StripTransparentQueryableCasts(targetExpression);
 
         // Identify the root variable from the left-most chain segment.
         // Using DescendantNodes().FirstOrDefault() can pick lambda identifiers
@@ -212,9 +240,59 @@ public static class LspSyntaxHelper
         }
     }
 
+    private static bool TryRewriteTerminalInvocation(
+        ExpressionSyntax source,
+        string terminalMethodName,
+        SeparatedSyntaxList<ArgumentSyntax> arguments,
+        InvocationExpressionSyntax invocationContext,
+        out ExpressionSyntax rewritten)
+    {
+        var query = source;
+
+        if (query is IdentifierNameSyntax queryIdentifier
+            && TryResolveLocalExpression(queryIdentifier.Identifier.ValueText, invocationContext, out var resolvedQuery))
+        {
+            query = resolvedQuery;
+        }
+
+        if (TryExtractPredicateArgument(terminalMethodName, arguments, invocationContext, out var predicateArgument))
+        {
+            query = CreateWhereCall(query, predicateArgument);
+        }
+
+        if (CountTerminalMethods.Contains(terminalMethodName))
+        {
+            var isLongCount = terminalMethodName.StartsWith("LongCount", StringComparison.OrdinalIgnoreCase);
+            rewritten = CreateCountProjectionCall(query, isLongCount);
+            return true;
+        }
+
+        if (TakeOneTerminalMethods.Contains(terminalMethodName))
+        {
+            rewritten = CreateTakeCall(query, 1);
+            return true;
+        }
+
+        if (TakeTwoTerminalMethods.Contains(terminalMethodName))
+        {
+            rewritten = CreateTakeCall(query, 2);
+            return true;
+        }
+
+        if (PredicateTerminalMethods.Contains(terminalMethodName))
+        {
+            rewritten = query;
+            return true;
+        }
+
+        rewritten = source;
+        return false;
+    }
+
     private static bool TryExtractPredicateArgument(
         string terminalMethodName,
         SeparatedSyntaxList<ArgumentSyntax> arguments,
+        InvocationExpressionSyntax invocationContext,
         out ExpressionSyntax predicateArgument)
     {
         predicateArgument = null!;
@@ -227,18 +305,251 @@ public static class LspSyntaxHelper
             if (IsCancellationTokenArgument(argument))
                 continue;
 
-            // Accept lambdas and common variable/member forms that point to a pre-built predicate.
             if (argument.Expression is LambdaExpressionSyntax
                 || argument.Expression is AnonymousMethodExpressionSyntax
-                || argument.Expression is IdentifierNameSyntax
                 || argument.Expression is MemberAccessExpressionSyntax)
             {
                 predicateArgument = argument.Expression;
                 return true;
             }
+
+            if (argument.Expression is IdentifierNameSyntax identifier)
+            {
+                if (TryResolveLocalPredicateExpression(identifier.Identifier.ValueText, invocationContext, out var resolvedPredicate))
+                {
+                    predicateArgument = resolvedPredicate;
+                    return true;
+                }
+
+                predicateArgument = identifier;
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private static ExpressionSyntax StripTransparentQueryableCasts(ExpressionSyntax expression)
+    {
+        var rewritten = new TransparentQueryableCastStripper().Visit(expression) as ExpressionSyntax;
+        return rewritten ?? expression;
+    }
+
+    private static bool IsTransparentQueryCastType(TypeSyntax type)
+    {
+        var typeText = type.ToString();
+        return typeText.Contains("IQueryable<", StringComparison.Ordinal)
+               || typeText.Contains("IOrderedQueryable<", StringComparison.Ordinal)
+               || typeText.Contains("IEnumerable<", StringComparison.Ordinal)
+               || typeText.Contains("IOrderedEnumerable<", StringComparison.Ordinal)
+               || typeText.Contains("IAsyncEnumerable<", StringComparison.Ordinal);
+    }
+
+    private static bool TryResolveLocalPredicateExpression(
+        string identifier,
+        InvocationExpressionSyntax invocationContext,
+        out ExpressionSyntax predicate)
+    {
+        predicate = null!;
+
+        if (!TryResolveLocalExpression(identifier, invocationContext, out var expression))
+            return false;
+
+        return TryUnwrapPredicateExpression(expression, out predicate);
+    }
+
+    private static bool TryResolveLocalExpression(
+        string identifier,
+        InvocationExpressionSyntax invocationContext,
+        out ExpressionSyntax expression)
+    {
+        expression = null!;
+
+        var anchorStatement = invocationContext.FirstAncestorOrSelf<StatementSyntax>();
+        if (anchorStatement is null)
+            return false;
+
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        return TryResolveLocalExpressionCore(identifier, anchorStatement, visited, out expression);
+    }
+
+    private static ExpressionSyntax TryInlineLocalQueryRoot(
+        ExpressionSyntax expression,
+        InvocationExpressionSyntax invocationContext)
+    {
+        if (!TryGetLeftMostExpression(expression, out var leftMostExpression))
+            return expression;
+
+        if (leftMostExpression is not IdentifierNameSyntax identifier)
+            return expression;
+
+        if (!TryResolveLocalExpression(identifier.Identifier.ValueText, invocationContext, out var resolvedExpression))
+            return expression;
+
+        return expression.ReplaceNode(leftMostExpression, resolvedExpression.WithoutTrivia());
+    }
+
+    private static bool TryGetLeftMostExpression(ExpressionSyntax expression, out ExpressionSyntax leftMost)
+    {
+        leftMost = expression;
+        var current = expression;
+
+        while (true)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation
+                    when invocation.Expression is MemberAccessExpressionSyntax memberAccess:
+                    current = memberAccess.Expression;
+                    continue;
+
+                case MemberAccessExpressionSyntax member:
+                    current = member.Expression;
+                    continue;
+
+                case ParenthesizedExpressionSyntax parenthesized:
+                    current = parenthesized.Expression;
+                    continue;
+
+                case CastExpressionSyntax cast:
+                    current = cast.Expression;
+                    continue;
+
+                default:
+                    leftMost = current;
+                    return true;
+            }
+        }
+    }
+
+    private static bool TryResolveLocalExpressionCore(
+        string identifier,
+        StatementSyntax anchorStatement,
+        ISet<string> visited,
+        out ExpressionSyntax expression)
+    {
+        expression = null!;
+
+        if (!visited.Add(identifier))
+            return false;
+
+        for (SyntaxNode? scope = anchorStatement.Parent; scope is not null; scope = scope.Parent)
+        {
+            if (!TryGetStatementContainer(scope, out var statements))
+                continue;
+
+            var anchorIndex = statements.FindIndex(s => ReferenceEquals(s, anchorStatement));
+            if (anchorIndex < 0)
+                continue;
+
+            for (var i = anchorIndex - 1; i >= 0; i--)
+            {
+                var statement = statements[i];
+                if (TryGetDeclaredExpression(statement, identifier, out var declaredExpression))
+                {
+                    if (declaredExpression is IdentifierNameSyntax nestedIdentifier)
+                    {
+                        if (TryResolveLocalExpressionCore(nestedIdentifier.Identifier.ValueText, statement, visited, out expression))
+                        {
+                            return true;
+                        }
+                    }
+                    else
+                    {
+                        expression = declaredExpression;
+                        return true;
+                    }
+                }
+            }
+
+            var outerStatement = scope.Parent?.FirstAncestorOrSelf<StatementSyntax>();
+            if (outerStatement is null || ReferenceEquals(outerStatement, anchorStatement))
+                break;
+
+            anchorStatement = outerStatement;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetStatementContainer(SyntaxNode scope, out List<StatementSyntax> statements)
+    {
+        switch (scope)
+        {
+            case BlockSyntax block:
+                statements = block.Statements.ToList();
+                return true;
+
+            case SwitchSectionSyntax section:
+                statements = section.Statements.ToList();
+                return true;
+
+            case CompilationUnitSyntax compilationUnit:
+                statements = compilationUnit.Members
+                    .OfType<GlobalStatementSyntax>()
+                    .Select(m => m.Statement)
+                    .ToList();
+                return statements.Count > 0;
+
+            default:
+                statements = null!;
+                return false;
+        }
+    }
+
+    private static bool TryGetDeclaredExpression(
+        StatementSyntax statement,
+        string identifier,
+        out ExpressionSyntax expression)
+    {
+        expression = null!;
+
+        if (statement is LocalDeclarationStatementSyntax localDeclaration)
+        {
+            foreach (var variable in localDeclaration.Declaration.Variables)
+            {
+                if (!string.Equals(variable.Identifier.ValueText, identifier, StringComparison.Ordinal))
+                    continue;
+
+                if (variable.Initializer?.Value is not null)
+                {
+                    expression = variable.Initializer.Value;
+                    return true;
+                }
+            }
+        }
+
+        if (statement is ExpressionStatementSyntax expressionStatement
+            && expressionStatement.Expression is AssignmentExpressionSyntax assignment
+            && assignment.Left is IdentifierNameSyntax leftIdentifier
+            && string.Equals(leftIdentifier.Identifier.ValueText, identifier, StringComparison.Ordinal))
+        {
+            expression = assignment.Right;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryUnwrapPredicateExpression(ExpressionSyntax expression, out ExpressionSyntax predicate)
+    {
+        switch (expression)
+        {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return TryUnwrapPredicateExpression(parenthesized.Expression, out predicate);
+
+            case CastExpressionSyntax cast:
+                return TryUnwrapPredicateExpression(cast.Expression, out predicate);
+
+            case LambdaExpressionSyntax:
+            case AnonymousMethodExpressionSyntax:
+                predicate = expression;
+                return true;
+
+            default:
+                predicate = null!;
+                return false;
+        }
     }
 
     private static bool IsCancellationTokenArgument(ArgumentSyntax argument)
@@ -269,5 +580,38 @@ public static class LspSyntaxHelper
             SyntaxFactory.ArgumentList(
                 SyntaxFactory.SingletonSeparatedList(
                     SyntaxFactory.Argument(predicate))));
+    }
+
+    private static InvocationExpressionSyntax CreateTakeCall(ExpressionSyntax source, int count)
+    {
+        return SyntaxFactory.InvocationExpression(
+            SyntaxFactory.MemberAccessExpression(
+                SyntaxKind.SimpleMemberAccessExpression,
+                source,
+                SyntaxFactory.IdentifierName("Take")),
+            SyntaxFactory.ArgumentList(
+                SyntaxFactory.SingletonSeparatedList(
+                    SyntaxFactory.Argument(
+                        SyntaxFactory.LiteralExpression(
+                            SyntaxKind.NumericLiteralExpression,
+                            SyntaxFactory.Literal(count))))));
+    }
+
+    private static ExpressionSyntax CreateCountProjectionCall(ExpressionSyntax source, bool useLongCount)
+    {
+        var countMethod = useLongCount ? "LongCount" : "Count";
+        return SyntaxFactory.ParseExpression($"({source}).GroupBy(_ => 1).Select(g => g.{countMethod}())");
+    }
+
+    private sealed class TransparentQueryableCastStripper : CSharpSyntaxRewriter
+    {
+        public override SyntaxNode? VisitCastExpression(CastExpressionSyntax node)
+        {
+            var visited = (CastExpressionSyntax)base.VisitCastExpression(node)!;
+            if (!IsTransparentQueryCastType(visited.Type))
+                return visited;
+
+            return visited.Expression.WithTriviaFrom(node);
+        }
     }
 }

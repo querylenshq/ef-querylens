@@ -34,11 +34,15 @@
     <ProjectReference Include="..\..\samples\SampleApp\SampleApp.csproj"
                       ReferenceOutputAssembly="false"
                       Private="false" />
+    <ProjectReference Include="..\..\samples\SampleSqlServerApp\SampleSqlServerApp.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
   </ItemGroup>
 
-  <Target Name="CopySampleAppToTestOutput" AfterTargets="Build">
+  <Target Name="CopySampleAppsToTestOutput" AfterTargets="Build">
     <PropertyGroup>
       <SampleAppOutputDir>..\..\samples\SampleApp\bin\$(Configuration)\$(TargetFramework)\</SampleAppOutputDir>
+      <SampleSqlServerAppOutputDir>..\..\samples\SampleSqlServerApp\bin\$(Configuration)\$(TargetFramework)\</SampleSqlServerAppOutputDir>
     </PropertyGroup>
     <ItemGroup>
       <!-- Exclude Microsoft.CodeAnalysis* DLLs: EF Core Design brings in an older
@@ -51,9 +55,17 @@
                                $(SampleAppOutputDir)Microsoft.CodeAnalysis*.pdb;
                                $(SampleAppOutputDir)System.Collections.Immutable.dll;
                                $(SampleAppOutputDir)System.Reflection.Metadata.dll" />
+      <SampleSqlServerAppFiles Include="$(SampleSqlServerAppOutputDir)**\*.*"
+                               Exclude="$(SampleSqlServerAppOutputDir)Microsoft.CodeAnalysis*.dll;
+                                        $(SampleSqlServerAppOutputDir)Microsoft.CodeAnalysis*.pdb;
+                                        $(SampleSqlServerAppOutputDir)System.Collections.Immutable.dll;
+                                        $(SampleSqlServerAppOutputDir)System.Reflection.Metadata.dll" />
     </ItemGroup>
-    <Copy SourceFiles="@(SampleAppFiles)"
-          DestinationFolder="$(OutputPath)%(RecursiveDir)"
+        <Copy SourceFiles="@(SampleAppFiles)"
+          DestinationFolder="$(OutputPath)SampleApp\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+        <Copy SourceFiles="@(SampleSqlServerAppFiles)"
+          DestinationFolder="$(OutputPath)SampleSqlServerApp\%(RecursiveDir)"
           SkipUnchangedFiles="true" />
   </Target>
 

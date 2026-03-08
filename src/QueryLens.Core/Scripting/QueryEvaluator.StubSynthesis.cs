@@ -1,4 +1,8 @@
 using System.Text.RegularExpressions;
+using System.Reflection;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Runtime.Loader;
 
 namespace QueryLens.Core.Scripting;
 
@@ -15,7 +19,13 @@ public sealed partial class QueryEvaluator
             && !string.Equals(name, request.ContextVariableName, StringComparison.Ordinal))
             return $"var {name} = {request.ContextVariableName};";
 
-        var memberTypes = InferMemberAccessTypes(name, request.Expression, dbContextType);
+        // Gridify placeholders must win over generic member-access synthesis.
+        // `query` is commonly used both as IGridifyQuery and as `query.Page` / `query.PageSize`.
+        // If we synthesize it as anonymous object first, extension calls fail with CS1503.
+        if (TryBuildGridifyStubDeclaration(name, request.Expression, dbContextType, out var gridifyStub))
+            return gridifyStub;
+
+        var memberTypes = InferMemberAccessTypes(name, request.Expression, dbContextType, request.UsingAliases);
         if (memberTypes.Count > 0)
         {
             var memberInitializers = string.Join(
@@ -33,6 +43,12 @@ public sealed partial class QueryEvaluator
             var value = BuildScalarPlaceholderExpression(inferred);
             return $"{tn} {name} = {value};";
         }
+
+        if (LooksLikeBooleanConditionIdentifier(name, request.Expression))
+            return $"bool {name} = true;";
+
+        if (LooksLikeNumericArithmeticIdentifier(name, request.Expression))
+            return $"int {name} = 1;";
 
         var elem = InferContainsElementType(name, request.Expression, dbContextType);
         if (elem is not null)
@@ -60,6 +76,186 @@ public sealed partial class QueryEvaluator
             return $"System.Threading.CancellationToken {name} = default;";
 
         return $"object {name} = default;";
+    }
+
+    private static bool TryBuildGridifyStubDeclaration(
+        string variableName,
+        string expression,
+        Type dbContextType,
+        out string declaration)
+    {
+        declaration = string.Empty;
+
+        if (!TryGetGridifyArgumentRole(variableName, expression, out var role, out var sourceExpression))
+            return false;
+
+        if (role == GridifyArgumentRole.Query)
+        {
+            declaration = $"global::Gridify.IGridifyQuery {variableName} = new global::Gridify.GridifyQuery();";
+            return true;
+        }
+
+        if (role != GridifyArgumentRole.Mapper || sourceExpression is null)
+            return false;
+
+        var entityType = InferQueryEntityTypeFromSource(sourceExpression, dbContextType);
+        if (entityType is null)
+            return false;
+
+        declaration = $"global::Gridify.IGridifyMapper<{ToCSharpTypeName(entityType)}>? {variableName} = null;";
+        return true;
+    }
+
+    private static bool TryGetGridifyArgumentRole(
+        string variableName,
+        string expression,
+        out GridifyArgumentRole role,
+        out ExpressionSyntax? sourceExpression)
+    {
+        role = GridifyArgumentRole.None;
+        sourceExpression = null;
+
+        if (!expression.Contains("ApplyFilteringAndOrdering", StringComparison.Ordinal))
+            return false;
+
+        var parsed = SyntaxFactory.ParseExpression(expression);
+        foreach (var invocation in parsed.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            var methodName = GetInvocationMethodName(invocation);
+            if (!string.Equals(methodName, "ApplyFilteringAndOrdering", StringComparison.Ordinal))
+                continue;
+
+            var isExtensionCall = invocation.Expression is MemberAccessExpressionSyntax;
+            var args = invocation.ArgumentList.Arguments;
+
+            var queryArgIndex = isExtensionCall ? 0 : 1;
+            var mapperArgIndex = isExtensionCall ? 1 : 2;
+
+            if (args.Count <= queryArgIndex)
+                continue;
+
+            if (TryGetSimpleIdentifier(args[queryArgIndex].Expression, out var queryArg)
+                && string.Equals(queryArg, variableName, StringComparison.Ordinal))
+            {
+                role = GridifyArgumentRole.Query;
+                sourceExpression = isExtensionCall
+                    ? ((MemberAccessExpressionSyntax)invocation.Expression).Expression
+                    : args[0].Expression;
+                return true;
+            }
+
+            if (args.Count <= mapperArgIndex)
+                continue;
+
+            if (TryGetSimpleIdentifier(args[mapperArgIndex].Expression, out var mapperArg)
+                && string.Equals(mapperArg, variableName, StringComparison.Ordinal))
+            {
+                role = GridifyArgumentRole.Mapper;
+                sourceExpression = isExtensionCall
+                    ? ((MemberAccessExpressionSyntax)invocation.Expression).Expression
+                    : args[0].Expression;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? GetInvocationMethodName(InvocationExpressionSyntax invocation)
+    {
+        return invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            GenericNameSyntax generic => generic.Identifier.ValueText,
+            _ => null,
+        };
+    }
+
+    private static bool TryGetSimpleIdentifier(ExpressionSyntax expression, out string identifier)
+    {
+        switch (expression)
+        {
+            case IdentifierNameSyntax id:
+                identifier = id.Identifier.ValueText;
+                return true;
+
+            case PostfixUnaryExpressionSyntax postfix
+                when postfix.RawKind == (int)Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression:
+                return TryGetSimpleIdentifier(postfix.Operand, out identifier);
+
+            case ParenthesizedExpressionSyntax parenthesized:
+                return TryGetSimpleIdentifier(parenthesized.Expression, out identifier);
+
+            case CastExpressionSyntax cast:
+                return TryGetSimpleIdentifier(cast.Expression, out identifier);
+
+            default:
+                identifier = string.Empty;
+                return false;
+        }
+    }
+
+    private static Type? InferQueryEntityTypeFromSource(ExpressionSyntax sourceExpression, Type dbContextType)
+    {
+        ExpressionSyntax current = sourceExpression;
+
+        while (true)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation
+                    when invocation.Expression is MemberAccessExpressionSyntax memberAccess:
+                    current = memberAccess.Expression;
+                    continue;
+
+                case MemberAccessExpressionSyntax member:
+                    var prop = dbContextType.GetProperty(member.Name.Identifier.ValueText);
+                    if (prop is not null)
+                    {
+                        var elementType = TryGetQueryableElementType(prop.PropertyType);
+                        if (elementType is not null)
+                            return elementType;
+                    }
+
+                    current = member.Expression;
+                    continue;
+
+                case ParenthesizedExpressionSyntax parenthesized:
+                    current = parenthesized.Expression;
+                    continue;
+
+                case CastExpressionSyntax cast:
+                    current = cast.Expression;
+                    continue;
+
+                default:
+                    return null;
+            }
+        }
+    }
+
+    private static Type? TryGetQueryableElementType(Type queryableType)
+    {
+        if (queryableType.IsGenericType && queryableType.GetGenericTypeDefinition() == typeof(IQueryable<>))
+            return queryableType.GetGenericArguments()[0];
+
+        var iqueryable = queryableType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IQueryable<>));
+        if (iqueryable is not null)
+            return iqueryable.GetGenericArguments()[0];
+
+        if (queryableType.IsGenericType && queryableType.GetGenericArguments().Length == 1)
+            return queryableType.GetGenericArguments()[0];
+
+        return null;
+    }
+
+    private enum GridifyArgumentRole
+    {
+        None,
+        Query,
+        Mapper,
     }
 
     private static bool LooksLikeTypeOrNamespacePrefix(
@@ -107,7 +303,11 @@ public sealed partial class QueryEvaluator
             ? prop.PropertyType.GetGenericArguments().FirstOrDefault() : null;
     }
 
-    private static IReadOnlyDictionary<string, Type> InferMemberAccessTypes(string variableName, string expression, Type dbContextType)
+    private static IReadOnlyDictionary<string, Type> InferMemberAccessTypes(
+        string variableName,
+        string expression,
+        Type dbContextType,
+        IReadOnlyDictionary<string, string> usingAliases)
     {
         var members = Regex.Matches(
             expression,
@@ -127,7 +327,8 @@ public sealed partial class QueryEvaluator
 
         foreach (var member in members)
         {
-            var inferred = InferMemberTypeFromComparison(variableName, member, expression, dbContextType)
+            var inferred = InferMemberTypeFromIsPattern(variableName, member, expression, dbContextType, usingAliases)
+                ?? InferMemberTypeFromComparison(variableName, member, expression, dbContextType)
                 ?? FindEntityPropertyType(dbContextType, member)
                 ?? InferMemberTypeFromNameHeuristic(member);
 
@@ -136,6 +337,175 @@ public sealed partial class QueryEvaluator
         }
 
         return result;
+    }
+
+    private static Type? InferMemberTypeFromIsPattern(
+        string variableName,
+        string memberName,
+        string expression,
+        Type dbContextType,
+        IReadOnlyDictionary<string, string> usingAliases)
+    {
+        ExpressionSyntax parsed;
+        try
+        {
+            parsed = SyntaxFactory.ParseExpression(expression);
+        }
+        catch
+        {
+            return null;
+        }
+
+        foreach (var isPattern in parsed.DescendantNodesAndSelf().OfType<IsPatternExpressionSyntax>())
+        {
+            if (!IsTargetMemberAccess(isPattern.Expression, variableName, memberName))
+                continue;
+
+            var typeName = TryExtractTypeNameFromPattern(isPattern.Pattern);
+            if (string.IsNullOrWhiteSpace(typeName))
+                continue;
+
+            var resolved = ResolveTypeFromName(typeName!, dbContextType, usingAliases);
+            if (resolved?.IsEnum == true)
+                return resolved;
+        }
+
+        return null;
+    }
+
+    private static bool IsTargetMemberAccess(ExpressionSyntax expression, string variableName, string memberName)
+    {
+        switch (expression)
+        {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return IsTargetMemberAccess(parenthesized.Expression, variableName, memberName);
+
+            case CastExpressionSyntax cast:
+                return IsTargetMemberAccess(cast.Expression, variableName, memberName);
+
+            case MemberAccessExpressionSyntax memberAccess:
+                return memberAccess.Expression is IdentifierNameSyntax identifier
+                       && string.Equals(identifier.Identifier.ValueText, variableName, StringComparison.Ordinal)
+                       && string.Equals(memberAccess.Name.Identifier.ValueText, memberName, StringComparison.Ordinal);
+
+            default:
+                return false;
+        }
+    }
+
+    private static string? TryExtractTypeNameFromPattern(PatternSyntax pattern)
+    {
+        switch (pattern)
+        {
+            case ConstantPatternSyntax constantPattern:
+                return TryExtractTypeNameFromConstantPattern(constantPattern.Expression);
+
+            case BinaryPatternSyntax binaryPattern:
+                return TryExtractTypeNameFromPattern(binaryPattern.Left)
+                    ?? TryExtractTypeNameFromPattern(binaryPattern.Right);
+
+            case ParenthesizedPatternSyntax parenthesizedPattern:
+                return TryExtractTypeNameFromPattern(parenthesizedPattern.Pattern);
+
+            case DeclarationPatternSyntax declarationPattern:
+                return declarationPattern.Type.ToString();
+
+            case TypePatternSyntax typePattern:
+                return typePattern.Type.ToString();
+
+            default:
+                return null;
+        }
+    }
+
+    private static string? TryExtractTypeNameFromConstantPattern(ExpressionSyntax constantExpression)
+    {
+        switch (constantExpression)
+        {
+            case MemberAccessExpressionSyntax memberAccess:
+                // EnumValue pattern: Namespace.EnumType.Member -> return Namespace.EnumType
+                return memberAccess.Expression.ToString();
+
+            case ParenthesizedExpressionSyntax parenthesized:
+                return TryExtractTypeNameFromConstantPattern(parenthesized.Expression);
+
+            case CastExpressionSyntax cast:
+                return cast.Type.ToString();
+
+            default:
+                return null;
+        }
+    }
+
+    private static Type? ResolveTypeFromName(
+        string typeName,
+        Type dbContextType,
+        IReadOnlyDictionary<string, string> usingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(typeName))
+            return null;
+
+        var expanded = ExpandAliasTypeName(typeName, usingAliases);
+        if (string.IsNullOrWhiteSpace(expanded))
+            return null;
+
+        expanded = expanded!.Replace("global::", string.Empty, StringComparison.Ordinal);
+
+        var alc = AssemblyLoadContext.GetLoadContext(dbContextType.Assembly);
+        var assemblies = (alc?.Assemblies ?? [dbContextType.Assembly]).Distinct().ToArray();
+
+        foreach (var asm in assemblies)
+        {
+            var direct = asm.GetType(expanded, throwOnError: false, ignoreCase: false);
+            if (direct is not null)
+                return direct;
+        }
+
+        var simpleName = expanded.Contains('.') ? expanded[(expanded.LastIndexOf('.') + 1)..] : expanded;
+        foreach (var asm in assemblies)
+        {
+            try
+            {
+                var matched = asm.GetTypes().FirstOrDefault(t =>
+                    string.Equals(t.Name, simpleName, StringComparison.Ordinal)
+                    || string.Equals(t.FullName, expanded, StringComparison.Ordinal));
+                if (matched is not null)
+                    return matched;
+            }
+            catch (ReflectionTypeLoadException rtle)
+            {
+                var matched = rtle.Types
+                    .Where(t => t is not null)
+                    .FirstOrDefault(t =>
+                        string.Equals(t!.Name, simpleName, StringComparison.Ordinal)
+                        || string.Equals(t.FullName, expanded, StringComparison.Ordinal));
+                if (matched is not null)
+                    return matched!;
+            }
+            catch
+            {
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ExpandAliasTypeName(string typeName, IReadOnlyDictionary<string, string> usingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(typeName) || usingAliases.Count == 0)
+            return typeName;
+
+        foreach (var kvp in usingAliases)
+        {
+            if (string.Equals(typeName, kvp.Key, StringComparison.Ordinal))
+                return kvp.Value;
+
+            var prefix = kvp.Key + ".";
+            if (typeName.StartsWith(prefix, StringComparison.Ordinal))
+                return kvp.Value + typeName[prefix.Length..];
+        }
+
+        return typeName;
     }
 
     private static bool IsInvokedMemberAccess(Match match, string expression)
@@ -166,6 +536,13 @@ public sealed partial class QueryEvaluator
 
     private static Type? InferMemberTypeFromNameHeuristic(string memberName)
     {
+        if (string.Equals(memberName, "Now", StringComparison.Ordinal)
+            || string.Equals(memberName, "UtcNow", StringComparison.Ordinal)
+            || string.Equals(memberName, "Today", StringComparison.Ordinal))
+        {
+            return typeof(DateTime);
+        }
+
         if (memberName.EndsWith("Id", StringComparison.Ordinal))
             return typeof(Guid);
 
@@ -177,6 +554,44 @@ public sealed partial class QueryEvaluator
         if (Regex.IsMatch(expr, $@"\w+Async\s*\([^\)]*\b{Regex.Escape(v)}\b[^\)]*\)")) return true;
         return v.Equals("ct", StringComparison.OrdinalIgnoreCase)
             || v.Equals("cancellationToken", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeBooleanConditionIdentifier(string variableName, string expression)
+    {
+        var id = Regex.Escape(variableName);
+
+        // Handles conditions like: isIntranetUser || ...  and  ... && isIntranetUser
+        if (Regex.IsMatch(expression, $@"(?<!\w){id}(?!\w)\s*(\|\||&&)"))
+            return true;
+
+        if (Regex.IsMatch(expression, $@"(\|\||&&)\s*!?\s*(?<!\w){id}(?!\w)"))
+            return true;
+
+        // Handles unary negation: !isIntranetUser
+        if (Regex.IsMatch(expression, $@"!\s*(?<!\w){id}(?!\w)"))
+            return true;
+
+        // Handles ternary condition usage: isIntranetUser ? x : y
+        if (Regex.IsMatch(expression, $@"(?<!\w){id}(?!\w)\s*\?"))
+            return true;
+
+        return false;
+    }
+
+    private static bool LooksLikeNumericArithmeticIdentifier(string variableName, string expression)
+    {
+        var id = Regex.Escape(variableName);
+
+        if (Regex.IsMatch(expression, $@"(?<!\w){id}(?!\w)\s*[*+\-/]"))
+            return true;
+
+        if (Regex.IsMatch(expression, $@"[*+\-/]\s*(?<!\w){id}(?!\w)"))
+            return true;
+
+        if (Regex.IsMatch(expression, $@"\.(Skip|Take)\s*\(\s*(?<!\w){id}(?!\w)\s*\)", RegexOptions.IgnoreCase))
+            return true;
+
+        return false;
     }
 
     private static string BuildContainsPlaceholderValues(Type elementType)

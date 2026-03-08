@@ -1,3 +1,4 @@
+using System.Reflection;
 using QueryLens.Core.AssemblyContext;
 using QueryLens.Core.Scripting;
 
@@ -6,8 +7,8 @@ namespace QueryLens.Core.Tests.Scripting;
 /// <summary>
 /// Integration-style unit tests for <see cref="QueryEvaluator"/>.
 ///
-/// SampleApp.dll is copied into the test output dir by the MSBuild target in
-/// the .csproj, so <see cref="GetSampleAppDll"/> finds it at runtime.
+/// Sample fixtures are copied into isolated subfolders under the test output dir
+/// so transitive package DLLs do not overwrite each other.
 /// </summary>
 [Collection("AssemblyLoadContextIsolation")]
 public class QueryEvaluatorTests : IDisposable
@@ -28,13 +29,35 @@ public class QueryEvaluatorTests : IDisposable
     private static string GetSampleAppDll()
     {
         var dir = Path.GetDirectoryName(typeof(QueryEvaluatorTests).Assembly.Location)!;
-        var dll = Path.Combine(dir, "SampleApp.dll");
+        var dll = ResolveSampleDll(dir, "SampleApp", "SampleApp.dll");
 
         if (!File.Exists(dll))
             throw new FileNotFoundException(
                 $"SampleApp.dll not found in test output dir. Expected: {dll}");
 
         return dll;
+    }
+
+    private static string GetSampleSqlServerAppDll()
+    {
+        var dir = Path.GetDirectoryName(typeof(QueryEvaluatorTests).Assembly.Location)!;
+        var dll = ResolveSampleDll(dir, "SampleSqlServerApp", "SampleSqlServerApp.dll");
+
+        if (!File.Exists(dll))
+            throw new FileNotFoundException(
+                $"SampleSqlServerApp.dll not found in test output dir. Expected: {dll}");
+
+        return dll;
+    }
+
+    private static string ResolveSampleDll(string testOutputDir, string sampleFolder, string dllName)
+    {
+        var isolated = Path.Combine(testOutputDir, sampleFolder, dllName);
+        if (File.Exists(isolated))
+            return isolated;
+
+        // Backward compatibility for older builds that copied files into root.
+        return Path.Combine(testOutputDir, dllName);
     }
 
     private Task<QueryTranslationResult> TranslateAsync(
@@ -66,6 +89,26 @@ public class QueryEvaluatorTests : IDisposable
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
         Assert.Contains("Orders", result.Sql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_SqlServerSample_SimpleDbSet_ReturnsSql()
+    {
+        using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+        var evaluator = new QueryEvaluator();
+
+        var result = await evaluator.EvaluateAsync(
+            sqlAlcCtx,
+            new TranslationRequest
+            {
+                AssemblyPath = sqlAlcCtx.AssemblyPath,
+                Expression = "db.Customers",
+            });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.Contains("Customers", result.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Microsoft.EntityFrameworkCore.SqlServer", result.Metadata.ProviderName);
     }
 
     [Fact]
@@ -194,6 +237,28 @@ public class QueryEvaluatorTests : IDisposable
     }
 
     [Fact]
+    public async Task Evaluate_MissingBooleanVariable_InLogicalWhere_IsSynthesizedAsBool()
+    {
+        var result = await TranslateAsync("db.Users.Where(u => isIntranetUser || u.Id > 0).Select(u => u.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("Operator '||' cannot be applied", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingGuidAndBoolVariables_InCombinedPredicate_DoNotCrossInfer()
+    {
+        var result = await TranslateAsync(
+            "db.ApplicationChecklists.Where(s => s.ApplicationId == applicationId && (isIntranetUser || s.IsLatest)).Select(s => s.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("Operator '==' cannot be applied to operands of type 'Guid' and 'bool'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Operator '||' cannot be applied to operands of type 'object' and 'bool'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Evaluate_MissingObjectMemberVariable_InWhere_IsSynthesized()
     {
         var result = await TranslateAsync(
@@ -203,6 +268,120 @@ public class QueryEvaluatorTests : IDisposable
         Assert.NotNull(result.Sql);
         Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("does not contain a definition", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingObjectWithNowMember_InWhere_UsesDateTimeStub()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.Where(o => o.CreatedAt.Date == dateTime.Now.Date).Select(o => o.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("'string' does not contain a definition for 'Date'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_RootWrapperContextHop_IsNormalizedFromCompilerDiagnostics()
+    {
+        var result = await TranslateAsync("services.Context.Orders.Select(o => o.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain(
+            "does not contain a definition for 'Context'",
+            result.ErrorMessage ?? string.Empty,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_GridifyQueryArgument_UsesIGridifyQuery()
+    {
+        var stub = BuildStubDeclarationForTest(
+            missingName: "query",
+            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm)");
+
+        Assert.Equal(
+            "global::Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
+            stub);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_GridifyMapperArgument_UsesTypedIGridifyMapper()
+    {
+        var stub = BuildStubDeclarationForTest(
+            missingName: "gm",
+            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm)");
+
+        Assert.Equal(
+            "global::Gridify.IGridifyMapper<SampleApp.Entities.Order>? gm = null;",
+            stub);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_GridifyQueryWithPagingMembers_PrefersIGridifyQueryOverAnonymousObject()
+    {
+        var stub = BuildStubDeclarationForTest(
+            missingName: "query",
+            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm).ApplyPaging(query.Page, query.PageSize)");
+
+        Assert.Equal(
+            "global::Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
+            stub);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_IsPatternEnumMember_UsesEnumTypeFromPattern()
+    {
+        var stub = BuildStubDeclarationForTest(
+            missingName: "pastPlanningPlusCase",
+            expression: "db.Orders.Where(o => o.UserId == ((pastPlanningPlusCase.CaseType is System.DayOfWeek.Monday or System.DayOfWeek.Tuesday) ? 1 : 2)).Select(o => o.Id)");
+
+        Assert.Equal(
+            "var pastPlanningPlusCase = new { CaseType = (System.DayOfWeek)1 };",
+            stub);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingPagingVariables_InSkipTakeArithmetic_AreSynthesizedAsNumeric()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.OrderBy(o => o.Id).Skip(pageSize * pageIndex).Take(pageSize).Select(o => o.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain(
+            "Operator '*' cannot be applied to operands of type 'object' and 'object'",
+            result.ErrorMessage ?? string.Empty,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_PatternTernaryComparisonWithoutParentheses_IsNormalizedForIntendedComparison()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.Where(o => o.UserId == selector.Value is 1 or 2 ? 1 : 2).Select(o => o.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain(
+            "Operator '==' cannot be applied to operands of type 'int' and 'bool'",
+            result.ErrorMessage ?? string.Empty,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_PatternTernaryComparisonInsideLogicalAnd_IsNormalizedForIntendedComparison()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.Where(o => o.Id > 0 && o.UserId == selector.Value is 1 or 2 ? 1 : 2).Select(o => o.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain(
+            "Operator '==' cannot be applied to operands of type 'int' and 'bool'",
+            result.ErrorMessage ?? string.Empty,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -540,5 +719,28 @@ public class QueryEvaluatorTests : IDisposable
             Assert.NotNull(result.Sql);
             Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
         }
+    }
+
+    private string BuildStubDeclarationForTest(string missingName, string expression)
+    {
+        var dbContextType = _alcCtx.FindDbContextType(null, expression);
+        var request = new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            Expression = expression,
+        };
+
+        var method = typeof(QueryEvaluator).GetMethod(
+            "BuildStubDeclaration",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+
+        var stub = method!.Invoke(
+            null,
+            [missingName, "db", request, dbContextType]) as string;
+
+        Assert.False(string.IsNullOrWhiteSpace(stub));
+        return stub!;
     }
 }

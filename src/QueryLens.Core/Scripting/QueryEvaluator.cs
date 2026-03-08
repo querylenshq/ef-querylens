@@ -104,6 +104,7 @@ public sealed partial class QueryEvaluator
 
             // 6. Compile -> emit -> load into user ALC -> invoke Run.
             // Retry with auto-stub declarations on CS0103 (missing local variables).
+            var workingExpression = request.Expression;
             var stubs = new List<string>();
             var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);
             var maxRetries = 5;
@@ -113,9 +114,11 @@ public sealed partial class QueryEvaluator
             {
                 ct.ThrowIfCancellationRequested();
 
+                var workingRequest = request with { Expression = workingExpression };
+
                 var src = BuildEvalSource(
                     dbContextType,
-                    request,
+                    workingRequest,
                     stubs,
                     knownNamespaces,
                     knownTypes,
@@ -125,7 +128,7 @@ public sealed partial class QueryEvaluator
                     .Where(d => d.Severity == DiagnosticSeverity.Error)
                     .ToList();
 
-                var hardErrors = errors.Where(e => e.Id is not ("CS0103" or "CS1061")).ToList();
+                var hardErrors = errors.Where(e => e.Id is not ("CS0103" or "CS1061" or "CS0019" or "CS8122")).ToList();
                 if (hardErrors.Count > 0)
                 {
                     return Failure(
@@ -155,18 +158,49 @@ public sealed partial class QueryEvaluator
                     .Where(n => n is not null)
                     .Distinct()
                     .Where(n => !string.IsNullOrWhiteSpace(n)
-                                && !LooksLikeTypeOrNamespacePrefix(n!, request.Expression, request.UsingAliases))
+                                && !LooksLikeTypeOrNamespacePrefix(n!, workingRequest.Expression, workingRequest.UsingAliases))
                     .ToList();
 
                 var changed = false;
 
-                var rootId = TryExtractRootIdentifier(request.Expression);
+                var rootId = TryExtractRootIdentifier(workingRequest.Expression);
                 foreach (var n in missingNames)
                 {
                     if (stubs.Any(s => s.Contains($" {n} ") || s.Contains($" {n};")))
                         continue;
 
-                    stubs.Add(BuildStubDeclaration(n!, rootId, request, dbContextType));
+                    stubs.Add(BuildStubDeclaration(n!, rootId, workingRequest, dbContextType));
+                    changed = true;
+                }
+
+                if (TryNormalizeRootContextHopFromErrors(
+                        errors,
+                        workingRequest.Expression,
+                        dbContextType,
+                        out var normalizedExpression)
+                    && !string.Equals(normalizedExpression, workingExpression, StringComparison.Ordinal))
+                {
+                    workingExpression = normalizedExpression;
+                    changed = true;
+                }
+
+                if (TryNormalizePatternTernaryComparisonFromErrors(
+                        errors,
+                        workingExpression,
+                        out var ternaryNormalizedExpression)
+                    && !string.Equals(ternaryNormalizedExpression, workingExpression, StringComparison.Ordinal))
+                {
+                    workingExpression = ternaryNormalizedExpression;
+                    changed = true;
+                }
+
+                if (TryNormalizeUnsupportedPatternMatchingFromErrors(
+                        errors,
+                        workingExpression,
+                        out var patternNormalizedExpression)
+                    && !string.Equals(patternNormalizedExpression, workingExpression, StringComparison.Ordinal))
+                {
+                    workingExpression = patternNormalizedExpression;
                     changed = true;
                 }
 

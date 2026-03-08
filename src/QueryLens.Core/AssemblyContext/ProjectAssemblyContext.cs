@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using System.Text.Json;
 
@@ -14,6 +15,16 @@ namespace QueryLens.Core.AssemblyContext;
 /// </summary>
 public sealed class ProjectAssemblyContext : IDisposable
 {
+    private static readonly string[] s_defaultLoadContextPrefixes =
+    [
+        "Microsoft.Build",
+        "NuGet.",
+        "Microsoft.VisualStudio.",
+        "Microsoft.CodeAnalysis.Workspaces.MSBuild",
+        "Microsoft.TestPlatform",
+        "testhost",
+    ];
+
     // We hold the ALC in a WeakReference so that after Dispose() + GC the ALC
     // can actually be collected. Collectible ALCs are GC-rooted only by the
     // types loaded into them — not by strong CLR handles.
@@ -127,6 +138,10 @@ public sealed class ProjectAssemblyContext : IDisposable
 
         foreach (var dll in Directory.EnumerateFiles(binDir, "*.dll", SearchOption.TopDirectoryOnly))
         {
+            var assemblyName = Path.GetFileNameWithoutExtension(dll);
+            if (ShouldPreferDefaultLoadContext(assemblyName))
+                continue;
+
             try
             {
                 LoadAdditionalAssembly(dll);
@@ -155,7 +170,9 @@ public sealed class ProjectAssemblyContext : IDisposable
         if (!_contextRef.TryGetTarget(out var ctx))
             throw new ObjectDisposedException(nameof(ProjectAssemblyContext));
 
-        return ctx.LoadFromAssemblyPath(Path.GetFullPath(assemblyPath));
+        var fullPath = Path.GetFullPath(assemblyPath);
+        fullPath = ctx.NormalizeAssemblyPathForLoad(fullPath);
+        return ctx.LoadFromAssemblyPath(fullPath);
     }
 
     /// <summary>
@@ -391,6 +408,27 @@ public sealed class ProjectAssemblyContext : IDisposable
     private void EnsureNotDisposed() =>
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+    internal static bool ShouldPreferDefaultLoadContext(string? assemblyName)
+    {
+        if (string.IsNullOrWhiteSpace(assemblyName))
+            return false;
+
+        foreach (var prefix in s_defaultLoadContextPrefixes)
+        {
+            if (assemblyName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    internal static string? TryResolveRuntimeAssemblyPathFromReferencePath(
+        string referenceAssemblyPath,
+        string assemblySimpleName) =>
+        IsolatedLoadContext.TryResolveRuntimeAssemblyPathFromReference(
+            referenceAssemblyPath,
+            assemblySimpleName);
+
     /// <summary>
     /// Walks the base-type chain by FullName to detect DbContext subclasses.
     /// Name-based comparison is required because the DbContext type loaded
@@ -421,6 +459,7 @@ public sealed class ProjectAssemblyContext : IDisposable
     {
         private readonly AssemblyDependencyResolver _resolver;
         private readonly string _assemblyDirectory;
+        private readonly string[] _runtimeRidProbeOrder;
         private readonly string[] _sharedFrameworkProbeDirs;
 
         /// <param name="assemblyPath">
@@ -435,11 +474,29 @@ public sealed class ProjectAssemblyContext : IDisposable
         {
             _resolver = new AssemblyDependencyResolver(assemblyPath);
             _assemblyDirectory = Path.GetDirectoryName(assemblyPath) ?? AppContext.BaseDirectory;
+            _runtimeRidProbeOrder = BuildRuntimeRidProbeOrder();
             _sharedFrameworkProbeDirs = BuildSharedFrameworkProbeDirs(assemblyPath);
         }
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
+            if (ShouldPreferDefaultLoadContext(assemblyName.Name))
+                return null;
+
+            // Prefer runtime binaries copied to the target output directory.
+            // Some resolvers can return package ref-assemblies (e.g. .../ref/netX/...),
+            // which compile but throw PlatformNotSupportedException at runtime.
+            if (!string.IsNullOrWhiteSpace(assemblyName.Name))
+            {
+                var ridRuntimeCandidate = TryResolveRidRuntimeAssemblyPath(assemblyName.Name);
+                if (!string.IsNullOrWhiteSpace(ridRuntimeCandidate))
+                    return LoadFromAssemblyPath(ridRuntimeCandidate);
+
+                var localCandidate = Path.Combine(_assemblyDirectory, assemblyName.Name + ".dll");
+                if (File.Exists(localCandidate))
+                    return LoadFromAssemblyPath(localCandidate);
+            }
+
             // Always try to resolve from the user project's deps.json first.
             // This ensures the user's exact EF Core version (and all provider-specific
             // assemblies like EntityFrameworkCore.Projectables) are loaded from their
@@ -447,18 +504,25 @@ public sealed class ProjectAssemblyContext : IDisposable
             // user's project targets a different EF Core major version than QueryLens.
             var resolved = _resolver.ResolveAssemblyToPath(assemblyName);
             if (resolved is not null)
-                return LoadFromAssemblyPath(resolved);
+            {
+                if (!LooksLikeReferenceAssemblyPath(resolved))
+                    return LoadFromAssemblyPath(resolved);
 
-            // Fallback 1: probe the target assembly's output directory directly.
-            // Some environments do not include every transitive runtime dependency in deps.json.
+                if (!string.IsNullOrWhiteSpace(assemblyName.Name))
+                {
+                    var runtimeCandidate = TryResolveRuntimeAssemblyPathFromReference(
+                        resolved,
+                        assemblyName.Name);
+                    if (!string.IsNullOrWhiteSpace(runtimeCandidate))
+                        return LoadFromAssemblyPath(runtimeCandidate);
+                }
+            }
+
+            // Fallback 1: if resolver returned a ref assembly path, probe shared frameworks.
+            // Fallback 2: probe installed shared frameworks (Microsoft.NETCore.App,
+            // Microsoft.AspNetCore.App, etc.) based on the target runtimeconfig.
             if (!string.IsNullOrWhiteSpace(assemblyName.Name))
             {
-                var localCandidate = Path.Combine(_assemblyDirectory, assemblyName.Name + ".dll");
-                if (File.Exists(localCandidate))
-                    return LoadFromAssemblyPath(localCandidate);
-
-                // Fallback 2: probe installed shared frameworks (Microsoft.NETCore.App,
-                // Microsoft.AspNetCore.App, etc.) based on the target runtimeconfig.
                 foreach (var probeDir in _sharedFrameworkProbeDirs)
                 {
                     var sharedCandidate = Path.Combine(probeDir, assemblyName.Name + ".dll");
@@ -470,6 +534,246 @@ public sealed class ProjectAssemblyContext : IDisposable
             // Fall back to the default ALC for framework / shared assemblies
             // (System.*, netstandard, etc.) not present in the user's bin.
             return null;
+        }
+
+        private static bool LooksLikeReferenceAssemblyPath(string assemblyPath)
+        {
+            if (string.IsNullOrWhiteSpace(assemblyPath))
+                return false;
+
+            var normalized = assemblyPath.Replace('\\', '/');
+            return normalized.Contains("/ref/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static string? TryResolveRuntimeAssemblyPathFromReference(
+            string referenceAssemblyPath,
+            string assemblySimpleName)
+        {
+            if (string.IsNullOrWhiteSpace(referenceAssemblyPath)
+                || string.IsNullOrWhiteSpace(assemblySimpleName))
+            {
+                return null;
+            }
+
+            try
+            {
+                var normalized = referenceAssemblyPath.Replace('\\', '/');
+                var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                var refIndex = Array.FindIndex(parts,
+                    p => string.Equals(p, "ref", StringComparison.OrdinalIgnoreCase));
+
+                if (refIndex <= 0 || refIndex >= parts.Length - 1)
+                    return null;
+
+                var packageRoot = string.Join(Path.DirectorySeparatorChar, parts.Take(refIndex));
+                var tfm = parts[refIndex + 1];
+                var fileName = assemblySimpleName + ".dll";
+
+                var directTfmCandidate = Path.Combine(packageRoot, "lib", tfm, fileName);
+                if (File.Exists(directTfmCandidate))
+                    return directTfmCandidate;
+
+                var libRoot = Path.Combine(packageRoot, "lib");
+                if (!Directory.Exists(libRoot))
+                    return null;
+
+                var candidates = Directory.EnumerateFiles(libRoot, fileName, SearchOption.AllDirectories)
+                    .Where(path => !LooksLikeReferenceAssemblyPath(path))
+                    .OrderByDescending(path => path.Contains(Path.DirectorySeparatorChar + tfm + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                return candidates.Length > 0 ? candidates[0] : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        internal string NormalizeAssemblyPathForLoad(string fullPath)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath))
+                return fullPath;
+
+            try
+            {
+                var candidateDir = Path.GetDirectoryName(fullPath);
+                if (!string.Equals(candidateDir, _assemblyDirectory, StringComparison.OrdinalIgnoreCase))
+                    return fullPath;
+
+                var assemblySimpleName = Path.GetFileNameWithoutExtension(fullPath);
+                if (string.IsNullOrWhiteSpace(assemblySimpleName))
+                    return fullPath;
+
+                var ridRuntimeCandidate = TryResolveRidRuntimeAssemblyPath(assemblySimpleName);
+                if (!string.IsNullOrWhiteSpace(ridRuntimeCandidate))
+                    return ridRuntimeCandidate;
+
+                return fullPath;
+            }
+            catch
+            {
+                return fullPath;
+            }
+        }
+
+        internal string? TryResolveRidRuntimeAssemblyPath(string assemblySimpleName)
+        {
+            if (string.IsNullOrWhiteSpace(assemblySimpleName))
+                return null;
+
+            var runtimesRoot = Path.Combine(_assemblyDirectory, "runtimes");
+            if (!Directory.Exists(runtimesRoot))
+                return null;
+
+            var fileName = assemblySimpleName + ".dll";
+            var candidates = new List<(string Path, int RidScore, int TfmScore)>();
+
+            try
+            {
+                foreach (var path in Directory.EnumerateFiles(runtimesRoot, fileName, SearchOption.AllDirectories))
+                {
+                    var rid = TryExtractRid(path);
+                    if (string.IsNullOrWhiteSpace(rid))
+                        continue;
+
+                    var tfm = TryExtractTfm(path);
+                    candidates.Add((
+                        path,
+                        GetRidScore(rid),
+                        GetTfmScore(tfm)));
+                }
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (candidates.Count == 0)
+                return null;
+
+            return candidates
+                .OrderBy(c => c.RidScore)
+                .ThenByDescending(c => c.TfmScore)
+                .ThenBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(c => c.Path)
+                .FirstOrDefault();
+        }
+
+        private int GetRidScore(string rid)
+        {
+            for (var i = 0; i < _runtimeRidProbeOrder.Length; i++)
+            {
+                if (string.Equals(_runtimeRidProbeOrder[i], rid, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+
+            return int.MaxValue;
+        }
+
+        private static int GetTfmScore(string? tfm)
+        {
+            if (string.IsNullOrWhiteSpace(tfm))
+                return 0;
+
+            if (tfm.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase))
+            {
+                var versionText = tfm["netstandard".Length..];
+                if (Version.TryParse(versionText, out var parsed))
+                    return 1000 + (parsed.Major * 10) + parsed.Minor;
+                return 1000;
+            }
+
+            if (tfm.StartsWith("net", StringComparison.OrdinalIgnoreCase))
+            {
+                var versionText = tfm[3..];
+                if (Version.TryParse(versionText, out var parsed))
+                    return 2000 + (parsed.Major * 10) + parsed.Minor;
+                if (int.TryParse(versionText, out var majorOnly))
+                    return 2000 + (majorOnly * 10);
+                return 2000;
+            }
+
+            return 0;
+        }
+
+        private static string? TryExtractRid(string path)
+        {
+            var normalized = path.Replace('\\', '/');
+            const string marker = "/runtimes/";
+            var markerIndex = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0)
+                return null;
+
+            var start = markerIndex + marker.Length;
+            var end = normalized.IndexOf('/', start);
+            if (end <= start)
+                return null;
+
+            return normalized[start..end];
+        }
+
+        private static string? TryExtractTfm(string path)
+        {
+            var normalized = path.Replace('\\', '/');
+            const string marker = "/lib/";
+            var markerIndex = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex < 0)
+                return null;
+
+            var start = markerIndex + marker.Length;
+            var end = normalized.IndexOf('/', start);
+            if (end <= start)
+                return null;
+
+            return normalized[start..end];
+        }
+
+        private static string[] BuildRuntimeRidProbeOrder()
+        {
+            var rids = new List<string>();
+
+            if (OperatingSystem.IsWindows())
+            {
+                AddArchRid(rids, "win");
+                rids.Add("win");
+            }
+            else if (OperatingSystem.IsLinux())
+            {
+                AddArchRid(rids, "linux");
+                rids.Add("linux");
+                rids.Add("unix");
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                AddArchRid(rids, "osx");
+                rids.Add("osx");
+                rids.Add("unix");
+            }
+            else
+            {
+                rids.Add("unix");
+            }
+
+            return rids
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        private static void AddArchRid(ICollection<string> rids, string baseRid)
+        {
+            var archRid = RuntimeInformation.ProcessArchitecture switch
+            {
+                Architecture.X64 => baseRid + "-x64",
+                Architecture.X86 => baseRid + "-x86",
+                Architecture.Arm64 => baseRid + "-arm64",
+                Architecture.Arm => baseRid + "-arm",
+                _ => null,
+            };
+
+            if (!string.IsNullOrWhiteSpace(archRid))
+                rids.Add(archRid);
         }
 
         protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
