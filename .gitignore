@@ -68,6 +68,8 @@ local.settings.json
 build_errors.txt
 test_fail.txt
 test_output.txt
+test_full.txt
+test_results_new.txt
 test.cs
 Program.cs
 QueryLens.csproj
