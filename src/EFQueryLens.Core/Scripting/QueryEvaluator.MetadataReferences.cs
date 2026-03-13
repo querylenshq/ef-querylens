@@ -10,10 +10,11 @@ public sealed partial class QueryEvaluator
 {
     private MetadataReference[] GetOrBuildMetadataRefs(
         ProjectAssemblyContext alcCtx,
-        IReadOnlyList<Assembly> compilationAssemblies)
+        List<Assembly> compilationAssemblies)
     {
-        var setHash = ComputeAssemblySetHash(compilationAssemblies.ToArray());
-        if (_refCache.TryGetValue(alcCtx.AssemblyPath, out var entry)
+        var cacheKey = Path.GetFullPath(alcCtx.AssemblyPath);
+        var setHash = ComputeAssemblySetHash(compilationAssemblies.ToList());
+        if (_refCache.TryGetValue(cacheKey, out var entry)
             && entry.AssemblyTimestamp == alcCtx.AssemblyTimestamp
             && entry.AssemblySetHash == setHash)
         {
@@ -21,7 +22,7 @@ public sealed partial class QueryEvaluator
         }
 
         var refs = CollectMetadataReferences(compilationAssemblies).ToArray();
-        _refCache[alcCtx.AssemblyPath] = new MetadataRefEntry(alcCtx.AssemblyTimestamp, setHash, refs);
+        _refCache[cacheKey] = new MetadataRefEntry(alcCtx.AssemblyTimestamp, setHash, refs);
         return refs;
     }
 
@@ -52,7 +53,7 @@ public sealed partial class QueryEvaluator
                 // System.Linq.Expressions to avoid mixed framework reference graphs.
                 if (string.Equals(name, "System.Linq.Queryable", StringComparison.Ordinal)
                     && preferredExpressionsMajor.HasValue
-                    && asm.GetName().Version?.Major is int qMajor
+                    && asm.GetName().Version?.Major is { } qMajor
                     && qMajor != preferredExpressionsMajor.Value)
                 {
                     continue;
@@ -83,7 +84,7 @@ public sealed partial class QueryEvaluator
         return refs;
     }
 
-    private static string ComputeAssemblySetHash(Assembly[] assemblies)
+    private static string ComputeAssemblySetHash(List<Assembly> assemblies)
     {
         var sb = new StringBuilder();
         foreach (var p in assemblies.Select(a => a.Location)

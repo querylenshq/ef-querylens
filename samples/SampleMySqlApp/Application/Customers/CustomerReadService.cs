@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Linq.Expressions;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using SampleMySqlApp.Application.Abstractions;
 using SampleMySqlApp.Domain.Entities;
@@ -47,7 +52,13 @@ public sealed class CustomerReadService
         var page = Math.Max(request.Page, 1);
         var pageSize = Math.Clamp(request.PageSize, 1, 200);
 
-        var query = _dbContext.Customers
+
+        var q = page > 1 ?
+            (await _dbContext.Customers.FirstAsync())
+                : (await  _dbContext.Customers.Where(w => w.IsActive).FirstAsync());
+
+
+    var query = _dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .AsQueryable();
 
@@ -176,7 +187,6 @@ public sealed class CustomerReadService
             var customerId = request.CustomerId.Value;
             baseQuery = baseQuery.Where(o => o.Customer.CustomerId == customerId);
         }
-
         if (request.Status is not null)
         {
             var status = request.Status.Value;

@@ -358,12 +358,12 @@ public sealed partial class QueryEvaluator
 
     private static CSharpCompilation BuildCompilation(string source, MetadataReference[] refs)
     {
-        var tree = CSharpSyntaxTree.ParseText(source, s_parseOptions);
+        var tree = CSharpSyntaxTree.ParseText(source, SParseOptions);
         return CSharpCompilation.Create(
             $"__QueryLensEval_{Guid.NewGuid():N}",
             syntaxTrees: [tree],
             references: refs,
-            options: s_compilationOptions);
+            options: SCompilationOptions);
     }
 }
 

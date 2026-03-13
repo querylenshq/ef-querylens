@@ -40,7 +40,7 @@ public sealed partial class QueryEvaluator
         }
     }
 
-    private static IReadOnlyList<Assembly> BuildCompilationAssemblySet(ProjectAssemblyContext alcCtx)
+    private static List<Assembly> BuildCompilationAssemblySet(ProjectAssemblyContext alcCtx)
     {
         var userAssemblies = alcCtx.LoadedAssemblies.ToList();
         var userNames = userAssemblies
@@ -49,14 +49,13 @@ public sealed partial class QueryEvaluator
             .ToHashSet(StringComparer.Ordinal);
 
         var merged = new List<Assembly>(userAssemblies);
-        foreach (var asm in AssemblyLoadContext.Default.Assemblies)
-        {
-            var name = asm.GetName().Name;
-            if (!string.IsNullOrWhiteSpace(name) && userNames.Contains(name))
-                continue;
-
-            merged.Add(asm);
-        }
+        merged.AddRange(
+            from asm in
+                AssemblyLoadContext.Default.Assemblies
+            let name = asm.GetName().Name
+            where string.IsNullOrWhiteSpace(name) || !userNames.Contains(name)
+            select asm
+        );
 
         return merged;
     }

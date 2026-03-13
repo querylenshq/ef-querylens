@@ -133,11 +133,12 @@ public class LspSyntaxHelperTests
 
         var (isActiveLine, _) = FindPosition(source, "query = query.Where(c => c.IsActive == isActive);");
         var (createdAfterLine, _) = FindPosition(source, "query = query.Where(c => c.CreatedUtc >= createdAfter);");
-        var (returnQueryLine, _) = FindPosition(source, "var items = query");
+        // Line is the hover anchor (start of query); this chain should anchor on "var items = query".
+        var (returnQueryStartLine, _) = FindPosition(source, "var items = query");
 
         Assert.Contains(chains, c => c.Line == isActiveLine);
         Assert.Contains(chains, c => c.Line == createdAfterLine);
-        Assert.Contains(chains, c => c.Line == returnQueryLine);
+        Assert.Contains(chains, c => c.Line == returnQueryStartLine);
     }
 
     [Fact]

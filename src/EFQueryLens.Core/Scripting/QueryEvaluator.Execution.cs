@@ -11,15 +11,17 @@ public sealed partial class QueryEvaluator
             return (null, "Generated runner returned null payload.", null, []);
 
         var payloadType = payload.GetType();
-        var queryable = payloadType.GetProperty("Queryable", BindingFlags.Public | BindingFlags.Instance)
-            ?.GetValue(payload);
-        var captureSkipReason = payloadType.GetProperty("CaptureSkipReason", BindingFlags.Public | BindingFlags.Instance)
-            ?.GetValue(payload) as string;
-        var captureError = payloadType.GetProperty("CaptureError", BindingFlags.Public | BindingFlags.Instance)
-            ?.GetValue(payload) as string;
 
-        var commandsObj = payloadType.GetProperty("Commands", BindingFlags.Public | BindingFlags.Instance)
-            ?.GetValue(payload) as System.Collections.IEnumerable;
+        // Validate structure upfront to fail fast on runner/parser version mismatches.
+        var commandsProp = ValidatePayloadStructure(payloadType);
+        var queryable = payloadType.GetProperty("Queryable", BindingFlags.Public | BindingFlags.Instance)!
+            .GetValue(payload);
+        var captureSkipReason = payloadType.GetProperty("CaptureSkipReason", BindingFlags.Public | BindingFlags.Instance)!
+            .GetValue(payload) as string;
+        var captureError = payloadType.GetProperty("CaptureError", BindingFlags.Public | BindingFlags.Instance)!
+            .GetValue(payload) as string;
+
+        var commandsObj = commandsProp.GetValue(payload) as System.Collections.IEnumerable;
 
         var commands = new List<QuerySqlCommand>();
         if (commandsObj is null)
@@ -108,4 +110,43 @@ public sealed partial class QueryEvaluator
 
         return null;
     }
+
+    /// <summary>
+    /// Validates that the payload has the expected structure.
+    /// Throws InvalidOperationException if structure mismatch is detected.
+    /// </summary>
+    private static PropertyInfo ValidatePayloadStructure(Type payloadType)
+    {
+        var expectedProperties = new[] { "Queryable", "CaptureSkipReason", "CaptureError", "Commands" };
+        var actualProperties = payloadType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(p => p.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var expected in expectedProperties)
+        {
+            if (!actualProperties.Contains(expected))
+            {
+                throw new InvalidOperationException(
+                    $"Payload structure mismatch: missing property '{expected}'. " +
+                    $"Actual: {string.Join(", ", actualProperties)}. " +
+                    "This may indicate a version conflict between the script runner and parser.");
+            }
+        }
+
+        // Ensure Commands exists and is enumerable.
+        var commandsProp = payloadType.GetProperty("Commands", BindingFlags.Public | BindingFlags.Instance);
+        if (commandsProp is null)
+        {
+            throw new InvalidOperationException("Payload structure mismatch: missing property 'Commands'.");
+        }
+
+        if (!typeof(System.Collections.IEnumerable).IsAssignableFrom(commandsProp.PropertyType))
+        {
+            throw new InvalidOperationException(
+                $"Payload structure mismatch: property 'Commands' must be enumerable but was '{commandsProp.PropertyType.FullName}'.");
+        }
+
+        return commandsProp;
+    }
 }
+

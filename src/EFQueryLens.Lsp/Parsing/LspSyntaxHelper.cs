@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -16,8 +17,19 @@ public sealed record LinqChainInfo(
     string Expression,
     string ContextVariableName,
     string DbSetMemberName,
+    /// <summary>Line/character of the hover anchor (end of query) for opening doc / LSP hover.</summary>
     int Line,
-    int Character);
+    int Character,
+    int EndLine,
+    int EndCharacter,
+    /// <summary>Line/character where the CodeLens badge is drawn (above the statement).</summary>
+    int BadgeLine,
+    int BadgeCharacter,
+    /// <summary>Full statement span: hover doc is shown when caret is anywhere in this range.</summary>
+    int StatementStartLine,
+    int StatementStartCharacter,
+    int StatementEndLine,
+    int StatementEndCharacter);
 
 public static class LspSyntaxHelper
 {
@@ -65,6 +77,21 @@ public static class LspSyntaxHelper
         "Where", "Select", "SelectMany", "Join", "GroupBy", "OrderBy", "OrderByDescending",
         "ThenBy", "ThenByDescending", "Skip", "Take", "Distinct", "Include", "ThenInclude",
         "AsNoTracking", "AsTracking", "AsSplitQuery", "AsSingleQuery", "Expressionify"
+    };
+
+    // Methods that only exist in EF Core — not in System.Linq for in-memory collections.
+    // A chain with any of these is definitely an EF query even if the root variable
+    // doesn't have a recognisable DbContext name (e.g. a repo wrapper or injected IQueryable).
+    private static readonly HashSet<string> EfSpecificMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Include", "ThenInclude",
+        "AsNoTracking", "AsNoTrackingWithIdentityResolution", "AsTracking",
+        "AsSplitQuery", "AsSingleQuery",
+        "TagWith", "TagWithCallSite",
+        "IgnoreQueryFilters", "IgnoreAutoIncludes",
+        "FromSqlRaw", "FromSqlInterpolated", "FromSql",
+        "ExecuteUpdate", "ExecuteUpdateAsync", "ExecuteDelete", "ExecuteDeleteAsync",
+        "Load", "LoadAsync",
     };
 
     public static string? TryExtractLinqExpression(string sourceText, int line, int character,
@@ -276,7 +303,11 @@ public static class LspSyntaxHelper
         var root = tree.GetRoot();
 
         var results = new List<LinqChainInfo>();
-        var seenSpans = new HashSet<string>(StringComparer.Ordinal);
+        // Deduplicate by containing statement: for each statement, keep only the
+        // single largest outermost invocation chain. This prevents one big fluent
+        // chain (Include→ThenInclude→Include→ThenInclude...) from producing multiple
+        // badges because each ThenInclude subtree resolves to a different "outermost".
+        var bestPerStatement = new Dictionary<int, (InvocationExpressionSyntax Invocation, int Span)>(capacity: 32);
 
         foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
@@ -293,23 +324,29 @@ public static class LspSyntaxHelper
                 continue;
             }
 
-            var outermostSpan = outermostInvocation.Span;
-            var outermostSpanKey = $"{outermostSpan.Start}:{outermostSpan.Length}";
-            if (!seenSpans.Add(outermostSpanKey))
+            // Key by the start position of the containing statement so we get one
+            // chain per statement, keeping the one with the largest span.
+            var containingStmt = outermostInvocation.Ancestors()
+                .FirstOrDefault(a => a is StatementSyntax) as StatementSyntax;
+            var stmtKey = containingStmt?.Span.Start ?? outermostInvocation.Span.Start;
+            var invocationSpan = outermostInvocation.Span.Length;
+
+            if (bestPerStatement.TryGetValue(stmtKey, out var existing))
             {
-                continue;
+                if (invocationSpan <= existing.Span)
+                    continue;
             }
+            bestPerStatement[stmtKey] = (outermostInvocation, invocationSpan);
+        }
+
+        foreach (var (_, (outermostInvocation, _)) in bestPerStatement)
+        {
 
             var targetExpression = StripTerminalInvocation(outermostInvocation) ?? outermostInvocation;
             if (targetExpression is null)
             {
                 continue;
             }
-
-            // Preserve the display anchor from source text before inlining local
-            // query variables. Inlining rewrites spans to declaration expressions,
-            // which can collapse multiple lenses onto the same line.
-            var displaySpan = targetExpression.Span;
 
             targetExpression = TryInlineLocalQueryRoot(targetExpression, outermostInvocation);
             targetExpression = StripTransparentQueryableCasts(targetExpression);
@@ -322,22 +359,79 @@ public static class LspSyntaxHelper
 
             if (string.IsNullOrWhiteSpace(contextVariableName))
             {
+                contextVariableName = TryExtractRootContextVariable(outermostInvocation)
+                    ?? outermostInvocation.DescendantNodes()
+                        .OfType<IdentifierNameSyntax>()
+                        .Select(i => i.Identifier.Text)
+                        .FirstOrDefault();
+            }
+
+            if (string.IsNullOrWhiteSpace(contextVariableName))
+            {
+                continue;
+            }
+
+            // Reject in-memory LINQ on plain objects (e.g. someDto.Items.Select(...).ToList()).
+            // Keep only chains that are clearly EF: rooted at a recognisable DbContext variable
+            // OR that use at least one EF-Core-specific method (Include, AsNoTracking, etc.).
+            var hasEfSpecificMethod = GetInvocationChainMethodNames(outermostInvocation)
+                .Any(m => EfSpecificMethods.Contains(m));
+            if (!LooksLikeDbContextRoot(contextVariableName) && !hasEfSpecificMethod)
+            {
                 continue;
             }
 
             if (!TryExtractFirstMemberAfterRoot(targetExpression, out var dbSetMemberName)
                 || string.IsNullOrWhiteSpace(dbSetMemberName))
             {
-                continue;
+                if (!TryExtractFirstMemberAfterRoot(outermostInvocation, out dbSetMemberName)
+                    || string.IsNullOrWhiteSpace(dbSetMemberName))
+                {
+                    // Keep anchor discovery resilient for terminal/complex chains even
+                    // when DbSet member extraction is inconclusive.
+                    dbSetMemberName = contextVariableName;
+                }
             }
 
-            var start = tree.GetLineSpan(displaySpan).StartLinePosition;
+            // Use the first token of the invocation chain as the anchor so preview navigation
+            // lands near the LINQ root instead of the trailing ")" in long fluent chains.
+            var expressionText = targetExpression.ToString();
+            if (string.IsNullOrWhiteSpace(expressionText))
+            {
+                expressionText = outermostInvocation.ToString();
+            }
+
+            var firstToken = outermostInvocation.GetFirstToken();
+            var anchorLineSpan = tree.GetLineSpan(firstToken.Span);
+            var anchorStart = anchorLineSpan.StartLinePosition;
+            var anchorEnd = anchorLineSpan.EndLinePosition;
+
+            // Containing statement: for badge (line above) and for hover binding (full statement span).
+            var containingStatement = outermostInvocation.Ancestors().FirstOrDefault(a => a is StatementSyntax) as StatementSyntax;
+            var statementSpan = containingStatement != null ? tree.GetLineSpan(containingStatement.Span) : anchorLineSpan;
+            var statementStart = statementSpan.StartLinePosition;
+            var statementEnd = statementSpan.EndLinePosition;
+            var statementFirstLine = statementStart.Line;
+
+            // Badge at statementFirstLine: VS Code CodeLens appears *above* the line it is placed on,
+            // so placing it at the first line of the statement puts it visually on top of that line.
+            var badgeLine = statementFirstLine;
+            var badgeCharacter = 0;
+
             results.Add(new LinqChainInfo(
-                targetExpression.ToString(),
+                expressionText,
                 contextVariableName,
                 dbSetMemberName,
-                start.Line,
-                start.Character));
+                anchorStart.Line,
+                anchorStart.Character,
+                anchorEnd.Line,
+                anchorEnd.Character,
+                badgeLine,
+                badgeCharacter,
+                statementStart.Line,
+                statementStart.Character,
+                statementEnd.Line,
+                statementEnd.Character));
         }
 
         return results
@@ -399,6 +493,61 @@ public static class LspSyntaxHelper
             a is SimpleLambdaExpressionSyntax
                 or ParenthesizedLambdaExpressionSyntax
                 or AnonymousMethodExpressionSyntax);
+    }
+
+    /// <summary>
+    /// Gets the anchor span by finding the token that introduces the "value" this expression fills:
+    /// e.g. ReturnStatement → token before return value; EqualsValueClause → before initializer value; Assignment → before RHS.
+    /// No hardcoded keywords: we walk the tree and use the introducer token from the syntax node that has our expression as its value.
+    /// </summary>
+    private static bool TryGetStatementAnchorSpan(
+        SyntaxTree tree,
+        SyntaxNode expression,
+        out LinePosition start,
+        out LinePosition end)
+    {
+        start = default;
+        end = default;
+        var anchorToken = TryGetValueIntroducerToken(expression);
+        if (anchorToken.RawKind == 0)
+        {
+            return false;
+        }
+
+        var anchorLineSpan = tree.GetLineSpan(anchorToken.Span);
+        start = anchorLineSpan.StartLinePosition;
+        end = anchorLineSpan.EndLinePosition;
+        return true;
+    }
+
+    /// <summary>
+    /// Finds the token that syntactically introduces the "value" slot containing this expression.
+    /// Walks ancestors and uses the node's introducer (ReturnKeyword, EqualsToken, OperatorToken) when our expression is that value.
+    /// </summary>
+    private static SyntaxToken TryGetValueIntroducerToken(SyntaxNode expression)
+    {
+        foreach (var ancestor in expression.Ancestors())
+        {
+            if (ancestor is ReturnStatementSyntax returnStmt && returnStmt.Expression?.FullSpan.Contains(expression.Span.Start) == true)
+            {
+                return returnStmt.ReturnKeyword;
+            }
+            if (ancestor is EqualsValueClauseSyntax equalsValue && equalsValue.Value.FullSpan.Contains(expression.Span.Start))
+            {
+                return equalsValue.EqualsToken;
+            }
+            if (ancestor is AssignmentExpressionSyntax assign && assign.Right.FullSpan.Contains(expression.Span.Start))
+            {
+                return assign.OperatorToken;
+            }
+            if (ancestor is StatementSyntax)
+            {
+                break;
+            }
+        }
+
+        var statement = expression.Ancestors().FirstOrDefault(a => a is StatementSyntax) as StatementSyntax;
+        return statement?.GetFirstToken() ?? default;
     }
 
     private static InvocationExpressionSyntax GetOutermostInvocationChain(InvocationExpressionSyntax invocation)

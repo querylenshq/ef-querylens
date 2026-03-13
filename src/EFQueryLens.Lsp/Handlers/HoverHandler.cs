@@ -1,601 +1,606 @@
-using System.Text.RegularExpressions;
-using System.Text.Json;
-using System.Text;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Document;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server;
-using EFQueryLens.Core;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using Microsoft.VisualStudio.LanguageServer.Protocol;
 using EFQueryLens.Lsp.Parsing;
+using EFQueryLens.Lsp.Services;
 
 namespace EFQueryLens.Lsp.Handlers;
 
-internal enum InlineMode { Direct, Optimistic, Conservative }
-
-internal sealed class HoverHandler : HoverHandlerBase
+internal sealed class HoverHandler
 {
-    private readonly IQueryLensEngine _engine;
-    private readonly DocumentManager _documentManager;
-
-    public HoverHandler(ILanguageServerFacade server, IQueryLensEngine engine, DocumentManager documentManager)
+    private sealed record MarkedStringOrString(string? First, MarkedString? Second)
     {
-        _engine = engine;
-        _documentManager = documentManager;
+        public static implicit operator SumType<string, MarkedString>(MarkedStringOrString value) =>
+            value.Second is not null
+                ? new SumType<string, MarkedString>(value.Second)
+                : new SumType<string, MarkedString>(value.First ?? string.Empty);
     }
 
-    public override async Task<Hover?> Handle(HoverParams request, CancellationToken cancellationToken)
+    private readonly DocumentManager _documentManager;
+    private readonly HoverPreviewService _hoverPreviewService;
+    private readonly ConcurrentDictionary<string, CachedHoverResult> _hoverCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedHoverResult> _semanticHoverCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<Task<Hover?>>> _inflightSemanticHover = new(StringComparer.OrdinalIgnoreCase);
+    private readonly int _hoverCacheTtlMs;
+    private readonly int _hoverCancellationGraceMs;
+    private readonly bool _debugEnabled;
+
+    public HoverHandler(DocumentManager documentManager, HoverPreviewService hoverPreviewService)
     {
-        // 1. Get the document path and live text
-        var filePath = request.TextDocument.Uri.GetFileSystemPath();
+        _documentManager = documentManager;
+        _hoverPreviewService = hoverPreviewService;
+        _hoverCacheTtlMs = ReadIntEnvironmentVariable(
+            "QUERYLENS_HOVER_CACHE_TTL_MS",
+            fallback: 15_000,
+            min: 0,
+            max: 120_000);
+        _hoverCancellationGraceMs = ReadIntEnvironmentVariable(
+            "QUERYLENS_HOVER_CANCEL_GRACE_MS",
+            fallback: 350,
+            min: 0,
+            max: 5_000);
+        _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+    }
 
-        var sourceText = _documentManager.GetDocumentText(request.TextDocument.Uri);
-        if (sourceText == null) return null;
+    public async Task<Hover?> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
+    {
+        var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
+        var documentUri = request.TextDocument.Uri.ToString();
+        var sourceText = await GetSourceTextAsync(documentUri, filePath, cancellationToken);
+        if (string.IsNullOrWhiteSpace(sourceText))
+        {
+            return null;
+        }
 
-        // 2. Parse the text dynamically and find the LINQ expression under the cursor
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+        LogHoverDebug($"hover-request path={filePath} line={request.Position.Line} char={request.Position.Character}");
+        var hasSemanticContext = TryResolveSemanticHoverContext(
             sourceText,
             request.Position.Line,
             request.Position.Character,
-            out var contextVariableName);
+            out var semanticContext);
 
-        if (expression == null || contextVariableName == null)
+        var effectiveLine = hasSemanticContext ? semanticContext!.EffectiveLine : request.Position.Line;
+        var effectiveCharacter = hasSemanticContext ? semanticContext!.EffectiveCharacter : request.Position.Character;
+
+        if (effectiveLine != request.Position.Line || effectiveCharacter != request.Position.Character)
         {
-            // The user isn't hovering over a valid queryable member access chain
-            return null;
+            LogHoverDebug(
+                $"hover-normalized from line={request.Position.Line} char={request.Position.Character} " +
+                $"to line={effectiveLine} char={effectiveCharacter}");
         }
 
-        var originalExpression = expression;
-        string? conservativeExpression = null;
-        string? conservativeContextVariableName = null;
-        var inlineMode = InlineMode.Direct;
-        var topLevelInliningSucceeded = false;
-        var optimisticInlineDiagnostics = new MethodQueryInliner.InlineSelectorDiagnostics();
-        var conservativeInlineDiagnostics = new MethodQueryInliner.InlineSelectorDiagnostics();
-        var inlineContainsNestedSelectorMaterialization = false;
-
-        var usingImports = new HashSet<string>(StringComparer.Ordinal);
-        var usingAliases = new Dictionary<string, string>(StringComparer.Ordinal);
-        var usingStaticTypes = new HashSet<string>(StringComparer.Ordinal);
-
-        MergeUsingContext(
-            LspSyntaxHelper.ExtractUsingContext(sourceText),
-            usingImports,
-            usingAliases,
-            usingStaticTypes,
-            aliasPriority: AliasMergePriority.PreferExisting);
-
-        string? selectedInlinedSourcePath = null;
-
-        if (MethodQueryInliner.TryInlineTopLevelInvocation(
-                sourceText,
-                filePath,
-                expression,
-                substituteSelectorArguments: true,
-                out var inlinedExpression,
-                out var inlinedContextVariable,
-                out var optimisticSourcePath,
-                out optimisticInlineDiagnostics,
-                out _))
-        {
-            topLevelInliningSucceeded = true;
-            expression = inlinedExpression;
-            inlineMode = InlineMode.Optimistic;
-            inlineContainsNestedSelectorMaterialization =
-                optimisticInlineDiagnostics.ContainsNestedSelectorMaterialization;
-            selectedInlinedSourcePath = optimisticSourcePath;
-            if (!string.IsNullOrWhiteSpace(inlinedContextVariable))
-            {
-                contextVariableName = inlinedContextVariable;
-            }
-
-            if (MethodQueryInliner.TryInlineTopLevelInvocation(
-                    sourceText,
-                    filePath,
-                    originalExpression,
-                    substituteSelectorArguments: false,
-                    out var conservativeInlinedExpression,
-                    out var conservativeInlinedContextVariable,
-                    out var conservativeSourcePath,
-                    out conservativeInlineDiagnostics,
-                    out _)
-                && !string.Equals(conservativeInlinedExpression, expression, StringComparison.Ordinal))
-            {
-                conservativeExpression = conservativeInlinedExpression;
-                conservativeContextVariableName = conservativeInlinedContextVariable;
-                if (string.IsNullOrWhiteSpace(selectedInlinedSourcePath))
-                {
-                    selectedInlinedSourcePath = conservativeSourcePath;
-                }
-            }
-        }
-        else if (MethodQueryInliner.TryInlineTopLevelInvocation(
-                     sourceText,
-                     filePath,
-                     expression,
-                     substituteSelectorArguments: false,
-                     out var conservativeOnlyInlinedExpression,
-                     out var conservativeOnlyInlinedContextVariable,
-                     out var conservativeOnlySourcePath,
-                     out conservativeInlineDiagnostics,
-                     out _))
-        {
-            expression = conservativeOnlyInlinedExpression;
-            inlineMode = InlineMode.Conservative;
-            inlineContainsNestedSelectorMaterialization =
-                conservativeInlineDiagnostics.ContainsNestedSelectorMaterialization;
-            selectedInlinedSourcePath = conservativeOnlySourcePath;
-            if (!string.IsNullOrWhiteSpace(conservativeOnlyInlinedContextVariable))
-            {
-                contextVariableName = conservativeOnlyInlinedContextVariable;
-            }
-        }
-
-        // Suppress QueryLens hover output for non-query expressions.
-        // Top-level service calls that can be inlined are still supported because
-        // the inlined expression is checked here.
-        if (!topLevelInliningSucceeded
-            && !LspSyntaxHelper.IsLikelyDbContextRootIdentifier(contextVariableName))
-        {
-            return null;
-        }
-
-        if (!LspSyntaxHelper.IsLikelyQueryPreviewCandidate(expression))
-        {
-            return null;
-        }
-
-        TryMergeUsingContextFromFile(
-            selectedInlinedSourcePath,
+        var cacheKey = BuildHoverCacheKey(
             filePath,
-            usingImports,
-            usingAliases,
-            usingStaticTypes);
-
-        var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
-
-        // Debug fallback
-        if (!string.IsNullOrEmpty(targetAssembly) && targetAssembly.StartsWith("DEBUG_FAIL"))
+            sourceText,
+            request.Position.Line,
+            request.Position.Character,
+            semanticContext);
+        if (TryGetCachedHover(cacheKey, out var cachedHover))
         {
-            return new Hover
-            {
-                Contents = new MarkedStringsOrMarkupContent(new MarkupContent
-                {
-                    Kind = MarkupKind.Markdown,
-                    Value = $"⚠️ *QueryLens AssemblyResolver Failed*\n```text\n{targetAssembly}\n```"
-                })
-            };
+            LogHoverDebug($"hover-cache-hit line={effectiveLine} char={effectiveCharacter}");
+            return cachedHover;
         }
 
-        // Let's protect against the scenario where the assembly isn't built yet
-        if (string.IsNullOrEmpty(targetAssembly) || !File.Exists(targetAssembly))
+        if (semanticContext is not null && TryGetSemanticCachedHover(semanticContext.SemanticKey, out var semanticCachedHover))
         {
-            return new Hover
-            {
-                Contents = new MarkedStringsOrMarkupContent(new MarkupContent
-                {
-                    Kind = MarkupKind.Markdown,
-                    Value =
-                        $"⚠️ *QueryLens: Target assembly `{Path.GetFileName(targetAssembly)}` not found. Please build the project.*"
-                })
-            };
+            LogHoverDebug($"hover-semantic-cache-hit line={effectiveLine} char={effectiveCharacter}");
+            CacheHover(cacheKey, semanticCachedHover, semanticContext);
+            return semanticCachedHover;
         }
 
-        var targetAssemblyPath = targetAssembly;
+        if (semanticContext is not null)
+        {
+            var inFlightKey = BuildInFlightKey(filePath, semanticContext);
+            var lazyTask = _inflightSemanticHover.GetOrAdd(
+                inFlightKey,
+                _ => new Lazy<Task<Hover?>>(
+                    () => ComputeAndCacheSemanticHoverAsync(
+                        inFlightKey,
+                        cacheKey,
+                        filePath,
+                        sourceText,
+                        semanticContext),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
 
+            if (lazyTask.IsValueCreated)
+            {
+                LogHoverDebug($"hover-inflight-join line={effectiveLine} char={effectiveCharacter}");
+            }
+            else
+            {
+                LogHoverDebug($"hover-inflight-start line={effectiveLine} char={effectiveCharacter}");
+            }
+
+            try
+            {
+                var sharedTask = lazyTask.Value;
+                var sharedResult = await WaitWithCancellationAsync(sharedTask, cancellationToken);
+                CacheHover(cacheKey, sharedResult, semanticContext);
+                return sharedResult;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                var sharedTask = lazyTask.Value;
+                var (completed, salvagedResult) = await TryGetResultWithinGraceAsync(sharedTask, _hoverCancellationGraceMs);
+                if (completed)
+                {
+                    CacheHover(cacheKey, salvagedResult, semanticContext);
+                    LogHoverDebug(
+                        $"hover-cancel-salvaged line={effectiveLine} char={effectiveCharacter} " +
+                        $"graceMs={_hoverCancellationGraceMs}");
+                    return salvagedResult;
+                }
+
+                if (TryGetSemanticCachedHover(semanticContext.SemanticKey, out var semanticCachedHoverAfterCancel))
+                {
+                    CacheHover(cacheKey, semanticCachedHoverAfterCancel, semanticContext);
+                    LogHoverDebug($"hover-cancel-cache-hit line={effectiveLine} char={effectiveCharacter}");
+                    return semanticCachedHoverAfterCancel;
+                }
+
+                LogHoverDebug($"hover-canceled line={effectiveLine} char={effectiveCharacter} reason=request-cancelled");
+                return null;
+            }
+        }
+
+        var sw = Stopwatch.StartNew();
+        Hover? computed;
         try
         {
-            async Task<QueryTranslationResult> TranslateAsync(string expr, string? ctxVar)
+            computed = await ComputeHoverAsync(
+                filePath,
+                sourceText,
+                effectiveLine,
+                effectiveCharacter,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            LogHoverDebug($"hover-canceled line={effectiveLine} char={effectiveCharacter}");
+
+            // Rider may cancel fast hover requests before translation completes.
+            // Warm cache asynchronously so the next hover at the same semantic query can return immediately.
+            if (semanticContext is not null)
             {
-                return await _engine.TranslateAsync(new TranslationRequest
+                _ = Task.Run(async () =>
                 {
-                    AssemblyPath = targetAssemblyPath,
-                    Expression = expr,
-                    ContextVariableName = ctxVar ?? "db",
-                    AdditionalImports = usingImports.ToArray(),
-                    UsingAliases = new Dictionary<string, string>(usingAliases, StringComparer.Ordinal),
-                    UsingStaticTypes = usingStaticTypes.ToArray()
-                }, cancellationToken);
-            }
-
-            var translation = await TranslateAsync(expression, contextVariableName);
-
-            if (translation.Success &&
-                inlineMode == InlineMode.Optimistic &&
-                inlineContainsNestedSelectorMaterialization &&
-                !string.IsNullOrWhiteSpace(conservativeExpression) &&
-                !string.Equals(conservativeExpression, expression, StringComparison.Ordinal))
-            {
-                var conservativeHasSelectorPlaceholder =
-                    LooksLikeSelectorPlaceholderQuery(conservativeExpression);
-
-                if (!conservativeHasSelectorPlaceholder)
-                {
-                    var conservativeTranslation = await TranslateAsync(
-                        conservativeExpression,
-                        string.IsNullOrWhiteSpace(conservativeContextVariableName)
-                            ? contextVariableName
-                            : conservativeContextVariableName);
-
-                    if (conservativeTranslation.Success &&
-                        conservativeTranslation.Commands.Count > translation.Commands.Count)
+                    try
                     {
-                        translation = conservativeTranslation;
-                        expression = conservativeExpression;
-                        contextVariableName = conservativeContextVariableName ?? contextVariableName;
-                        inlineMode = InlineMode.Conservative;
-                        inlineContainsNestedSelectorMaterialization =
-                            conservativeInlineDiagnostics.ContainsNestedSelectorMaterialization;
+                        var warmed = await ComputeHoverAsync(
+                            filePath,
+                            sourceText,
+                            semanticContext.EffectiveLine,
+                            semanticContext.EffectiveCharacter,
+                            CancellationToken.None);
+                        CacheHover(cacheKey, warmed, semanticContext);
+                        LogHoverDebug($"hover-warm-cache-ready line={semanticContext.EffectiveLine} char={semanticContext.EffectiveCharacter}");
                     }
-                }
-            }
-
-            if (!translation.Success &&
-                !string.IsNullOrWhiteSpace(conservativeExpression) &&
-                !string.Equals(conservativeExpression, expression, StringComparison.Ordinal))
-            {
-                var conservativeHasSelectorPlaceholder =
-                    LooksLikeSelectorPlaceholderQuery(conservativeExpression);
-
-                var fallbackTranslation = await TranslateAsync(
-                    conservativeExpression,
-                    string.IsNullOrWhiteSpace(conservativeContextVariableName)
-                        ? contextVariableName
-                        : conservativeContextVariableName);
-
-                if (fallbackTranslation.Success && !conservativeHasSelectorPlaceholder)
-                {
-                    translation = fallbackTranslation;
-                    expression = conservativeExpression;
-                    contextVariableName = conservativeContextVariableName ?? contextVariableName;
-                    inlineMode = InlineMode.Conservative;
-                    inlineContainsNestedSelectorMaterialization =
-                        conservativeInlineDiagnostics.ContainsNestedSelectorMaterialization;
-                }
-            }
-
-            if (translation.Success)
-            {
-                if (inlineContainsNestedSelectorMaterialization)
-                {
-                    translation = AppendWarningIfMissing(
-                        translation,
-                        new QueryWarning
-                        {
-                            Severity = WarningSeverity.Warning,
-                            Code = "QL_EXPRESSION_PARTIAL_RISK",
-                            Message = "Expression selector contains nested materialization that may require additional SQL commands.",
-                            Suggestion = "SQL preview is best-effort for this projection shape; child collection commands may be omitted offline.",
-                        });
-                }
-
-                var commands = translation.Commands.Count > 0
-                    ? translation.Commands
-                    : translation.Sql is null
-                        ? []
-                        : [new QuerySqlCommand { Sql = translation.Sql, Parameters = translation.Parameters }];
-
-                if (commands.Count == 0)
-                {
-                    return new Hover
+                    catch (Exception ex)
                     {
-                        Contents = new MarkedStringsOrMarkupContent(new MarkupContent
-                        {
-                            Kind = MarkupKind.Markdown,
-                            Value = "**QueryLens Error**\n```text\nNo SQL was produced for this expression.\n```"
-                        })
-                    };
-                }
-
-                return new Hover
-                {
-                    Contents = new MarkedStringsOrMarkupContent(new MarkupContent
-                    {
-                        Kind = MarkupKind.Markdown,
-                        Value = BuildSqlPreview(
-                            commands,
-                            inlineMode,
-                            translation.Warnings,
-                            request.TextDocument.Uri.ToString(),
-                            request.Position.Line,
-                            request.Position.Character,
-                            originalExpression,
-                            expression)
-                    })
-                };
+                        LogHoverDebug($"hover-warm-cache-failed type={ex.GetType().Name} message={ex.Message}");
+                    }
+                });
             }
 
-            return new Hover
-            {
-                Contents = new MarkedStringsOrMarkupContent(new MarkupContent
-                {
-                    Kind = MarkupKind.Markdown,
-                    Value =
-                        $"**QueryLens Error**\n```text\n{translation.ErrorMessage}\n```\n\n*Assembly: `{targetAssembly}`*\n*Expression: `{expression}`*"
-                })
-            };
+            return null;
+        }
+        sw.Stop();
+
+        LogHoverDebug($"hover-compute-finished line={effectiveLine} char={effectiveCharacter} elapsedMs={sw.ElapsedMilliseconds} hasResult={computed is not null}");
+
+        CacheHover(cacheKey, computed, semanticContext);
+        return computed;
+    }
+
+    private async Task<Hover?> ComputeAndCacheSemanticHoverAsync(
+        string inFlightKey,
+        string cacheKey,
+        string filePath,
+        string sourceText,
+        SemanticHoverContext semanticContext)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var computed = await ComputeHoverAsync(
+                filePath,
+                sourceText,
+                semanticContext.EffectiveLine,
+                semanticContext.EffectiveCharacter,
+                CancellationToken.None);
+            sw.Stop();
+
+            LogHoverDebug(
+                $"hover-compute-finished line={semanticContext.EffectiveLine} char={semanticContext.EffectiveCharacter} " +
+                $"elapsedMs={sw.ElapsedMilliseconds} hasResult={computed is not null}");
+
+            CacheHover(cacheKey, computed, semanticContext);
+            return computed;
         }
         catch (Exception ex)
         {
-            return new Hover
-            {
-                Contents = new MarkedStringsOrMarkupContent(new MarkupContent
-                {
-                    Kind = MarkupKind.Markdown,
-                    Value =
-                        $"**QueryLens Exception**\n```text\n{ex.GetType().Name}: {ex.Message}\n{ex.InnerException?.Message ?? ""}\n```\n\n*Assembly: `{targetAssembly}`*\n*Expression: `{expression}`*"
-                })
-            };
+            sw.Stop();
+            LogHoverDebug(
+                $"hover-compute-failed line={semanticContext.EffectiveLine} char={semanticContext.EffectiveCharacter} " +
+                $"elapsedMs={sw.ElapsedMilliseconds} type={ex.GetType().Name} message={ex.Message}");
+            throw;
+        }
+        finally
+        {
+            _inflightSemanticHover.TryRemove(inFlightKey, out _);
         }
     }
 
-    protected override HoverRegistrationOptions CreateRegistrationOptions(HoverCapability capability,
-        ClientCapabilities clientCapabilities)
+    private async Task<string?> GetSourceTextAsync(string documentUri, string filePath, CancellationToken cancellationToken)
     {
-        return new HoverRegistrationOptions
+        var sourceText = _documentManager.GetDocumentText(documentUri);
+        if (!string.IsNullOrWhiteSpace(sourceText))
         {
-            DocumentSelector = TextDocumentSelector.ForLanguage("csharp")
-        };
+            return sourceText;
+        }
+
+        if (!File.Exists(filePath))
+        {
+            return null;
+        }
+
+        return await File.ReadAllTextAsync(filePath, cancellationToken);
     }
 
-    private static string BuildSqlPreview(
-        IReadOnlyList<QuerySqlCommand> commands,
-        InlineMode mode,
-        IReadOnlyList<QueryWarning> warnings,
-        string documentUri,
+    private async Task<Hover?> ComputeHoverAsync(
+        string filePath,
+        string sourceText,
         int line,
         int character,
-        string sourceExpression,
-        string executedExpression)
+        CancellationToken cancellationToken)
     {
-        var tableNames = ExtractTableNames(commands);
-        var tablesSummary = tableNames.Count > 0 ? " · " + string.Join(", ", tableNames) : "";
-        var modeLabel = mode switch
+        var result = await _hoverPreviewService.BuildMarkdownAsync(
+            filePath,
+            sourceText,
+            line,
+            character,
+            cancellationToken);
+
+        if (!result.Success &&
+            result.Output.StartsWith("Could not extract a LINQ query expression", StringComparison.OrdinalIgnoreCase))
         {
-            InlineMode.Optimistic => "optimistic-inline",
-            InlineMode.Conservative => "conservative-inline",
-            _ => "direct"
-        };
-        var modeDescription = mode switch
+            return null;
+        }
+
+        var markdown = result.Success
+            ? result.Output
+            : $"**QueryLens Error**\n```text\n{result.Output}\n```";
+
+        var content = new MarkupContent
         {
-            InlineMode.Optimistic => "Best-effort inline translation with selector substitution.",
-            InlineMode.Conservative => "Safer inline translation without selector substitution.",
-            _ => "Direct translation of the hovered query chain."
+            Kind = MarkupKind.Markdown,
+            Value = markdown,
         };
 
-        string sqlBlock;
-        if (commands.Count == 1)
+        return new Hover
         {
-            sqlBlock = commands[0].Sql;
+            Contents = new SumType<SumType<string, MarkedString>, SumType<string, MarkedString>[], MarkupContent>(content),
+        };
+    }
+
+    private string BuildHoverCacheKey(
+        string filePath,
+        string sourceText,
+        int requestLine,
+        int requestCharacter,
+        SemanticHoverContext? semanticContext)
+    {
+        var sourceHash = StringComparer.Ordinal.GetHashCode(sourceText);
+
+        if (semanticContext is not null)
+        {
+            return $"{Path.GetFullPath(filePath)}|semantic|{semanticContext.SemanticKey}|{semanticContext.EffectiveLine}|{semanticContext.EffectiveCharacter}|{sourceHash}";
         }
-        else
+
+        return $"{Path.GetFullPath(filePath)}|cursor|{requestLine}|{requestCharacter}|{sourceHash}";
+    }
+
+    private static bool TryResolveSemanticHoverContext(
+        string sourceText,
+        int line,
+        int character,
+        out SemanticHoverContext? semanticContext)
+    {
+        semanticContext = null;
+
+        if (TryFindContainingChain(sourceText, line, character, out var containingChain))
         {
-            var parts = new string[commands.Count];
-            for (var i = 0; i < commands.Count; i++)
+            semanticContext = new SemanticHoverContext(
+                SemanticKey: $"{containingChain.ContextVariableName.Trim()}|{NormalizeWhitespace(containingChain.Expression)}",
+                EffectiveLine: containingChain.Line,
+                EffectiveCharacter: containingChain.Character);
+            return true;
+        }
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName);
+        if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
+        {
+            var fallback = LspSyntaxHelper.FindAllLinqChains(sourceText)
+                .OrderBy(chain => Math.Abs(chain.Line - line))
+                .ThenBy(chain => Math.Abs(chain.Character - character))
+                .FirstOrDefault();
+
+            if (fallback is not null)
             {
-                var role = InferSplitQueryRole(commands[i].Sql, i, commands.Count);
-                parts[i] = $"-- ===== Split Query {i + 1} of {commands.Count} ({role}) =====\n{commands[i].Sql}";
+                expression = fallback.Expression;
+                contextVariableName = fallback.ContextVariableName;
+                line = fallback.Line;
+                character = fallback.Character;
             }
-            sqlBlock = string.Join("\n\n", parts);
         }
 
-        var statementWord = commands.Count == 1 ? "query" : "queries";
-
-        var warningNotes = warnings
-            .Select(w => string.IsNullOrWhiteSpace(w.Suggestion)
-                ? $"{w.Code}: {w.Message}"
-                : $"{w.Code}: {w.Message} ({w.Suggestion})")
-            .ToList();
-
-        var warningLines = warningNotes
-            .Select(note => $"- {note}")
-            .ToList();
-
-        var usedToQueryStringFallback = warnings.Any(w =>
-            string.Equals(w.Code, "QL_CAPTURE_FALLBACK", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(w.Code, "QL_CAPTURE_SKIPPED", StringComparison.OrdinalIgnoreCase));
-
-        var containsSplitQueryNotice = commands.Count == 1 &&
-                                       commands[0].Sql.Contains("split-query mode", StringComparison.OrdinalIgnoreCase);
-
-        if (usedToQueryStringFallback && containsSplitQueryNotice)
+        if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
-            var splitQueryPartialNote = "QL_SPLIT_QUERY_PARTIAL: Only the first split-query SQL statement is shown because execution capture was unavailable.";
-            warningNotes.Add(splitQueryPartialNote);
-            warningLines.Add($"- {splitQueryPartialNote}");
+            return false;
         }
 
-        if (warningLines.Count == 0)
+        semanticContext = new SemanticHoverContext(
+            SemanticKey: $"{contextVariableName.Trim()}|{NormalizeWhitespace(expression)}",
+            EffectiveLine: line,
+            EffectiveCharacter: character);
+        return true;
+    }
+
+    private static bool TryFindContainingChain(string sourceText, int line, int character, out LinqChainInfo containingChain)
+    {
+        containingChain = null!;
+
+        foreach (var chain in LspSyntaxHelper.FindAllLinqChains(sourceText))
         {
-            return $"**QueryLens · {commands.Count} {statementWord}**{tablesSummary}\n*LINQ-to-SQL strategy: {modeLabel}* - {modeDescription}\n{BuildHoverActions(documentUri, line, character, sourceExpression, executedExpression, modeLabel, modeDescription, warningNotes)}\n\n```sql\n{sqlBlock}\n```";
+            if (!IsWithinStatementRange(chain, line, character))
+            {
+                continue;
+            }
+
+            containingChain = chain;
+            return true;
         }
 
-        return $"**QueryLens · {commands.Count} {statementWord}**{tablesSummary}\n*LINQ-to-SQL strategy: {modeLabel}* - {modeDescription}\n{BuildHoverActions(documentUri, line, character, sourceExpression, executedExpression, modeLabel, modeDescription, warningNotes)}\n\n```sql\n{sqlBlock}\n```\n\n**Notes**\n{string.Join("\n", warningLines)}";
+        return false;
     }
 
-    private static string BuildHoverActions(
-        string uri,
-        int line,
-        int character,
-        string sourceExpression,
-        string executedExpression,
-        string modeLabel,
-        string modeDescription,
-        IReadOnlyList<string>? warningNotes = null)
+    private static bool IsWithinStatementRange(LinqChainInfo chain, int line, int character)
     {
-        var encodedArgs = Uri.EscapeDataString(JsonSerializer.Serialize(new object[] { uri, line, character }));
-        var copyCommandUri = $"command:efquerylens.copySql?{encodedArgs}";
-        var openEditorCommandUri = $"command:efquerylens.openSqlEditor?{encodedArgs}";
-        var metadataPayload = BuildHoverMetadataPayload(sourceExpression, executedExpression, modeLabel, modeDescription, warningNotes);
-        return $"[Copy SQL]({copyCommandUri}) | [Open SQL Editor]({openEditorCommandUri})\n<!--QUERYLENS_META:{metadataPayload}-->";
-    }
-
-    private static string BuildHoverMetadataPayload(
-        string sourceExpression,
-        string executedExpression,
-        string modeLabel,
-        string modeDescription,
-        IReadOnlyList<string>? warningNotes = null)
-    {
-        var formattedExecutedExpression = FormatLinqExpression(executedExpression);
-        var json = JsonSerializer.Serialize(new HoverActionMetadata(
-            sourceExpression,
-            formattedExecutedExpression,
-            modeLabel,
-            modeDescription,
-            (warningNotes ?? []).ToArray()));
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
-    }
-
-    private static string FormatLinqExpression(string expression)
-    {
-        if (string.IsNullOrWhiteSpace(expression))
+        if (line < chain.StatementStartLine || line > chain.StatementEndLine)
         {
-            return expression;
+            return false;
+        }
+
+        if (chain.StatementStartLine == chain.StatementEndLine)
+        {
+            return character >= chain.StatementStartCharacter && character <= chain.StatementEndCharacter;
+        }
+
+        if (line == chain.StatementStartLine)
+        {
+            return character >= chain.StatementStartCharacter;
+        }
+
+        if (line == chain.StatementEndLine)
+        {
+            return character <= chain.StatementEndCharacter;
+        }
+
+        return true;
+    }
+
+    private static string NormalizeWhitespace(string value)
+    {
+        var buffer = new char[value.Length];
+        var index = 0;
+        var previousWasWhitespace = false;
+
+        foreach (var current in value)
+        {
+            if (char.IsWhiteSpace(current))
+            {
+                if (previousWasWhitespace)
+                {
+                    continue;
+                }
+
+                buffer[index++] = ' ';
+                previousWasWhitespace = true;
+            }
+            else
+            {
+                buffer[index++] = current;
+                previousWasWhitespace = false;
+            }
+        }
+
+        return new string(buffer, 0, index).Trim();
+    }
+
+    private bool TryGetCachedHover(string cacheKey, out Hover? hover)
+    {
+        hover = null;
+
+        if (_hoverCacheTtlMs <= 0)
+        {
+            return false;
+        }
+
+        if (!_hoverCache.TryGetValue(cacheKey, out var cached))
+        {
+            return false;
+        }
+
+        var expiresAtTicks = cached.CreatedAtTicks + TimeSpan.FromMilliseconds(_hoverCacheTtlMs).Ticks;
+        if (expiresAtTicks <= DateTime.UtcNow.Ticks)
+        {
+            _hoverCache.TryRemove(cacheKey, out _);
+            return false;
+        }
+
+        hover = cached.Hover;
+        return true;
+    }
+
+    private bool TryGetSemanticCachedHover(string semanticKey, out Hover? hover)
+    {
+        hover = null;
+
+        if (_hoverCacheTtlMs <= 0)
+        {
+            return false;
+        }
+
+        if (!_semanticHoverCache.TryGetValue(semanticKey, out var cached))
+        {
+            return false;
+        }
+
+        var expiresAtTicks = cached.CreatedAtTicks + TimeSpan.FromMilliseconds(_hoverCacheTtlMs).Ticks;
+        if (expiresAtTicks <= DateTime.UtcNow.Ticks)
+        {
+            _semanticHoverCache.TryRemove(semanticKey, out _);
+            return false;
+        }
+
+        hover = cached.Hover;
+        return hover is not null;
+    }
+
+    private static async Task<T> WaitWithCancellationAsync<T>(Task<T> task, CancellationToken cancellationToken)
+    {
+        if (!cancellationToken.CanBeCanceled)
+        {
+            return await task;
+        }
+
+        if (task.IsCompleted)
+        {
+            return await task;
+        }
+
+        var cancellationTaskSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = cancellationToken.Register(
+            static state => ((TaskCompletionSource<bool>)state!).TrySetResult(true),
+            cancellationTaskSource);
+
+        var completed = await Task.WhenAny(task, cancellationTaskSource.Task);
+        if (completed != task)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        return await task;
+    }
+
+    private static async Task<(bool Completed, T? Result)> TryGetResultWithinGraceAsync<T>(Task<T> task, int graceMilliseconds)
+    {
+        if (graceMilliseconds <= 0)
+        {
+            return (false, default);
+        }
+
+        if (task.IsCompleted)
+        {
+            try
+            {
+                return (true, await task);
+            }
+            catch
+            {
+                return (false, default);
+            }
+        }
+
+        var completed = await Task.WhenAny(task, Task.Delay(graceMilliseconds));
+        if (completed != task)
+        {
+            return (false, default);
         }
 
         try
         {
-            var root = CSharpSyntaxTree.ParseText(expression).GetRoot();
-            return root.NormalizeWhitespace("    ", "\n", false).ToFullString();
+            return (true, await task);
         }
         catch
         {
-            return expression.Trim();
+            return (false, default);
         }
     }
 
-    private static string InferSplitQueryRole(string sql, int index, int total)
+    private static string BuildInFlightKey(string filePath, SemanticHoverContext semanticContext) =>
+        $"{Path.GetFullPath(filePath)}|{semanticContext.SemanticKey}|{semanticContext.EffectiveLine}|{semanticContext.EffectiveCharacter}";
+
+    private void CacheHover(string cacheKey, Hover? hover, SemanticHoverContext? semanticContext)
     {
-        if (index == 0)
-        {
-            return total > 1 ? "root" : "single";
-        }
-
-        if (sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase))
-        {
-            return "include";
-        }
-
-        if (sql.Contains(" IN (", StringComparison.OrdinalIgnoreCase)
-            || sql.Contains(" EXISTS", StringComparison.OrdinalIgnoreCase))
-        {
-            return "related";
-        }
-
-        return "related";
-    }
-
-    private sealed record HoverActionMetadata(
-        string SourceExpression,
-        string ExecutedExpression,
-        string Mode,
-        string ModeDescription,
-        string[] Warnings);
-
-    private static readonly Regex TableNameRegex =
-        new(@"(?:FROM|JOIN)\s+`([^`]+)`", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex SelectorPlaceholderRegex =
-        new(@"\.Select\s*\(\s*(expression|selector|projection)\s*\)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static IReadOnlyList<string> ExtractTableNames(IReadOnlyList<QuerySqlCommand> commands)
-    {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var ordered = new List<string>();
-        foreach (var cmd in commands)
-        {
-            foreach (Match m in TableNameRegex.Matches(cmd.Sql))
-            {
-                var name = m.Groups[1].Value;
-                if (seen.Add(name)) ordered.Add(name);
-            }
-        }
-        return ordered;
-    }
-
-    private static bool LooksLikeSelectorPlaceholderQuery(string? expression)
-    {
-        if (string.IsNullOrWhiteSpace(expression))
-            return false;
-
-        return SelectorPlaceholderRegex.IsMatch(expression);
-    }
-
-    private static void TryMergeUsingContextFromFile(
-        string? sourceFilePath,
-        string currentFilePath,
-        ISet<string> imports,
-        IDictionary<string, string> aliases,
-        ISet<string> staticTypes)
-    {
-        if (string.IsNullOrWhiteSpace(sourceFilePath) ||
-            string.Equals(sourceFilePath, currentFilePath, StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(sourceFilePath))
+        if (_hoverCacheTtlMs <= 0)
         {
             return;
         }
 
-        try
+        _hoverCache[cacheKey] = new CachedHoverResult(DateTime.UtcNow.Ticks, hover);
+
+        if (semanticContext is not null && hover is not null)
         {
-            var source = File.ReadAllText(sourceFilePath);
-            var context = LspSyntaxHelper.ExtractUsingContext(source);
-            MergeUsingContext(context, imports, aliases, staticTypes, AliasMergePriority.PreferIncoming);
+            _semanticHoverCache[semanticContext.SemanticKey] = new CachedHoverResult(DateTime.UtcNow.Ticks, hover);
         }
-        catch
+
+        if (_hoverCache.Count > 2_000)
         {
-            // Best effort only; hover translation continues without extra using context.
+            _hoverCache.Clear();
+        }
+
+        if (_semanticHoverCache.Count > 2_000)
+        {
+            _semanticHoverCache.Clear();
         }
     }
 
-    private static void MergeUsingContext(
-        SourceUsingContext context,
-        ISet<string> imports,
-        IDictionary<string, string> aliases,
-        ISet<string> staticTypes,
-        AliasMergePriority aliasPriority)
+    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
     {
-        foreach (var import in context.Imports)
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (!int.TryParse(raw, out var value))
         {
-            imports.Add(import);
+            return fallback;
         }
 
-        foreach (var staticType in context.StaticTypes)
+        if (value < min)
         {
-            staticTypes.Add(staticType);
+            return min;
         }
 
-        foreach (var (alias, target) in context.Aliases)
-        {
-            if (aliasPriority == AliasMergePriority.PreferIncoming)
-            {
-                aliases[alias] = target;
-            }
-            else if (!aliases.ContainsKey(alias))
-            {
-                aliases[alias] = target;
-            }
-        }
+        return value > max ? max : value;
     }
 
-    private enum AliasMergePriority
+    private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
     {
-        PreferExisting,
-        PreferIncoming
-    }
-
-    private static QueryTranslationResult AppendWarningIfMissing(
-        QueryTranslationResult translation,
-        QueryWarning warning)
-    {
-        if (translation.Warnings.Any(w => string.Equals(w.Code, warning.Code, StringComparison.OrdinalIgnoreCase)))
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (string.IsNullOrWhiteSpace(raw))
         {
-            return translation;
+            return fallback;
         }
 
-        var warnings = translation.Warnings.Concat([warning]).ToArray();
-        return translation with { Warnings = warnings };
+        if (bool.TryParse(raw, out var parsed))
+        {
+            return parsed;
+        }
+
+        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
+               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
+               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
+
+    private void LogHoverDebug(string message)
+    {
+        if (!_debugEnabled)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[QL-Hover] {message}");
+    }
+
+    private sealed record SemanticHoverContext(string SemanticKey, int EffectiveLine, int EffectiveCharacter);
+
+    private sealed record CachedHoverResult(long CreatedAtTicks, Hover? Hover);
 }

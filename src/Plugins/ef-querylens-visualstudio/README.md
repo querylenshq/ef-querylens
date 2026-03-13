@@ -1,13 +1,18 @@
 # EF QueryLens Visual Studio Extension
 
-This project is a starter wrapper for Visual Studio 2022 integration over `EFQueryLens.Lsp`.
+This project hosts the QueryLens language server in a Visual Studio extension using the VisualStudio.Extensibility SDK.
 
 ## Scope
 
-- Provide a VSIX-hosted LSP client
-- Launch `EFQueryLens.Lsp`
-- Reuse protocol features (hover, CodeLens, diagnostics)
+- Target Visual Studio 2026+ with out-of-process extensibility
+- Launch `EFQueryLens.Lsp.dll` over stdio via `LanguageServerProvider`
+- Reuse LSP features from the shared server (hover, CodeLens, diagnostics)
 
 ## Status
 
-Scaffold only. Not yet packaged or published.
+Phase 1 implementation in progress:
+
+- .NET 10 extension project wired to VisualStudio.Extensibility
+- Language server provider implemented for `.cs` files
+- LSP server artifacts copied into the extension output (`bin/.../server/`)
+- VSIX builds successfully

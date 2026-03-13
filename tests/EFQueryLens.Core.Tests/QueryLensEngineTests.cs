@@ -111,7 +111,12 @@ public class QueryLensEngineTests
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
-        Assert.Contains("JOIN", result.Sql, StringComparison.OrdinalIgnoreCase);
+        // SampleMySqlApp uses SplitQuery globally, so Include is expected to emit
+        // multiple commands and include the related OrderItems source.
+        Assert.True(result.Commands.Count > 1,
+            $"Expected split-query Include to emit multiple commands. Got {result.Commands.Count}.");
+        Assert.Contains(result.Commands,
+            c => c.Sql.Contains("OrderItems", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -193,6 +198,58 @@ public class QueryLensEngineTests
         Assert.True(r2.Metadata.TranslationTime < r1.Metadata.TranslationTime,
             $"Expected warm ({r2.Metadata.TranslationTime.TotalMilliseconds:F0} ms) " +
             $"< cold ({r1.Metadata.TranslationTime.TotalMilliseconds:F0} ms)");
+    }
+
+    [Fact]
+    public async Task TranslateAsync_ConcurrentColdStart_MixedQueries_AllSucceedWithoutTypeMismatch()
+    {
+        var assemblyPath = GetSampleMySqlAppDll();
+        var expressions = new[]
+        {
+            "db.Orders",
+            "db.Orders.Where(o => o.UserId == 5)",
+            "db.Orders.Where(o => o.UserId == 5).Include(o => o.Items)",
+            "db.Orders.Include(o => o.Items).ThenInclude(i => i.Product)",
+            "db.Users.Select(u => new { u.Id, u.Email })",
+            "db.Categories",
+            "db.Products",
+            "db.OrderItems",
+        };
+
+        const int rounds = 3;
+        const int parallelRequests = 20;
+
+        for (var round = 0; round < rounds; round++)
+        {
+            await using var engine = CreateEngine();
+            var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var tasks = Enumerable.Range(0, parallelRequests)
+                .Select(async i =>
+                {
+                    await startGate.Task;
+                    return await engine.TranslateAsync(new TranslationRequest
+                    {
+                        AssemblyPath = assemblyPath,
+                        Expression = expressions[i % expressions.Length],
+                    });
+                })
+                .ToArray();
+
+            startGate.SetResult();
+            var results = await Task.WhenAll(tasks);
+
+            var failures = results
+                .Where(r => !r.Success)
+                .Select(r => r.ErrorMessage ?? "<null>")
+                .ToArray();
+
+            Assert.True(failures.Length == 0,
+                $"Round {round + 1} had failures:{Environment.NewLine}{string.Join(Environment.NewLine, failures)}");
+
+            Assert.DoesNotContain(results,
+                r => (r.ErrorMessage ?? string.Empty).Contains("InvalidCastException", StringComparison.Ordinal));
+        }
     }
 
     [Fact]

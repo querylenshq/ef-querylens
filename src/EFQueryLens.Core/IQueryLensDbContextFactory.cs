@@ -28,6 +28,14 @@ namespace EFQueryLens.Core;
 /// </para>
 ///
 /// <para>
+/// <b>Placement rule:</b> implement this factory in the executable startup project
+/// that QueryLens targets (API / WorkerService / Console).
+/// Do not place it in a class library.
+/// QueryLens resolves dependencies from the selected executable assembly output,
+/// and only factories declared in that assembly are used.
+/// </para>
+///
+/// <para>
 /// <b>Discovery:</b> QueryLens finds your factory via full-name reflection —
 /// the same technique used for <c>IDesignTimeDbContextFactory&lt;T&gt;</c>.
 /// It is prioritised above both <c>IDesignTimeDbContextFactory&lt;T&gt;</c>

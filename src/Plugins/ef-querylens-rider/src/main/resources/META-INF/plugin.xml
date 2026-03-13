@@ -5,4 +5,15 @@
     <description>EF QueryLens integration for Rider.</description>
 
     <depends>com.intellij.modules.rider</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <platform.lsp.serverSupportProvider implementation="efquerylens.EFQueryLensLspServerSupportProvider" />
+        <toolWindow
+                id="EF QueryLens"
+                anchor="bottom"
+                icon="AllIcons.Toolwindows.ToolWindowMessages"
+                factoryClass="efquerylens.EFQueryLensLogToolWindowFactory"
+                secondary="true"
+                canCloseContents="false" />
+    </extensions>
 </idea-plugin>

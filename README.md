@@ -51,6 +51,23 @@ npm run compile
 - npm package: `ef-querylens-vscode`
 - Repository name: `ef-querylens`
 
+## Factory Placement Rule
+
+When implementing `IQueryLensDbContextFactory<TContext>`, place the factory in an executable startup project (`API`, `WorkerService`, `Console`, etc.), not in a class library.
+
+QueryLens resolves dependencies from the selected executable assembly output and only accepts QueryLens/design-time factories declared in that executable assembly.
+
+## Multiple DbContexts
+
+QueryLens supports multiple DbContexts in the same executable project.
+
+Use one of these patterns:
+
+- Add one `IQueryLensDbContextFactory<TContext>` implementation class per DbContext.
+- Or use a single class that implements `IQueryLensDbContextFactory<TContext>` for multiple context types (explicit interface implementation is supported).
+
+When more than one DbContext type exists, QueryLens picks the best match from the query expression; if it cannot disambiguate, specify the context type explicitly (for CLI via `--context`).
+
 ## Roadmap
 
 - Complete CLI command surface

@@ -8,8 +8,18 @@
     <Project Path="src/EFQueryLens.Analyzer/EFQueryLens.Analyzer.csproj" />
     <Project Path="src/EFQueryLens.Cli/EFQueryLens.Cli.csproj" />
     <Project Path="src/EFQueryLens.Core/EFQueryLens.Core.csproj" />
+    <Project Path="src/EFQueryLens.Daemon/EFQueryLens.Daemon.csproj" />
+    <Project Path="src/EFQueryLens.DaemonClient/EFQueryLens.DaemonClient.csproj" />
     <Project Path="src/EFQueryLens.Lsp/EFQueryLens.Lsp.csproj" />
     <Project Path="src/EFQueryLens.Mcp/EFQueryLens.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/src/Plugins/ef-querylens-vscode/">
+    <File Path="src/Plugins/ef-querylens-vscode/package-lock.json" />
+    <File Path="src/Plugins/ef-querylens-vscode/package.json" />
+    <File Path="src/Plugins/ef-querylens-vscode/tsconfig.json" />
+  </Folder>
+  <Folder Name="/src/Plugins/ef-querylens-vscode/src/">
+    <File Path="src/Plugins/ef-querylens-vscode/src/extension.ts" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/EFQueryLens.Core.Tests/EFQueryLens.Core.Tests.csproj" />

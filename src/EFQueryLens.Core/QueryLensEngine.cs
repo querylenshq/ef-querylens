@@ -12,17 +12,74 @@ namespace EFQueryLens.Core;
 /// Orchestrates the ALC cache, the Roslyn scripting evaluator, and EF Core
 /// model inspection without ever opening a real database connection.
 /// </summary>
-public sealed class QueryLensEngine : IQueryLensEngine
+public sealed class QueryLensEngine : IQueryLensEngine, IDbContextPoolProvider
 {
+    private sealed record CachedAssemblyContext(
+        string SourceAssemblyPath,
+        string SourceFingerprint,
+        string ShadowAssemblyPath,
+        ProjectAssemblyContext Context);
+
+    private sealed record PooledDbContext(
+        string PoolKey,
+        string DbContextTypeFullName,
+        object Instance,
+        SemaphoreSlim Gate,
+        string CreationStrategy);
+
+    private sealed class DbContextLease : IDbContextLease
+    {
+        private readonly QueryLensEngine _owner;
+        private readonly PooledDbContext _pooled;
+        private bool _disposed;
+
+        public DbContextLease(QueryLensEngine owner, PooledDbContext pooled, string strategy)
+        {
+            _owner = owner;
+            _pooled = pooled;
+            Strategy = strategy;
+        }
+
+        public object Instance => _pooled.Instance;
+
+        public string PoolKey => _pooled.PoolKey;
+
+        public string Strategy { get; }
+
+        public ValueTask DisposeAsync()
+        {
+            if (_disposed)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            _disposed = true;
+            _owner.ReleaseDbContextLease(_pooled);
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private readonly QueryEvaluator _evaluator = new();
-    private readonly ConcurrentDictionary<string, ProjectAssemblyContext> _alcCache = new(
+    private readonly ConcurrentDictionary<string, CachedAssemblyContext> _alcCache = new(
         StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, object> _alcContextGates = new(
+        StringComparer.OrdinalIgnoreCase);
+    
+    // DbContext pool: keyed by "assemblyPath|dbContextTypeFullName" for isolation
+    private readonly ConcurrentDictionary<string, PooledDbContext> _dbContextPool = new(
+        StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _dbContextCreateGates = new(
+        StringComparer.Ordinal);
+    
     private readonly bool _debugEnabled;
+    private readonly ShadowAssemblyCache _shadowCache;
     private bool _disposed;
 
     public QueryLensEngine()
     {
         _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+        _shadowCache = new ShadowAssemblyCache(_debugEnabled);
+        _shadowCache.ScheduleCleanupIfDue(force: true);
     }
 
     // ── IQueryLensEngine ──────────────────────────────────────────────────────
@@ -35,7 +92,8 @@ public sealed class QueryLensEngine : IQueryLensEngine
 
         var fullPath = Path.GetFullPath(request.AssemblyPath);
         var alcCtx = GetOrRefreshContext(fullPath);
-        var result = await _evaluator.EvaluateAsync(alcCtx, request, ct);
+        var result = await _evaluator.EvaluateAsync(alcCtx, request, ct, this, fullPath);
+        LogTranslationTiming(fullPath, result);
 
         if (!NeedsDbContextDiscoveryRetry(result))
             return result;
@@ -44,10 +102,12 @@ public sealed class QueryLensEngine : IQueryLensEngine
         // This recovers from contexts created before dependency outputs existed or from
         // transient assembly-load failures during initial discovery.
         if (_alcCache.TryRemove(fullPath, out var stale))
-            stale.Dispose();
+            ReleaseCachedContext(stale, reason: "retry");
 
         var freshCtx = GetOrRefreshContext(fullPath);
-        return await _evaluator.EvaluateAsync(freshCtx, request, ct);
+        var retryResult = await _evaluator.EvaluateAsync(freshCtx, request, ct, this, fullPath);
+        LogTranslationTiming(fullPath, retryResult);
+        return retryResult;
     }
 
     public Task<ExplainResult> ExplainAsync(
@@ -65,7 +125,8 @@ public sealed class QueryLensEngine : IQueryLensEngine
 
         try
         {
-            var alcCtx = GetOrRefreshContext(request.AssemblyPath);
+            var assemblyPath = Path.GetFullPath(request.AssemblyPath);
+            var alcCtx = GetOrRefreshContext(assemblyPath);
             var dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName);
             var dbInstance = CreateDbContextForInspection(dbContextType, alcCtx);
 
@@ -84,31 +145,181 @@ public sealed class QueryLensEngine : IQueryLensEngine
     {
         if (_disposed) return;
         _disposed = true;
-        foreach (var ctx in _alcCache.Values)
-            ctx.Dispose();
+        foreach (var entry in _alcCache.Values)
+            ReleaseCachedContext(entry, reason: "dispose");
         _alcCache.Clear();
+        _alcContextGates.Clear();
+        await DisposeDbContextPoolAsync();
+        _shadowCache.CleanupIfDue(force: true);
+    }
 
+    // ── DbContext pool ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Acquires an exclusive DbContext lease for this request.
+    /// </summary>
+    async ValueTask<IDbContextLease> IDbContextPoolProvider.AcquireDbContextLeaseAsync(
+        Type dbContextType,
+        string assemblyPath,
+        IEnumerable<Assembly> userAssemblies,
+        CancellationToken cancellationToken)
+    {
+        var poolKey = BuildDbContextPoolKey(assemblyPath, dbContextType);
+        var createdNow = false;
+
+        if (!_dbContextPool.TryGetValue(poolKey, out var pooled))
+        {
+            var createGate = _dbContextCreateGates.GetOrAdd(poolKey, static _ => new SemaphoreSlim(1, 1));
+            await createGate.WaitAsync(cancellationToken);
+            try
+            {
+                if (!_dbContextPool.TryGetValue(poolKey, out pooled))
+                {
+                    // Create fresh instance and cache it.
+                    var (instance, strategy) = QueryEvaluator.CreateDbContextInstance(dbContextType, userAssemblies);
+                    pooled = new PooledDbContext(
+                        poolKey,
+                        dbContextType.FullName!,
+                        instance,
+                        new SemaphoreSlim(1, 1),
+                        strategy);
+                    _dbContextPool[poolKey] = pooled;
+                    createdNow = true;
+
+                    if (_debugEnabled)
+                    {
+                        LogDebug($"dbcontext-pool-create type={dbContextType.Name} strategy={strategy}");
+                    }
+                }
+            }
+            finally
+            {
+                createGate.Release();
+            }
+        }
+
+        await pooled.Gate.WaitAsync(cancellationToken);
+
+        var leaseStrategy = createdNow ? pooled.CreationStrategy : "pooled-reuse";
+        if (_debugEnabled)
+        {
+            LogDebug($"dbcontext-pool-lease-acquired type={dbContextType.Name} strategy={leaseStrategy}");
+        }
+
+        return new DbContextLease(this, pooled, leaseStrategy);
+    }
+
+    private void ReleaseDbContextLease(PooledDbContext pooled)
+    {
+        try
+        {
+            ClearChangeTracker(pooled.Instance);
+
+            if (_debugEnabled)
+            {
+                LogDebug($"dbcontext-pool-lease-released type={pooled.DbContextTypeFullName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogDebug($"dbcontext-pool-clear-error type={pooled.DbContextTypeFullName} error={ex.GetType().Name} message={ex.Message}");
+        }
+        finally
+        {
+            pooled.Gate.Release();
+        }
+    }
+
+    private static void ClearChangeTracker(object dbContextInstance)
+    {
+        var changeTrackerProp = dbContextInstance.GetType()
+            .GetProperty("ChangeTracker", BindingFlags.Public | BindingFlags.Instance);
+
+        if (changeTrackerProp?.GetValue(dbContextInstance) is not { } changeTracker)
+        {
+            return;
+        }
+
+        var clearMethod = changeTracker.GetType()
+            .GetMethod("Clear", BindingFlags.Public | BindingFlags.Instance);
+        clearMethod?.Invoke(changeTracker, null);
+    }
+
+    private string BuildDbContextPoolKey(string assemblyPath, Type dbContextType)
+    {
+        return $"{Path.GetFullPath(assemblyPath)}|{dbContextType.FullName}";
+    }
+
+    private async ValueTask DisposeDbContextPoolAsync()
+    {
+        if (_debugEnabled && _dbContextPool.Count > 0)
+            LogDebug($"dbcontext-pool-dispose count={_dbContextPool.Count}");
+        
+        foreach (var pooled in _dbContextPool.Values)
+        {
+            try
+            {
+                pooled.Gate.Dispose();
+
+                // Dispose DbContext instances; contexts implement IAsyncDisposable
+                if (pooled.Instance is IAsyncDisposable asyncDisposable)
+                {
+                    await asyncDisposable.DisposeAsync();
+                }
+                else if (pooled.Instance is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"dbcontext-pool-dispose-error type={pooled.DbContextTypeFullName} error={ex.GetType().Name} message={ex.Message}");
+            }
+        }
+        _dbContextPool.Clear();
+
+        foreach (var gate in _dbContextCreateGates.Values)
+        {
+            gate.Dispose();
+        }
+        _dbContextCreateGates.Clear();
     }
 
     // ── ALC cache ─────────────────────────────────────────────────────────────
 
     private ProjectAssemblyContext GetOrRefreshContext(string assemblyPath)
     {
-        var fullPath = Path.GetFullPath(assemblyPath);
-
-        if (_alcCache.TryGetValue(fullPath, out var existing))
+        var sourceAssemblyPath = Path.GetFullPath(assemblyPath);
+        var gate = _alcContextGates.GetOrAdd(sourceAssemblyPath, static _ => new object());
+        lock (gate)
         {
-            if (!ProjectAssemblyContextFactory.IsStale(existing))
-                return existing;
+            var sourceFingerprint = BuildSourceFingerprint(sourceAssemblyPath);
+            var shadowAssemblyPath = _shadowCache.ResolveOrCreateBundle(sourceAssemblyPath);
 
-            // Assembly was rebuilt — evict the stale context and reload.
-            _alcCache.TryRemove(fullPath, out _);
-            existing.Dispose();
+            if (_alcCache.TryGetValue(sourceAssemblyPath, out var existing))
+            {
+                if (string.Equals(existing.SourceFingerprint, sourceFingerprint, StringComparison.Ordinal)
+                    && string.Equals(existing.ShadowAssemblyPath, shadowAssemblyPath, StringComparison.OrdinalIgnoreCase)
+                    && !ProjectAssemblyContextFactory.IsStale(existing.Context))
+                {
+                    return existing.Context;
+                }
+
+                // Assembly was rebuilt — evict the stale context and reload.
+                _alcCache.TryRemove(sourceAssemblyPath, out _);
+                ReleaseCachedContext(existing, reason: "stale");
+            }
+
+            var freshContext = ProjectAssemblyContextFactory.Create(shadowAssemblyPath);
+            var cachedContext = new CachedAssemblyContext(
+                sourceAssemblyPath,
+                sourceFingerprint,
+                shadowAssemblyPath,
+                freshContext);
+
+            _alcCache[sourceAssemblyPath] = cachedContext;
+            return freshContext;
         }
-
-        var fresh = ProjectAssemblyContextFactory.Create(fullPath);
-        _alcCache[fullPath] = fresh;
-        return fresh;
     }
 
     // ── DbContext instantiation for model inspection ───────────────────────────
@@ -122,19 +333,22 @@ public sealed class QueryLensEngine : IQueryLensEngine
 
         var fromDesignTimeFactory = DesignTimeDbContextFactory.TryCreate(
             dbContextType,
-            allAssemblies);
+            allAssemblies,
+            alcCtx.AssemblyPath);
         if (fromDesignTimeFactory is not null)
             return fromDesignTimeFactory;
 
         var fromQueryLensFactory = DesignTimeDbContextFactory.TryCreateQueryLensFactory(
             dbContextType,
-            allAssemblies);
+            allAssemblies,
+            alcCtx.AssemblyPath);
         if (fromQueryLensFactory is not null)
             return fromQueryLensFactory;
 
         throw new InvalidOperationException(
             $"Could not create an instance of '{dbContextType.FullName}' for model inspection. " +
-            "Implement IDesignTimeDbContextFactory<T> or IQueryLensDbContextFactory<T> in the project.");
+            "Implement IDesignTimeDbContextFactory<T> or IQueryLensDbContextFactory<T> in the executable project (API / Worker / Console), not in a class library. " +
+            $"Selected executable assembly: '{Path.GetFileName(alcCtx.AssemblyPath)}'.");
     }
 
     // ── Model snapshot building ───────────────────────────────────────────────
@@ -413,6 +627,92 @@ public sealed class QueryLensEngine : IQueryLensEngine
             return false;
         }
         catch { return false; }
+    }
+
+    private string BuildSourceFingerprint(string sourceAssemblyPath)
+    {
+        var info = new FileInfo(sourceAssemblyPath);
+        return $"{Path.GetFullPath(sourceAssemblyPath)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+    }
+
+    private void ReleaseCachedContext(CachedAssemblyContext entry, string reason)
+    {
+        _evaluator.InvalidateMetadataRefCache(entry.ShadowAssemblyPath);
+        EvictPooledDbContextsForAssembly(entry.SourceAssemblyPath);
+        entry.Context.Dispose();
+        ForceUnloadCollection();
+
+        LogDebug($"alc-release reason={reason} source={entry.SourceAssemblyPath} shadow={entry.ShadowAssemblyPath}");
+    }
+
+    private void EvictPooledDbContextsForAssembly(string sourceAssemblyPath)
+    {
+        var fullPath = Path.GetFullPath(sourceAssemblyPath);
+        var prefix = fullPath + "|";
+        var keys = _dbContextPool.Keys
+            .Where(k => k.StartsWith(prefix, StringComparison.Ordinal))
+            .ToArray();
+
+        foreach (var key in keys)
+        {
+            if (_dbContextPool.TryRemove(key, out var pooled))
+            {
+                try
+                {
+                    pooled.Gate.Dispose();
+
+                    if (pooled.Instance is IAsyncDisposable asyncDisposable)
+                    {
+                        asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    }
+                    else if (pooled.Instance is IDisposable disposable)
+                    {
+                        disposable.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogDebug($"dbcontext-pool-evict-dispose-error key={key} error={ex.GetType().Name} message={ex.Message}");
+                }
+            }
+
+            if (_dbContextCreateGates.TryRemove(key, out var createGate))
+            {
+                createGate.Dispose();
+            }
+        }
+
+        if (_debugEnabled && keys.Length > 0)
+            LogDebug($"dbcontext-pool-evict assembly={fullPath} removed={keys.Length}");
+    }
+
+    private static void ForceUnloadCollection()
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
+    }
+
+    private void LogTranslationTiming(string assemblyPath, QueryTranslationResult result)
+    {
+        if (!_debugEnabled || result.Metadata is null)
+        {
+            return;
+        }
+
+        var m = result.Metadata;
+        LogDebug(
+            "translate-timing " +
+            $"assembly={assemblyPath} success={result.Success} " +
+            $"totalMs={m.TranslationTime.TotalMilliseconds:F0} " +
+            $"contextMs={m.ContextResolutionTime?.TotalMilliseconds:F0} " +
+            $"dbContextMs={m.DbContextCreationTime?.TotalMilliseconds:F0} " +
+            $"refsMs={m.MetadataReferenceBuildTime?.TotalMilliseconds:F0} " +
+            $"compileMs={m.RoslynCompilationTime?.TotalMilliseconds:F0} " +
+            $"retries={m.CompilationRetryCount} " +
+            $"evalLoadMs={m.EvalAssemblyLoadTime?.TotalMilliseconds:F0} " +
+            $"runnerMs={m.RunnerExecutionTime?.TotalMilliseconds:F0} " +
+            $"fallbackMs={m.ToQueryStringFallbackTime?.TotalMilliseconds:F0}");
     }
 
     private static bool NeedsDbContextDiscoveryRetry(QueryTranslationResult result) =>

@@ -1,12 +1,60 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net472</TargetFramework>
+    <TargetFramework>net8.0-windows8.0</TargetFramework>
     <AssemblyName>EFQueryLens.VisualStudio</AssemblyName>
     <RootNamespace>EFQueryLens.VisualStudio</RootNamespace>
+      <Version>0.1.17</Version>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <LangVersion>12</LangVersion>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <VsixInstallationTargetVersionRange>[17.14,19.0)</VsixInstallationTargetVersionRange>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Client" Version="17.10.64" />
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Sdk" Version="17.14.40608" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" PrivateAssets="all" />
   </ItemGroup>
+
+  <Target Name="BuildLspServerForPackaging" BeforeTargets="CopyLspServerToExtensionOutput">
+    <MSBuild Projects="$(MSBuildProjectDirectory)\..\..\EFQueryLens.Lsp\EFQueryLens.Lsp.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <ItemGroup>
+    <Content Include="server\**\*.*">
+      <Pack>true</Pack>
+      <PackagePath>server\%(RecursiveDir)%(Filename)%(Extension)</PackagePath>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="PatchVsixInstallationTargetRange" AfterTargets="DetokenizeVsixManifestFile"
+          Condition="'$(VsixInstallationTargetVersionRange)' != '' and Exists('$(IntermediateVsixManifest)')">
+    <XmlPoke XmlInputPath="$(IntermediateVsixManifest)"
+             Query="/x:PackageManifest/x:Installation/x:InstallationTarget/@Version"
+             Namespaces="&lt;Namespace Prefix='x' Uri='http://schemas.microsoft.com/developer/vsx-schema/2011' /&gt;"
+             Value="$(VsixInstallationTargetVersionRange)" />
+  </Target>
+
+  <Target Name="CopyLspServerToExtensionOutput" AfterTargets="Build">
+    <PropertyGroup>
+      <LspOutputDir>$(MSBuildProjectDirectory)\..\..\EFQueryLens.Lsp\bin\$(Configuration)\net10.0\publish\</LspOutputDir>
+      <ServerOutputDir>$(OutDir)server\</ServerOutputDir>
+      <ServerPackageDir>$(MSBuildProjectDirectory)\server\</ServerPackageDir>
+    </PropertyGroup>
+
+    <RemoveDir Directories="$(ServerPackageDir)" />
+
+    <MakeDir Directories="$(ServerOutputDir)" />
+    <MakeDir Directories="$(ServerPackageDir)" />
+
+    <ItemGroup>
+      <LspFiles Include="$(LspOutputDir)**\*.*" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(LspFiles)" DestinationFiles="@(LspFiles->'$(ServerOutputDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+
+    <Copy SourceFiles="@(LspFiles)" DestinationFiles="@(LspFiles->'$(ServerPackageDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="false" />
+  </Target>
 </Project>

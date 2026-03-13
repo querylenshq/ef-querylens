@@ -25,7 +25,18 @@ internal static class DesignTimeDbContextFactory
     /// </returns>
     internal static object? TryCreateQueryLensFactory(
         Type dbContextType, IEnumerable<Assembly> assemblies) =>
-        TryCreateQueryLensFactory(dbContextType, assemblies, out _);
+        TryCreateQueryLensFactory(dbContextType, assemblies, null, out _);
+
+    /// <summary>
+    /// Same as <see cref="TryCreateQueryLensFactory(Type, IEnumerable{Assembly})"/>,
+    /// but limits discovery to factory types declared in
+    /// <paramref name="requiredFactoryAssemblyPath"/> when provided.
+    /// </summary>
+    internal static object? TryCreateQueryLensFactory(
+        Type dbContextType,
+        IEnumerable<Assembly> assemblies,
+        string? requiredFactoryAssemblyPath) =>
+        TryCreateQueryLensFactory(dbContextType, assemblies, requiredFactoryAssemblyPath, out _);
 
     /// <summary>
     /// Same as <see cref="TryCreateQueryLensFactory(Type, IEnumerable{Assembly})"/>,
@@ -33,9 +44,24 @@ internal static class DesignTimeDbContextFactory
     /// invocation fails.
     /// </summary>
     internal static object? TryCreateQueryLensFactory(
-        Type dbContextType, IEnumerable<Assembly> assemblies, out string? failureReason)
+        Type dbContextType,
+        IEnumerable<Assembly> assemblies,
+        out string? failureReason) =>
+        TryCreateQueryLensFactory(dbContextType, assemblies, null, out failureReason);
+
+    /// <summary>
+    /// Same as <see cref="TryCreateQueryLensFactory(Type, IEnumerable{Assembly}, out string?)"/>,
+    /// but limits discovery to factory types declared in
+    /// <paramref name="requiredFactoryAssemblyPath"/> when provided.
+    /// </summary>
+    internal static object? TryCreateQueryLensFactory(
+        Type dbContextType,
+        IEnumerable<Assembly> assemblies,
+        string? requiredFactoryAssemblyPath,
+        out string? failureReason)
     {
         failureReason = null;
+        var normalizedRequiredPath = NormalizeAssemblyPath(requiredFactoryAssemblyPath);
 
         foreach (var asm in assemblies)
         {
@@ -48,18 +74,55 @@ internal static class DesignTimeDbContextFactory
                         i.IsGenericType &&
                         i.GetGenericTypeDefinition().FullName == QueryLensInterfaceName &&
                         i.GetGenericArguments()[0].FullName == dbContextType.FullName));
+
+                // Compatibility fallback: accept "duck-typed" factories that expose
+                // a public parameterless CreateOfflineContext() returning the target
+                // DbContext type, even when the generic interface identity doesn't match
+                // (e.g., copied interface definition in user code).
+                factoryType ??= asm.GetTypes().FirstOrDefault(t =>
+                    !t.IsAbstract && !t.IsInterface &&
+                    t.GetConstructor(Type.EmptyTypes) is not null &&
+                    t.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                        .Any(m =>
+                            m.Name == "CreateOfflineContext" &&
+                            m.GetParameters().Length == 0 &&
+                            m.ReturnType.FullName == dbContextType.FullName));
             }
             catch { continue; } // ReflectionTypeLoadException on some assemblies
 
             if (factoryType is null) continue;
 
+            if (!IsFactoryAssemblyAllowed(
+                    factoryType,
+                    normalizedRequiredPath,
+                    "QueryLens",
+                    out var locationMismatch))
+            {
+                failureReason ??= locationMismatch;
+                continue;
+            }
+
             try
             {
                 var factory = Activator.CreateInstance(factoryType)!;
-                var method  = factoryType.GetMethod("CreateOfflineContext")
-                              ?? factoryType.GetInterfaces()
-                                  .SelectMany(i => i.GetMethods())
-                                  .FirstOrDefault(m => m.Name == "CreateOfflineContext");
+                var matchingInterface = factoryType.GetInterfaces().FirstOrDefault(i =>
+                    i.IsGenericType
+                    && i.GetGenericTypeDefinition().FullName == QueryLensInterfaceName
+                    && i.GetGenericArguments()[0].FullName == dbContextType.FullName);
+
+                var method = matchingInterface?.GetMethod("CreateOfflineContext")
+                             ?? factoryType.GetMethod("CreateOfflineContext")
+                             ?? factoryType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                                 .FirstOrDefault(m =>
+                                     m.Name == "CreateOfflineContext"
+                                     && m.GetParameters().Length == 0
+                                     && m.ReturnType.FullName == dbContextType.FullName)
+                             ?? factoryType.GetInterfaces()
+                                 .SelectMany(i => i.GetMethods())
+                                 .FirstOrDefault(m =>
+                                     m.Name == "CreateOfflineContext"
+                                     && m.GetParameters().Length == 0
+                                     && m.ReturnType.FullName == dbContextType.FullName);
 
                 if (method is null) continue;
 
@@ -89,7 +152,18 @@ internal static class DesignTimeDbContextFactory
     /// (callers should fall back to the bootstrap approach).
     /// </returns>
     internal static object? TryCreate(Type dbContextType, IEnumerable<Assembly> assemblies) =>
-        TryCreate(dbContextType, assemblies, out _);
+        TryCreate(dbContextType, assemblies, null, out _);
+
+    /// <summary>
+    /// Same as <see cref="TryCreate(Type, IEnumerable{Assembly})"/>, but limits
+    /// discovery to factory types declared in
+    /// <paramref name="requiredFactoryAssemblyPath"/> when provided.
+    /// </summary>
+    internal static object? TryCreate(
+        Type dbContextType,
+        IEnumerable<Assembly> assemblies,
+        string? requiredFactoryAssemblyPath) =>
+        TryCreate(dbContextType, assemblies, requiredFactoryAssemblyPath, out _);
 
     /// <summary>
     /// Same as <see cref="TryCreate(Type, IEnumerable{Assembly})"/>, but returns
@@ -97,9 +171,24 @@ internal static class DesignTimeDbContextFactory
     /// invocation fails.
     /// </summary>
     internal static object? TryCreate(
-        Type dbContextType, IEnumerable<Assembly> assemblies, out string? failureReason)
+        Type dbContextType,
+        IEnumerable<Assembly> assemblies,
+        out string? failureReason) =>
+        TryCreate(dbContextType, assemblies, null, out failureReason);
+
+    /// <summary>
+    /// Same as <see cref="TryCreate(Type, IEnumerable{Assembly}, out string?)"/>,
+    /// but limits discovery to factory types declared in
+    /// <paramref name="requiredFactoryAssemblyPath"/> when provided.
+    /// </summary>
+    internal static object? TryCreate(
+        Type dbContextType,
+        IEnumerable<Assembly> assemblies,
+        string? requiredFactoryAssemblyPath,
+        out string? failureReason)
     {
         failureReason = null;
+        var normalizedRequiredPath = NormalizeAssemblyPath(requiredFactoryAssemblyPath);
 
         foreach (var asm in assemblies)
         {
@@ -117,13 +206,31 @@ internal static class DesignTimeDbContextFactory
 
             if (factoryType is null) continue;
 
+            if (!IsFactoryAssemblyAllowed(
+                    factoryType,
+                    normalizedRequiredPath,
+                    "design-time",
+                    out var locationMismatch))
+            {
+                failureReason ??= locationMismatch;
+                continue;
+            }
+
             try
             {
                 var factory = Activator.CreateInstance(factoryType)!;
-                var method  = factoryType.GetMethod("CreateDbContext")
-                              ?? factoryType.GetInterfaces()
-                                  .SelectMany(i => i.GetMethods())
-                                  .FirstOrDefault(m => m.Name == "CreateDbContext");
+                var matchingInterface = factoryType.GetInterfaces().FirstOrDefault(i =>
+                    i.IsGenericType
+                    && i.GetGenericTypeDefinition().FullName == InterfaceName
+                    && i.GetGenericArguments()[0].FullName == dbContextType.FullName);
+
+                var method = matchingInterface?.GetMethod("CreateDbContext")
+                             ?? factoryType.GetMethod("CreateDbContext")
+                             ?? factoryType.GetInterfaces()
+                                 .SelectMany(i => i.GetMethods())
+                                 .FirstOrDefault(m =>
+                                     m.Name == "CreateDbContext"
+                                     && m.GetParameters().Length == 1);
 
                 if (method is null) continue;
 
@@ -138,6 +245,45 @@ internal static class DesignTimeDbContextFactory
         }
 
         return null;
+    }
+
+    private static bool IsFactoryAssemblyAllowed(
+        Type factoryType,
+        string? normalizedRequiredPath,
+        string factoryKind,
+        out string mismatchReason)
+    {
+        mismatchReason = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(normalizedRequiredPath))
+            return true;
+
+        var factoryAssemblyPath = NormalizeAssemblyPath(factoryType.Assembly.Location);
+        if (string.IsNullOrWhiteSpace(factoryAssemblyPath)
+            || string.Equals(factoryAssemblyPath, normalizedRequiredPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        mismatchReason =
+            $"Found {factoryKind} factory '{factoryType.FullName}' in '{Path.GetFileName(factoryAssemblyPath)}', " +
+            $"but QueryLens requires factories in the selected executable assembly '{Path.GetFileName(normalizedRequiredPath)}'.";
+        return false;
+    }
+
+    private static string? NormalizeAssemblyPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return path;
+        }
     }
 
     private static string Unwrap(Exception ex)

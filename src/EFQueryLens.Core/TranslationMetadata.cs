@@ -6,6 +6,14 @@ public sealed record TranslationMetadata
     public string EfCoreVersion { get; init; } = default!;
     public string ProviderName { get; init; } = default!;
     public TimeSpan TranslationTime { get; init; }
+    public TimeSpan? ContextResolutionTime { get; init; }
+    public TimeSpan? DbContextCreationTime { get; init; }
+    public TimeSpan? MetadataReferenceBuildTime { get; init; }
+    public TimeSpan? RoslynCompilationTime { get; init; }
+    public int? CompilationRetryCount { get; init; }
+    public TimeSpan? EvalAssemblyLoadTime { get; init; }
+    public TimeSpan? RunnerExecutionTime { get; init; }
+    public TimeSpan? ToQueryStringFallbackTime { get; init; }
 
     /// <summary>
     /// True when EF Core silently evaluated part of the query on the client.

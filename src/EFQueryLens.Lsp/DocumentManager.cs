@@ -1,24 +1,23 @@
 using System.Collections.Concurrent;
-using OmniSharp.Extensions.LanguageServer.Protocol;
 
 namespace EFQueryLens.Lsp;
 
 public class DocumentManager
 {
-    private readonly ConcurrentDictionary<DocumentUri, string> _documents = new();
+    private readonly ConcurrentDictionary<string, string> _documents = new(StringComparer.Ordinal);
 
-    public void UpdateDocument(DocumentUri uri, string text)
+    public void UpdateDocument(string documentUri, string text)
     {
-        _documents[uri] = text;
+        _documents[documentUri] = text;
     }
 
-    public void RemoveDocument(DocumentUri uri)
+    public void RemoveDocument(string documentUri)
     {
-        _documents.TryRemove(uri, out _);
+        _documents.TryRemove(documentUri, out _);
     }
 
-    public string? GetDocumentText(DocumentUri uri)
+    public string? GetDocumentText(string documentUri)
     {
-        return _documents.TryGetValue(uri, out var text) ? text : null;
+        return _documents.TryGetValue(documentUri, out var text) ? text : null;
     }
 }

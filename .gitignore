@@ -3,6 +3,9 @@ bin/
 obj/
 out/
 
+# Generated VS extension payload (copied from LSP build output)
+src/Plugins/ef-querylens-visualstudio/server/
+
 # NuGet
 *.nupkg
 *.snupkg
@@ -23,6 +26,9 @@ packages/
 
 # Rider
 *.DotSettings.user
+src/Plugins/ef-querylens-rider/.gradle/
+src/Plugins/ef-querylens-rider/build/
+src/Plugins/ef-querylens-rider/.intellijPlatform/
 
 # Test results
 TestResults/

@@ -1,9 +1,7 @@
-#pragma warning disable CS8765 // Nullability of parameter type doesn't match overridden member
-
 using System.Collections;
 using System.Data;
 using System.Data.Common;
-
+using System.Diagnostics.CodeAnalysis;
 namespace EFQueryLens.Core.Scripting;
 
 /// <summary>
@@ -20,6 +18,7 @@ namespace EFQueryLens.Core.Scripting;
 /// </summary>
 internal sealed class OfflineDbConnection : DbConnection
 {
+    [AllowNull]
     public override string ConnectionString { get; set; } = string.Empty;
     public override string Database => "offline";
     public override string DataSource => "localhost";
@@ -41,6 +40,7 @@ internal sealed class OfflineDbConnection : DbConnection
     {
         private readonly OfflineDbParameterCollection _parameters = new();
 
+        [AllowNull]
         public override string CommandText { get; set; } = string.Empty;
         public override int CommandTimeout { get; set; }
         public override CommandType CommandType { get; set; }
@@ -127,7 +127,9 @@ internal sealed class OfflineDbConnection : DbConnection
         public override DbType DbType { get; set; }
         public override ParameterDirection Direction { get; set; } = ParameterDirection.Input;
         public override bool IsNullable { get; set; }
+        [AllowNull]
         public override string ParameterName { get; set; } = string.Empty;
+        [AllowNull]
         public override string SourceColumn { get; set; } = string.Empty;
         public override object? Value { get; set; }
         public override bool SourceColumnNullMapping { get; set; }

@@ -33,6 +33,10 @@
       {
         "command": "efquerylens.restart",
         "title": "EF QueryLens: Restart Language Server"
+      },
+      {
+        "command": "efquerylens.openOutput",
+        "title": "EF QueryLens: Open Output"
       }
     ],
     "configuration": {

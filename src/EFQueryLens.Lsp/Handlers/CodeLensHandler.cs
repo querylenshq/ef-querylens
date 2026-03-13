@@ -1,37 +1,29 @@
 using System.Collections.Concurrent;
-using Newtonsoft.Json.Linq;
-using OmniSharp.Extensions.LanguageServer.Protocol;
-using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
-using OmniSharp.Extensions.LanguageServer.Protocol.Document;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using EFQueryLens.Core;
+using Microsoft.VisualStudio.LanguageServer.Protocol;
 using EFQueryLens.Lsp.Parsing;
+using EFQueryLens.Lsp.Services;
+using Range = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 
 namespace EFQueryLens.Lsp.Handlers;
 
-internal sealed class CodeLensHandler : CodeLensHandlerBase
+internal sealed class CodeLensHandler
 {
     private const int DefaultMaxCodeLensPerDocument = 50;
     private const int DefaultDebounceMilliseconds = 250;
-    private const bool DefaultUseModelFilter = false;
 
-    private readonly IQueryLensEngine _engine;
     private readonly DocumentManager _documentManager;
+    private readonly CodeLensPreviewService _codeLensPreviewService;
     private readonly int _maxCodeLensPerDocument;
     private readonly int _debounceMilliseconds;
-    private readonly bool _useModelFilter;
     private readonly bool _debugEnabled;
-    private readonly ConcurrentDictionary<string, CachedDbSetNames> _dbSetCache =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, string> _assemblyPathCache =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly bool _forceCodeLens;
     private readonly ConcurrentDictionary<string, CachedCodeLensResult> _codeLensCache =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public CodeLensHandler(IQueryLensEngine engine, DocumentManager documentManager)
+    public CodeLensHandler(DocumentManager documentManager, CodeLensPreviewService codeLensPreviewService)
     {
-        _engine = engine;
         _documentManager = documentManager;
+        _codeLensPreviewService = codeLensPreviewService;
         _maxCodeLensPerDocument = ReadIntEnvironmentVariable(
             "QUERYLENS_MAX_CODELENS_PER_DOCUMENT",
             DefaultMaxCodeLensPerDocument,
@@ -42,28 +34,26 @@ internal sealed class CodeLensHandler : CodeLensHandlerBase
             DefaultDebounceMilliseconds,
             min: 0,
             max: 5000);
-        _useModelFilter = ReadBoolEnvironmentVariable(
-            "QUERYLENS_CODELENS_USE_MODEL_FILTER",
-            DefaultUseModelFilter);
         _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+        _forceCodeLens = ReadBoolEnvironmentVariable("QUERYLENS_FORCE_CODELENS", fallback: false);
 
-        LogDebug($"initialized max={_maxCodeLensPerDocument} debounceMs={_debounceMilliseconds} useModelFilter={_useModelFilter}");
+        LogDebug($"initialized max={_maxCodeLensPerDocument} debounceMs={_debounceMilliseconds} forceCodeLens={_forceCodeLens}");
     }
 
-    public override async Task<CodeLensContainer?> Handle(CodeLensParams request, CancellationToken cancellationToken)
+    public async Task<CodeLens[]?> HandleAsync(CodeLensParams request, CancellationToken cancellationToken)
     {
         try
         {
-            LogDebug($"handle-start uri={request.TextDocument.Uri}");
-
-            var sourceText = await GetSourceTextAsync(request.TextDocument.Uri, cancellationToken);
+            var uriText = request.TextDocument.Uri.ToString();
+            var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
+            LogDebug($"handle-start uri={uriText} path={filePath}");
+            var sourceText = await GetSourceTextAsync(uriText, filePath, cancellationToken);
             if (string.IsNullOrWhiteSpace(sourceText))
             {
                 LogDebug("handle-exit reason=empty-source");
-                return new CodeLensContainer();
+                return [];
             }
 
-            var filePath = request.TextDocument.Uri.GetFileSystemPath();
             var sourceHash = StringComparer.Ordinal.GetHashCode(sourceText);
             var nowTicks = DateTime.UtcNow.Ticks;
             if (_debounceMilliseconds > 0
@@ -71,180 +61,80 @@ internal sealed class CodeLensHandler : CodeLensHandlerBase
                 && cachedLensResult.SourceHash == sourceHash
                 && cachedLensResult.CreatedAtTicks + TimeSpan.FromMilliseconds(_debounceMilliseconds).Ticks > nowTicks)
             {
-                LogDebug("handle-exit reason=cache-hit");
+                LogDebug($"handle-exit reason=cache-hit count={cachedLensResult.Lenses.Length}");
                 return cachedLensResult.Lenses;
             }
 
-            var chainInfos = LspSyntaxHelper.FindAllLinqChains(sourceText);
-            LogDebug($"chains-found count={chainInfos.Count}");
-            if (chainInfos.Count == 0)
+            var anchors = _codeLensPreviewService.ComputeAnchors(filePath, sourceText, _maxCodeLensPerDocument);
+            if (anchors.Count == 0)
             {
-                LogDebug("handle-exit reason=no-chains");
-                return new CodeLensContainer();
-            }
-
-            var targetAssembly = ResolveTargetAssembly(filePath);
-            LogDebug($"assembly-resolved path={(targetAssembly ?? "<null>")}");
-            if (string.IsNullOrWhiteSpace(targetAssembly)
-                || targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal)
-                || !File.Exists(targetAssembly))
-            {
-                LogDebug("handle-exit reason=assembly-not-found");
-                return new CodeLensContainer();
-            }
-
-            IReadOnlySet<string>? dbSetNames = null;
-            if (_useModelFilter)
-            {
-                dbSetNames = await GetDbSetNamesAsync(targetAssembly, cancellationToken);
-                LogDebug($"dbset-filter status={(dbSetNames is null ? "unavailable" : dbSetNames.Count.ToString())}");
-                if (dbSetNames is { Count: 0 })
-                {
-                    LogDebug("handle-exit reason=empty-dbsets");
-                    return new CodeLensContainer();
-                }
-            }
-            else
-            {
-                LogDebug("dbset-filter status=disabled");
+                LogDebug("handle-exit reason=no-anchors");
+                return [];
             }
 
             var lenses = new List<CodeLens>();
-            var matchedQueries = 0;
-
-            foreach (var chain in chainInfos)
+            foreach (var anchor in anchors)
             {
-                if (dbSetNames is not null && !dbSetNames.Contains(chain.DbSetMemberName))
+                // Range = badge position (above the query); use a 1-char range at line start so clients place the badge at the start of the line.
+                var lens = new CodeLens
                 {
-                    continue;
-                }
-
-                matchedQueries++;
-                if (matchedQueries > _maxCodeLensPerDocument)
-                {
-                    break;
-                }
-
-                var arguments = new JArray
-                {
-                    request.TextDocument.Uri.ToString(),
-                    chain.Line,
-                    chain.Character,
-                };
-
-                var range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
-                    new Position(chain.Line, 0),
-                    new Position(chain.Line, 0));
-
-                lenses.Add(new CodeLens
-                {
-                    Range = range,
+                    Range = new Range
+                    {
+                        Start = new Position(anchor.BadgeLine, anchor.BadgeCharacter),
+                        End = new Position(anchor.BadgeLine, Math.Max(anchor.BadgeCharacter + 1, 1)),
+                    },
                     Command = new Command
                     {
-                        Name = "efquerylens.showSql",
+                        CommandIdentifier = "efquerylens.showSql",
                         Title = "SQL Preview",
-                        Arguments = arguments,
-                    }
-                });
+                        Arguments = new object[]
+                        {
+                            uriText,
+                            anchor.AnchorLine,
+                            anchor.AnchorCharacter,
+                            anchor.BindingStartLine,
+                            anchor.BindingStartCharacter,
+                            anchor.BindingEndLine,
+                            anchor.BindingEndCharacter,
+                        },
+                    },
+                };
+
+                LogDebug($"anchor badge=L{anchor.BadgeLine}:C{anchor.BadgeCharacter} anchor=L{anchor.AnchorLine}:C{anchor.AnchorCharacter} binding=L{anchor.BindingStartLine}:C{anchor.BindingStartCharacter}..L{anchor.BindingEndLine}:C{anchor.BindingEndCharacter}");
+                lenses.Add(lens);
             }
 
-            var result = new CodeLensContainer(lenses);
+            var result = lenses.ToArray();
             _codeLensCache[filePath] = new CachedCodeLensResult(sourceHash, nowTicks, result);
-            LogDebug($"handle-success lenses={lenses.Count}");
+            LogDebug($"handle-success count={result.Length}");
             return result;
         }
         catch (Exception ex)
         {
             LogDebug($"handle-exception type={ex.GetType().Name} message={ex.Message}");
-            return new CodeLensContainer();
+            return [];
         }
     }
 
-    public override Task<CodeLens> Handle(CodeLens request, CancellationToken cancellationToken)
+    public Task<CodeLens> ResolveAsync(CodeLens request, CancellationToken cancellationToken)
     {
         return Task.FromResult(request);
     }
 
-    protected override CodeLensRegistrationOptions CreateRegistrationOptions(
-        CodeLensCapability capability,
-        ClientCapabilities clientCapabilities)
+    private async Task<string?> GetSourceTextAsync(string documentUri, string filePath, CancellationToken cancellationToken)
     {
-        return new CodeLensRegistrationOptions
-        {
-            DocumentSelector = TextDocumentSelector.ForLanguage("csharp"),
-            ResolveProvider = false,
-        };
-    }
-
-    private async Task<IReadOnlySet<string>?> GetDbSetNamesAsync(string assemblyPath, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var normalizedPath = Path.GetFullPath(assemblyPath);
-            var assemblyTimestamp = File.GetLastWriteTimeUtc(normalizedPath).Ticks;
-
-            if (_dbSetCache.TryGetValue(normalizedPath, out var cached)
-                && cached.AssemblyTimestamp == assemblyTimestamp)
-            {
-                return cached.DbSetNames;
-            }
-
-            var snapshot = await _engine.InspectModelAsync(new ModelInspectionRequest
-            {
-                AssemblyPath = normalizedPath,
-            }, cancellationToken);
-
-            var names = snapshot.DbSetProperties
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .ToHashSet(StringComparer.Ordinal);
-
-            _dbSetCache[normalizedPath] = new CachedDbSetNames(assemblyTimestamp, names);
-            LogDebug($"dbset-cache-update path={normalizedPath} count={names.Count}");
-            return names;
-        }
-        catch (Exception ex)
-        {
-            // Do not block CodeLens entirely when model inspection fails for a project.
-            // In that case we fall back to syntax-only candidate chains.
-            LogDebug($"dbset-inspection-failed type={ex.GetType().Name} message={ex.Message}");
-            return null;
-        }
-    }
-
-    private async Task<string?> GetSourceTextAsync(DocumentUri uri, CancellationToken cancellationToken)
-    {
-        var sourceText = _documentManager.GetDocumentText(uri);
+        var sourceText = _documentManager.GetDocumentText(documentUri);
         if (!string.IsNullOrWhiteSpace(sourceText))
         {
             return sourceText;
         }
 
-        var filePath = uri.GetFileSystemPath();
         if (!File.Exists(filePath))
         {
             return null;
         }
 
         return await File.ReadAllTextAsync(filePath, cancellationToken);
-    }
-
-    private string? ResolveTargetAssembly(string filePath)
-    {
-        if (_assemblyPathCache.TryGetValue(filePath, out var cachedAssemblyPath)
-            && File.Exists(cachedAssemblyPath))
-        {
-            return cachedAssemblyPath;
-        }
-
-        var resolved = AssemblyResolver.TryGetTargetAssembly(filePath);
-        if (!string.IsNullOrWhiteSpace(resolved)
-            && !resolved.StartsWith("DEBUG_FAIL", StringComparison.Ordinal)
-            && File.Exists(resolved))
-        {
-            _assemblyPathCache[filePath] = resolved;
-        }
-
-        return resolved;
     }
 
     private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
@@ -288,6 +178,5 @@ internal sealed class CodeLensHandler : CodeLensHandlerBase
         Console.Error.WriteLine($"[QL-CodeLens] {message}");
     }
 
-    private sealed record CachedDbSetNames(long AssemblyTimestamp, IReadOnlySet<string> DbSetNames);
-    private sealed record CachedCodeLensResult(int SourceHash, long CreatedAtTicks, CodeLensContainer Lenses);
+    private sealed record CachedCodeLensResult(int SourceHash, long CreatedAtTicks, CodeLens[] Lenses);
 }

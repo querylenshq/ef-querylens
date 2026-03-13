@@ -78,10 +78,16 @@ public sealed class ProjectAssemblyContext : IDisposable
                                {
                                  "runtimeOptions": {
                                    "tfm": "net8.0",
-                                   "framework": {
-                                     "name": "Microsoft.NETCore.App",
-                                     "version": "8.0.0"
-                                   }
+                                                                     "frameworks": [
+                                                                         {
+                                                                             "name": "Microsoft.NETCore.App",
+                                                                             "version": "8.0.0"
+                                                                         },
+                                                                         {
+                                                                             "name": "Microsoft.AspNetCore.App",
+                                                                             "version": "8.0.0"
+                                                                         }
+                                                                     ]
                                  }
                                }
                                """;
@@ -787,11 +793,7 @@ public sealed class ProjectAssemblyContext : IDisposable
         private static string[] BuildSharedFrameworkProbeDirs(string assemblyPath)
         {
             var frameworkRequests = ReadRuntimeFrameworkRequests(assemblyPath);
-            if (frameworkRequests.Count == 0)
-            {
-                frameworkRequests.Add(("Microsoft.NETCore.App", null));
-                frameworkRequests.Add(("Microsoft.AspNetCore.App", null));
-            }
+            EnsureBaselineFrameworkRequests(frameworkRequests);
 
             var roots = GetDotnetRoots();
             var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -812,6 +814,30 @@ public sealed class ProjectAssemblyContext : IDisposable
             }
 
             return dirs.ToArray();
+        }
+
+        private static void EnsureBaselineFrameworkRequests(ICollection<(string Name, string? Version)> frameworkRequests)
+        {
+            // Resolve core runtime assemblies from Microsoft.NETCore.App.
+            var netCoreVersion = frameworkRequests
+                .FirstOrDefault(f =>
+                    string.Equals(f.Name, "Microsoft.NETCore.App", StringComparison.OrdinalIgnoreCase))
+                .Version;
+
+            if (!frameworkRequests.Any(f =>
+                    string.Equals(f.Name, "Microsoft.NETCore.App", StringComparison.OrdinalIgnoreCase)))
+            {
+                frameworkRequests.Add(("Microsoft.NETCore.App", null));
+            }
+
+            // Some user projects (especially class-library outputs that need synthetic runtimeconfig)
+            // don't list AspNetCore even though factory code depends on Microsoft.Extensions.* assemblies.
+            // Probe AspNetCore shared framework too, preferring the same runtime train as NETCore when known.
+            if (!frameworkRequests.Any(f =>
+                    string.Equals(f.Name, "Microsoft.AspNetCore.App", StringComparison.OrdinalIgnoreCase)))
+            {
+                frameworkRequests.Add(("Microsoft.AspNetCore.App", netCoreVersion));
+            }
         }
 
         private static List<(string Name, string? Version)> ReadRuntimeFrameworkRequests(string assemblyPath)

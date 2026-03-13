@@ -152,6 +152,17 @@ public class QueryEvaluatorTests : IDisposable
     }
 
     [Fact]
+    public async Task Evaluate_SecondarySampleDbContext_Resolves()
+    {
+        var result = await TranslateAsync("db.CustomerDirectory", dbContextTypeName: "MySqlReportingDbContext");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.Contains("Customers", result.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
+    }
+
+    [Fact]
     public async Task Evaluate_MultipleEntities_EachReturnsSql()
     {
         string[] expressions = ["db.Orders", "db.Users", "db.Products", "db.Categories"];
@@ -753,6 +764,44 @@ public class QueryEvaluatorTests : IDisposable
         Assert.NotNull(result.Sql);
         Assert.Contains("WHERE", result.Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
+    }
+
+    [Fact]
+    public void CreateDbContextInstance_WhenSelectedExecutableAssemblyDiffers_RejectsFactoriesFromOtherAssemblies()
+    {
+        var dbContextType = _alcCtx.FindDbContextType(
+            "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext");
+        var wrongExecutableAssemblyPath = Path.Combine(
+            Path.GetDirectoryName(_alcCtx.AssemblyPath)!,
+            "SomeOtherHost.dll");
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            QueryEvaluator.CreateDbContextInstance(
+                dbContextType,
+                _alcCtx.LoadedAssemblies,
+                wrongExecutableAssemblyPath));
+
+        Assert.Contains("executable project", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("class library", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SomeOtherHost.dll", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CreateDbContextInstance_WhenFactoryInSelectedExecutableAssembly_Succeeds()
+    {
+        var dbContextType = _alcCtx.FindDbContextType(
+            "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext");
+
+        var created = QueryEvaluator.CreateDbContextInstance(
+            dbContextType,
+            _alcCtx.LoadedAssemblies,
+            _alcCtx.AssemblyPath);
+
+        Assert.NotNull(created.Instance);
+        Assert.Equal("querylens-factory", created.Strategy);
+
+        if (created.Instance is IDisposable disposable)
+            disposable.Dispose();
     }
 
     [Fact]

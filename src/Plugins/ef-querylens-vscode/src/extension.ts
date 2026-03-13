@@ -1,13 +1,16 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import {
     commands,
     env,
     ExtensionContext,
     Hover,
     MarkdownString,
+    OutputChannel,
     Position,
     Range,
     Selection,
+    TextDocument,
     TextEditorRevealType,
     Uri,
     window,
@@ -22,45 +25,84 @@ import {
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient;
+let queryLensOutputChannel: OutputChannel | undefined;
+const warmedDocumentVersions = new Map<string, number>();
+const warmupInFlightUris = new Set<string>();
 
 export function activate(context: ExtensionContext) {
+    queryLensOutputChannel = window.createOutputChannel('EF QueryLens');
+    context.subscriptions.push(queryLensOutputChannel);
+
     // Let's resolve the path to the compiled DLL of the LSP server
     const serverPath = context.asAbsolutePath(
         path.join('..', '..', 'EFQueryLens.Lsp', 'bin', 'Debug', 'net10.0', 'EFQueryLens.Lsp.dll')
     );
+    const fallbackRepoRoot = path.resolve(context.extensionPath, '..', '..', '..');
+    const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath ?? fallbackRepoRoot;
+    const daemonDllPath = context.asAbsolutePath(
+        path.join('..', '..', 'EFQueryLens.Daemon', 'bin', 'Debug', 'net10.0', 'EFQueryLens.Daemon.dll')
+    );
+    const daemonExePath = context.asAbsolutePath(
+        path.join('..', '..', 'EFQueryLens.Daemon', 'bin', 'Debug', 'net10.0', 'EFQueryLens.Daemon.exe')
+    );
 
     const settings = readSettings();
+    logOutput(`activate workspace=${workspaceRoot}`);
+
+    const serverEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        QUERYLENS_WORKSPACE: workspaceRoot,
+        QUERYLENS_DAEMON_WORKSPACE: workspaceRoot,
+        QUERYLENS_DAEMON_START_TIMEOUT_MS: '30000',
+        QUERYLENS_DAEMON_CONNECT_TIMEOUT_MS: '10000',
+        QUERYLENS_MAX_CODELENS_PER_DOCUMENT: String(settings.maxCodeLensPerDocument),
+        QUERYLENS_CODELENS_DEBOUNCE_MS: String(settings.codeLensDebounceMs),
+        QUERYLENS_CODELENS_USE_MODEL_FILTER: settings.codeLensUseModelFilter ? '1' : '0',
+        QUERYLENS_DEBUG: settings.debugLogsEnabled ? '1' : '0',
+    };
+
+    if (fs.existsSync(daemonExePath)) {
+        serverEnv.QUERYLENS_DAEMON_EXE = daemonExePath;
+    } else if (settings.debugLogsEnabled) {
+        logOutput(`[EFQueryLens] daemon exe not found at ${daemonExePath}`);
+    }
+
+    if (fs.existsSync(daemonDllPath)) {
+        serverEnv.QUERYLENS_DAEMON_DLL = daemonDllPath;
+    } else if (settings.debugLogsEnabled) {
+        logOutput(`[EFQueryLens] daemon dll not found at ${daemonDllPath}`);
+    }
 
     const serverOptions: ServerOptions = {
         command: 'dotnet',
         args: [serverPath],
         options: {
-            cwd: path.join(context.extensionPath, '..', '..'),
-            env: {
-                ...process.env,
-                QUERYLENS_MAX_CODELENS_PER_DOCUMENT: String(settings.maxCodeLensPerDocument),
-                QUERYLENS_CODELENS_DEBOUNCE_MS: String(settings.codeLensDebounceMs),
-                QUERYLENS_CODELENS_USE_MODEL_FILTER: settings.codeLensUseModelFilter ? '1' : '0',
-                QUERYLENS_DEBUG: settings.debugLogsEnabled ? '1' : '0',
-            }
+            cwd: workspaceRoot,
+            env: serverEnv,
         }
     };
 
     const clientOptions: LanguageClientOptions = {
         // Register the server for plain C# documents
         documentSelector: [{ scheme: 'file', language: 'csharp' }],
+        outputChannel: queryLensOutputChannel,
         middleware: {
             provideCodeLenses: async (document, token, next) => {
                 const start = Date.now();
                 const result = await next(document, token);
 
+                // Remove "Preview SQL" CodeLens badges — hover is the primary UX.
+                const filtered = Array.isArray(result)
+                    ? result.filter((lens: { command?: { command?: string } }) => lens?.command?.command !== 'efquerylens.showSql')
+                    : result;
+
                 if (settings.debugLogsEnabled) {
                     const elapsed = Date.now() - start;
-                    const count = Array.isArray(result) ? result.length : 0;
-                    console.log(`[EFQueryLens] provideCodeLenses uri=${document.uri.toString()} count=${count} elapsedMs=${elapsed}`);
+                    const count = Array.isArray(filtered) ? filtered.length : 0;
+                    logOutput(`[EFQueryLens] provideCodeLenses uri=${document.uri.toString()} count=${count} elapsedMs=${elapsed}`);
                 }
 
-                return result;
+                return filtered;
             },
             provideHover: async (document, position, token, next) => {
                 const hover = await next(document, position, token);
@@ -81,21 +123,36 @@ export function activate(context: ExtensionContext) {
 
     const showSqlCommand = commands.registerCommand(
         'efquerylens.showSql',
-        async (uriInput: string, lineInput: number, characterInput: number) => {
+        async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
+            if (settings.debugLogsEnabled) {
+                logOutput(
+                    `[EFQueryLens] command showSql uriType=${typeof uriInput} lineType=${typeof lineInput} charType=${typeof characterInput} uri=${String(uriInput)} line=${String(lineInput)} char=${String(characterInput)}`
+                );
+            }
             await showSqlPopupFromLens(uriInput, lineInput, characterInput);
         }
     );
 
     const copySqlCommand = commands.registerCommand(
         'efquerylens.copySql',
-        async (uriInput: string, lineInput: number, characterInput: number) => {
+        async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
+            if (settings.debugLogsEnabled) {
+                logOutput(
+                    `[EFQueryLens] command copySql uriType=${typeof uriInput} lineType=${typeof lineInput} charType=${typeof characterInput} uri=${String(uriInput)} line=${String(lineInput)} char=${String(characterInput)}`
+                );
+            }
             await copySqlFromLens(uriInput, lineInput, characterInput, settings.formatSqlOnShow, settings.sqlDialect);
         }
     );
 
     const openSqlEditorCommand = commands.registerCommand(
         'efquerylens.openSqlEditor',
-        async (uriInput: string, lineInput: number, characterInput: number) => {
+        async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
+            if (settings.debugLogsEnabled) {
+                logOutput(
+                    `[EFQueryLens] command openSqlEditor uriType=${typeof uriInput} lineType=${typeof lineInput} charType=${typeof characterInput} uri=${String(uriInput)} line=${String(lineInput)} char=${String(characterInput)}`
+                );
+            }
             await openSqlEditorFromLens(uriInput, lineInput, characterInput, settings.formatSqlOnShow, settings.sqlDialect);
         }
     );
@@ -134,12 +191,107 @@ export function activate(context: ExtensionContext) {
         }
     );
 
+    const openOutputCommand = commands.registerCommand(
+        'efquerylens.openOutput',
+        async () => {
+            queryLensOutputChannel?.show(true);
+        }
+    );
+
     context.subscriptions.push(showSqlCommand);
     context.subscriptions.push(copySqlCommand);
     context.subscriptions.push(openSqlEditorCommand);
     context.subscriptions.push(showSqlFromCursorCommand);
     context.subscriptions.push(copySqlFromCursorCommand);
+    context.subscriptions.push(openOutputCommand);
+
+    const scheduleWarmup = (document: TextDocument | undefined) => {
+        if (!document) {
+            return;
+        }
+
+        if (document.uri.scheme !== 'file' || document.languageId !== 'csharp') {
+            return;
+        }
+
+        const uri = document.uri.toString();
+        const lastWarmedVersion = warmedDocumentVersions.get(uri);
+        if (typeof lastWarmedVersion === 'number' && lastWarmedVersion >= document.version) {
+            return;
+        }
+
+        if (warmupInFlightUris.has(uri)) {
+            return;
+        }
+
+        warmupInFlightUris.add(uri);
+
+        const onReady = (client as unknown as { onReady?: () => Promise<void> }).onReady;
+        const readyPromise = typeof onReady === 'function'
+            ? onReady.call(client)
+            : Promise.resolve();
+
+        void readyPromise.then(async () => {
+            try {
+                const codeLenses = await client.sendRequest('textDocument/codeLens', {
+                    textDocument: { uri },
+                }) as unknown;
+
+                let line = 0;
+                let character = 0;
+                if (Array.isArray(codeLenses)) {
+                    for (const lens of codeLenses) {
+                        const args = (lens as { command?: { arguments?: unknown[] } })?.command?.arguments;
+                        if (Array.isArray(args) && args.length >= 3) {
+                            const lensLine = Number(args[1]);
+                            const lensCharacter = Number(args[2]);
+                            if (Number.isFinite(lensLine) && Number.isFinite(lensCharacter)) {
+                                line = Math.max(0, Math.floor(lensLine));
+                                character = Math.max(0, Math.floor(lensCharacter));
+                                break;
+                            }
+                        }
+
+                        const start = (lens as { range?: { start?: { line?: number; character?: number } } })?.range?.start;
+                        const startLine = start?.line;
+                        const startCharacter = start?.character;
+                        if (typeof startLine === 'number' && typeof startCharacter === 'number'
+                            && Number.isFinite(startLine) && Number.isFinite(startCharacter)) {
+                            line = Math.max(0, Math.floor(startLine));
+                            character = Math.max(0, Math.floor(startCharacter));
+                            break;
+                        }
+                    }
+                }
+
+                await client.sendRequest('textDocument/hover', {
+                    textDocument: { uri },
+                    position: { line, character },
+                });
+
+                warmedDocumentVersions.set(uri, document.version);
+                if (settings.debugLogsEnabled) {
+                    logOutput(`[EFQueryLens] warmup hover uri=${uri} line=${line} character=${character}`);
+                }
+            } catch (error) {
+                if (settings.debugLogsEnabled) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    logOutput(`[EFQueryLens] warmup skipped uri=${uri} reason=${message}`);
+                }
+            } finally {
+                warmupInFlightUris.delete(uri);
+            }
+        });
+    };
+
+    context.subscriptions.push(
+        workspace.onDidOpenTextDocument(document => scheduleWarmup(document)),
+        window.onDidChangeActiveTextEditor(editor => scheduleWarmup(editor?.document))
+    );
+
     client.start();
+    logOutput('language-client-started');
+    scheduleWarmup(window.activeTextEditor?.document);
 }
 
 export function deactivate(): Thenable<void> | undefined {
@@ -150,9 +302,9 @@ export function deactivate(): Thenable<void> | undefined {
 }
 
 async function showSqlPopupFromLens(
-    uriInput: string,
-    lineInput: number,
-    characterInput: number
+    uriInput: unknown,
+    lineInput: unknown,
+    characterInput: unknown
 ): Promise<void> {
     const uri = parseUri(uriInput);
     if (!uri) {
@@ -166,9 +318,11 @@ async function showSqlPopupFromLens(
         preserveFocus: false,
     });
 
-    const line = clamp(lineInput, 0, Math.max(document.lineCount - 1, 0));
+    const requestedLine = coerceNonNegativeInt(lineInput, 0);
+    const requestedCharacter = coerceNonNegativeInt(characterInput, 0);
+    const line = clamp(requestedLine, 0, Math.max(document.lineCount - 1, 0));
     const lineText = document.lineAt(line).text;
-    const character = clamp(characterInput, 0, lineText.length);
+    const character = clamp(requestedCharacter, 0, lineText.length);
     const position = new Position(line, character);
 
     editor.selection = new Selection(position, position);
@@ -178,9 +332,9 @@ async function showSqlPopupFromLens(
 }
 
 async function copySqlFromLens(
-    uriInput: string,
-    lineInput: number,
-    characterInput: number,
+    uriInput: unknown,
+    lineInput: unknown,
+    characterInput: unknown,
     formatSqlOnShow: boolean,
     sqlDialect: QueryLensSqlDialect
 ): Promise<void> {
@@ -200,9 +354,9 @@ async function copySqlFromLens(
 }
 
 async function openSqlEditorFromLens(
-    uriInput: string,
-    lineInput: number,
-    characterInput: number,
+    uriInput: unknown,
+    lineInput: unknown,
+    characterInput: unknown,
     formatSqlOnShow: boolean,
     sqlDialect: QueryLensSqlDialect
 ): Promise<void> {
@@ -238,9 +392,9 @@ async function openSqlPreviewInEditor(sqlText: string, sourceFilePath?: string):
 }
 
 async function getSqlForLens(
-    uriInput: string,
-    lineInput: number,
-    characterInput: number,
+    uriInput: unknown,
+    lineInput: unknown,
+    characterInput: unknown,
     formatSqlOnShow: boolean,
     sqlDialect: QueryLensSqlDialect,
     includeContextComments: boolean
@@ -256,11 +410,13 @@ async function getSqlForLens(
     }
 
     try {
+        const line = coerceNonNegativeInt(lineInput, 0);
+        const character = coerceNonNegativeInt(characterInput, 0);
         const hover = await client.sendRequest('textDocument/hover', {
             textDocument: { uri: uri.toString() },
             position: {
-                line: Number.isFinite(lineInput) ? lineInput : 0,
-                character: Number.isFinite(characterInput) ? characterInput : 0,
+                line,
+                character,
             }
         });
 
@@ -305,6 +461,26 @@ function clamp(value: number, min: number, max: number): number {
     }
 
     return Math.min(max, Math.max(min, value));
+}
+
+function coerceNonNegativeInt(value: unknown, fallback: number): number {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return Math.max(0, Math.floor(value));
+    }
+
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.length === 0) {
+            return fallback;
+        }
+
+        const parsed = Number(trimmed);
+        if (Number.isFinite(parsed)) {
+            return Math.max(0, Math.floor(parsed));
+        }
+    }
+
+    return fallback;
 }
 
 function getActiveEditorLocation(): { uri: Uri; line: number; character: number } | null {
@@ -663,6 +839,10 @@ function describeMode(mode: string): string {
         default:
             return mode;
     }
+}
+
+function logOutput(message: string): void {
+    queryLensOutputChannel?.appendLine(message);
 }
 
 function enableTrustedHoverCommands(

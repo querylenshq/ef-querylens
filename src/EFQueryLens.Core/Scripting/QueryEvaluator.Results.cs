@@ -8,19 +8,20 @@ public sealed partial class QueryEvaluator
         string expression,
         IReadOnlyList<QuerySqlCommand> commands)
     {
-        if (commands.Count != 1 || string.IsNullOrWhiteSpace(expression))
+        if (string.IsNullOrWhiteSpace(expression))
             return false;
 
+        // Warn whenever the expression has nested materialization inside a projection,
+        // regardless of how many commands were captured. Multiple commands means the split
+        // queries were captured, but the warning is still informative about the query shape.
         var hasSelect = expression.Contains(".Select(", StringComparison.OrdinalIgnoreCase);
         if (!hasSelect)
             return false;
 
-        var hasNestedMaterialization = expression.Contains(".ToList(", StringComparison.OrdinalIgnoreCase)
+        return expression.Contains(".ToList(", StringComparison.OrdinalIgnoreCase)
             || expression.Contains(".ToArray(", StringComparison.OrdinalIgnoreCase)
             || expression.Contains(".ToDictionary(", StringComparison.OrdinalIgnoreCase)
             || expression.Contains(".ToLookup(", StringComparison.OrdinalIgnoreCase);
-
-        return hasNestedMaterialization;
     }
 
     private static void AddWarningIfMissing(List<QueryWarning> warnings, QueryWarning warning)
@@ -47,7 +48,8 @@ public sealed partial class QueryEvaluator
         Type? dbContextType,
         IEnumerable<Assembly>? userAssemblies,
         TimeSpan elapsed,
-        string creationStrategy = "unknown") =>
+        string creationStrategy = "unknown",
+        EvaluationStageTimings? stageTimings = null) =>
         new()
         {
             DbContextType = dbContextType?.FullName ?? "unknown",
@@ -55,6 +57,14 @@ public sealed partial class QueryEvaluator
             EfCoreVersion = GetEfCoreVersion(userAssemblies),
             TranslationTime = elapsed,
             CreationStrategy = creationStrategy,
+            ContextResolutionTime = stageTimings?.ContextResolution,
+            DbContextCreationTime = stageTimings?.DbContextCreation,
+            MetadataReferenceBuildTime = stageTimings?.MetadataReferenceBuild,
+            RoslynCompilationTime = stageTimings?.RoslynCompilation,
+            CompilationRetryCount = stageTimings?.CompilationRetryCount,
+            EvalAssemblyLoadTime = stageTimings?.EvalAssemblyLoad,
+            RunnerExecutionTime = stageTimings?.RunnerExecution,
+            ToQueryStringFallbackTime = stageTimings?.ToQueryStringFallback,
         };
 
     private static string DetectProviderName(IEnumerable<Assembly> assemblies)

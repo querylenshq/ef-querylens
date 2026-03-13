@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
@@ -45,30 +44,118 @@ public sealed partial class QueryEvaluator
 
     private readonly ConcurrentDictionary<string, MetadataRefEntry> _refCache = new();
 
+    // Compiled + loaded eval runner cache: skip the entire Roslyn pipeline on warm hits.
+    // Keys follow the pattern: "shadowAssemblyPath|timestampTicks|assemblySetHash|dbContextTypeName|requestHash"
+    // Evicted whenever the ALC for a shadow assembly is released (InvalidateMetadataRefCache).
+    private sealed record EvalRunnerEntry(Assembly EvalAssembly, MethodInfo RunMethod);
+    private readonly ConcurrentDictionary<string, EvalRunnerEntry> _evalRunnerCache = new(StringComparer.Ordinal);
+
+    // Known namespace/type index cache keyed by assemblySetHash — the scan is expensive
+    // on large projects but the result only changes when the assembly set changes.
+    private readonly ConcurrentDictionary<string, (HashSet<string> Namespaces, HashSet<string> Types)>
+        _namespaceTypeIndexCache = new(StringComparer.Ordinal);
+
+    internal sealed record EvaluationStageTimings(
+        TimeSpan? ContextResolution,
+        TimeSpan? DbContextCreation,
+        TimeSpan? MetadataReferenceBuild,
+        TimeSpan? RoslynCompilation,
+        int CompilationRetryCount,
+        TimeSpan? EvalAssemblyLoad,
+        TimeSpan? RunnerExecution,
+        TimeSpan? ToQueryStringFallback);
+
+    internal void InvalidateMetadataRefCache(string assemblyPath)
+    {
+        if (string.IsNullOrWhiteSpace(assemblyPath))
+            return;
+
+        var normalized = Path.GetFullPath(assemblyPath);
+        _refCache.TryRemove(normalized, out _);
+
+        // Evict all eval runner cache entries for this assembly — they hold Assembly
+        // references that would prevent the collectible ALC from being GC'd.
+        var prefix = normalized + "|";
+        foreach (var key in _evalRunnerCache.Keys
+                     .Where(k => k.StartsWith(prefix, StringComparison.Ordinal))
+                     .ToList())
+        {
+            _evalRunnerCache.TryRemove(key, out _);
+        }
+
+        // The assembly set likely changed; discard the cached namespace/type index.
+        _namespaceTypeIndexCache.Clear();
+    }
+
+    private static string ComputeRequestHash(TranslationRequest request)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(request.Expression).Append('\0');
+        sb.Append(request.ContextVariableName).Append('\0');
+        foreach (var imp in request.AdditionalImports)
+            sb.Append(imp).Append('\0');
+        foreach (var kv in request.UsingAliases.OrderBy(x => x.Key, StringComparer.Ordinal))
+            sb.Append(kv.Key).Append('=').Append(kv.Value).Append('\0');
+        foreach (var s in request.UsingStaticTypes)
+            sb.Append(s).Append('\0');
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(sb.ToString())))[..16];
+    }
+
+    private (HashSet<string> Namespaces, HashSet<string> Types) GetOrBuildNamespaceTypeIndex(
+        string assemblySetHash,
+        IReadOnlyList<Assembly> compilationAssemblies)
+    {
+        if (_namespaceTypeIndexCache.TryGetValue(assemblySetHash, out var cached))
+            return cached;
+        var result = BuildKnownNamespaceAndTypeIndex(compilationAssemblies);
+        _namespaceTypeIndexCache[assemblySetHash] = result;
+        return result;
+    }
+
     // Roslyn compilation options are reused across all eval compilations.
-    private static readonly CSharpCompilationOptions s_compilationOptions =
+    private static readonly CSharpCompilationOptions SCompilationOptions =
         new(OutputKind.DynamicallyLinkedLibrary,
             optimizationLevel: OptimizationLevel.Release,
             allowUnsafe: false,
             nullableContextOptions: NullableContextOptions.Disable);
 
-    private static readonly CSharpParseOptions s_parseOptions =
+    private static readonly CSharpParseOptions SParseOptions =
         CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest);
 
     /// <summary>
     /// Translates a LINQ expression to SQL via execution-based SQL capture.
     /// </summary>
-    public async Task<QueryTranslationResult> EvaluateAsync(
+    public Task<QueryTranslationResult> EvaluateAsync(
         ProjectAssemblyContext alcCtx,
         TranslationRequest request,
         CancellationToken ct = default)
+        => EvaluateAsyncInternal(alcCtx, request, ct, null, null);
+
+    internal Task<QueryTranslationResult> EvaluateAsync(
+        ProjectAssemblyContext alcCtx,
+        TranslationRequest request,
+        CancellationToken ct,
+        IDbContextPoolProvider? dbContextPoolProvider,
+        string? poolAssemblyPath)
+        => EvaluateAsyncInternal(alcCtx, request, ct, dbContextPoolProvider, poolAssemblyPath);
+
+    private async Task<QueryTranslationResult> EvaluateAsyncInternal(
+        ProjectAssemblyContext alcCtx,
+        TranslationRequest request,
+        CancellationToken ct,
+        IDbContextPoolProvider? dbContextPoolProvider,
+        string? poolAssemblyPath)
     {
         var sw = Stopwatch.StartNew();
+        var compilationRetryCount = 0;
+        IDbContextLease? dbContextLease = null;
 
         try
         {
             // 1. Resolve the DbContext type from the user's ALC.
             Type dbContextType;
+            var contextResolutionWatch = Stopwatch.StartNew();
             try
             {
                 dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName, request.Expression);
@@ -78,6 +165,8 @@ public sealed partial class QueryEvaluator
                 TryLoadSiblingAssemblies(alcCtx);
                 dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName, request.Expression);
             }
+            contextResolutionWatch.Stop();
+            TimeSpan? contextResolutionTime = contextResolutionWatch.Elapsed;
 
             if (IsUnsupportedTopLevelMethodInvocation(request.Expression, request.ContextVariableName))
             {
@@ -89,165 +178,222 @@ public sealed partial class QueryEvaluator
             }
 
             // 2. Create DbContext via factory (QueryLens-native or EF Design-Time).
-            var (dbInstance, creationStrategy) =
-                CreateDbContextInstance(dbContextType, alcCtx.LoadedAssemblies);
-
-            // 3. Build compilation assembly set for eval runner generation.
-            var compilationAssemblies = BuildCompilationAssemblySet(alcCtx);
-
-            // 4. Retrieve or build MetadataReferences for this assembly set.
-            var refs = GetOrBuildMetadataRefs(alcCtx, compilationAssemblies);
-
-            // 5. Build known namespace/type index for import filtering.
-            var (knownNamespaces, knownTypes) = BuildKnownNamespaceAndTypeIndex(
-                compilationAssemblies);
-
-            // 6. Compile -> emit -> load into user ALC -> invoke Run.
-            // Retry with auto-stub declarations on CS0103 (missing local variables).
-            var workingExpression = request.Expression;
-            var stubs = new List<string>();
-            var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);
-            var maxRetries = 5;
-            CSharpCompilation compilation = null!;
-
-            while (true)
+            var dbContextCreationWatch = Stopwatch.StartNew();
+            object dbInstance;
+            string creationStrategy;
+            if (dbContextPoolProvider is not null && !string.IsNullOrWhiteSpace(poolAssemblyPath))
             {
-                ct.ThrowIfCancellationRequested();
-
-                var workingRequest = request with { Expression = workingExpression };
-
-                var src = BuildEvalSource(
+                dbContextLease = await dbContextPoolProvider.AcquireDbContextLeaseAsync(
                     dbContextType,
-                    workingRequest,
-                    stubs,
-                    knownNamespaces,
-                    knownTypes,
-                    synthesizedUsingStaticTypes);
-                compilation = BuildCompilation(src, refs);
-                var errors = compilation.GetDiagnostics()
-                    .Where(d => d.Severity == DiagnosticSeverity.Error)
-                    .ToList();
+                    poolAssemblyPath,
+                    alcCtx.LoadedAssemblies,
+                    ct);
+                dbInstance = dbContextLease.Instance;
+                creationStrategy = dbContextLease.Strategy;
+            }
+            else
+            {
+                var created = CreateDbContextInstance(
+                    dbContextType,
+                    alcCtx.LoadedAssemblies,
+                    alcCtx.AssemblyPath);
+                dbInstance = created.Instance;
+                creationStrategy = created.Strategy;
+            }
+            dbContextCreationWatch.Stop();
+            TimeSpan? dbContextCreationTime = dbContextCreationWatch.Elapsed;
 
-                var hardErrors = errors.Where(e => e.Id is not ("CS0103" or "CS1061" or "CS0019" or "CS8122")).ToList();
-                if (hardErrors.Count > 0)
+            // 3. Build compilation assembly set and compute eval-runner cache key.
+            var compilationAssemblies = BuildCompilationAssemblySet(alcCtx);
+            var asmSetHash = ComputeAssemblySetHash(
+                compilationAssemblies);
+            var evalCacheKey =
+                $"{alcCtx.AssemblyPath}|{alcCtx.AssemblyTimestamp.Ticks}|{asmSetHash}|{dbContextType.FullName}|{ComputeRequestHash(request)}";
+
+            MethodInfo runMethod;
+            TimeSpan? metadataReferenceBuildTime;
+            TimeSpan? roslynCompilationTime;
+            TimeSpan? evalAssemblyLoadTime;
+            if (_evalRunnerCache.TryGetValue(evalCacheKey, out var cachedRunner))
+            {
+                // Warm path: skip MetadataRefs, namespace scan, compile, emit, load.
+                runMethod = cachedRunner.RunMethod;
+                metadataReferenceBuildTime = TimeSpan.Zero;
+                roslynCompilationTime = TimeSpan.Zero;
+                evalAssemblyLoadTime = TimeSpan.Zero;
+            }
+            else
+            {
+                // 4. Retrieve or build MetadataReferences for this assembly set.
+                var metadataReferenceWatch = Stopwatch.StartNew();
+                var refs = GetOrBuildMetadataRefs(alcCtx, compilationAssemblies);
+                metadataReferenceWatch.Stop();
+                metadataReferenceBuildTime = metadataReferenceWatch.Elapsed;
+
+                // 5. Build known namespace/type index for import filtering (cached by assemblySetHash).
+                var (knownNamespaces, knownTypes) = GetOrBuildNamespaceTypeIndex(asmSetHash, compilationAssemblies);
+
+                // 6. Compile -> emit -> load into user ALC -> invoke Run.
+                // Retry with auto-stub declarations on CS0103 (missing local variables).
+                var workingExpression = request.Expression;
+                var stubs = new List<string>();
+                var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);
+                var maxRetries = 5;
+                CSharpCompilation compilation;
+                var roslynCompilationWatch = Stopwatch.StartNew();
+
+                while (true)
                 {
-                    return Failure(
-                        $"Compilation error: {string.Join("; ", hardErrors.Select(d => d.GetMessage()))}",
-                        sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
-                }
+                    ct.ThrowIfCancellationRequested();
 
-                if (errors.Count == 0)
-                    break;
+                    var workingRequest = request with { Expression = workingExpression };
 
-                if (maxRetries-- <= 0)
-                {
-                    return Failure(
-                        $"Compilation error (too many retries): {string.Join("; ", errors.Select(d => d.GetMessage()))}",
-                        sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
-                }
-
-                var missingNames = errors
-                    .Where(d => d.Id == "CS0103")
-                    .Select(d =>
-                    {
-                        var msg = d.GetMessage();
-                        var s = msg.IndexOf('\'');
-                        var e2 = msg.IndexOf('\'', s + 1);
-                        return s >= 0 && e2 > s ? msg[(s + 1)..e2] : null;
-                    })
-                    .Where(n => n is not null)
-                    .Distinct()
-                    .Where(n => !string.IsNullOrWhiteSpace(n)
-                                && !LooksLikeTypeOrNamespacePrefix(n!, workingRequest.Expression, workingRequest.UsingAliases))
-                    .ToList();
-
-                var changed = false;
-
-                var rootId = TryExtractRootIdentifier(workingRequest.Expression);
-                foreach (var n in missingNames)
-                {
-                    if (stubs.Any(s => s.Contains($" {n} ") || s.Contains($" {n};")))
-                        continue;
-
-                    stubs.Add(BuildStubDeclaration(n!, rootId, workingRequest, dbContextType));
-                    changed = true;
-                }
-
-                if (TryNormalizeRootContextHopFromErrors(
-                        errors,
-                        workingRequest.Expression,
+                    var src = BuildEvalSource(
                         dbContextType,
-                        out var normalizedExpression)
-                    && !string.Equals(normalizedExpression, workingExpression, StringComparison.Ordinal))
-                {
-                    workingExpression = normalizedExpression;
-                    changed = true;
-                }
+                        workingRequest,
+                        stubs,
+                        knownNamespaces,
+                        knownTypes,
+                        synthesizedUsingStaticTypes);
+                    compilation = BuildCompilation(src, refs);
+                    var errors = compilation.GetDiagnostics()
+                        .Where(d => d.Severity == DiagnosticSeverity.Error)
+                        .ToList();
 
-                if (TryNormalizePatternTernaryComparisonFromErrors(
-                        errors,
-                        workingExpression,
-                        out var ternaryNormalizedExpression)
-                    && !string.Equals(ternaryNormalizedExpression, workingExpression, StringComparison.Ordinal))
-                {
-                    workingExpression = ternaryNormalizedExpression;
-                    changed = true;
-                }
-
-                if (TryNormalizeUnsupportedPatternMatchingFromErrors(
-                        errors,
-                        workingExpression,
-                        out var patternNormalizedExpression)
-                    && !string.Equals(patternNormalizedExpression, workingExpression, StringComparison.Ordinal))
-                {
-                    workingExpression = patternNormalizedExpression;
-                    changed = true;
-                }
-
-                foreach (var import in InferMissingExtensionStaticImports(errors, compilationAssemblies))
-                {
-                    if (synthesizedUsingStaticTypes.Add(import))
+                    var hardErrors = errors.Where(e => e.Id is not ("CS0103" or "CS1061" or "CS0019" or "CS8122")).ToList();
+                    if (hardErrors.Count > 0)
                     {
+                        return Failure(
+                            $"Compilation error: {string.Join("; ", hardErrors.Select(d => d.GetMessage()))}",
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                    }
+
+                    if (errors.Count == 0)
+                        break;
+
+                    if (maxRetries-- <= 0)
+                    {
+                        return Failure(
+                            $"Compilation error (too many retries): {string.Join("; ", errors.Select(d => d.GetMessage()))}",
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                    }
+
+                    compilationRetryCount++;
+
+                    var missingNames = errors
+                        .Where(d => d.Id == "CS0103")
+                        .Select(d =>
+                        {
+                            var msg = d.GetMessage();
+                            var s = msg.IndexOf('\'');
+                            var e2 = msg.IndexOf('\'', s + 1);
+                            return s >= 0 && e2 > s ? msg[(s + 1)..e2] : null;
+                        })
+                        .Where(n => n is not null)
+                        .Distinct()
+                        .Where(n => !string.IsNullOrWhiteSpace(n)
+                                    && !LooksLikeTypeOrNamespacePrefix(n, workingRequest.Expression, workingRequest.UsingAliases))
+                        .ToList();
+
+                    var changed = false;
+
+                    var rootId = TryExtractRootIdentifier(workingRequest.Expression);
+                    foreach (var n in missingNames)
+                    {
+                        if (stubs.Any(s => s.Contains($" {n} ") || s.Contains($" {n};")))
+                            continue;
+
+                        stubs.Add(BuildStubDeclaration(n!, rootId, workingRequest, dbContextType));
                         changed = true;
                     }
-                }
 
-                if (!changed)
+                    if (TryNormalizeRootContextHopFromErrors(
+                            errors,
+                            workingRequest.Expression,
+                            dbContextType,
+                            out var normalizedExpression)
+                        && !string.Equals(normalizedExpression, workingExpression, StringComparison.Ordinal))
+                    {
+                        workingExpression = normalizedExpression;
+                        changed = true;
+                    }
+
+                    if (TryNormalizePatternTernaryComparisonFromErrors(
+                            errors,
+                            workingExpression,
+                            out var ternaryNormalizedExpression)
+                        && !string.Equals(ternaryNormalizedExpression, workingExpression, StringComparison.Ordinal))
+                    {
+                        workingExpression = ternaryNormalizedExpression;
+                        changed = true;
+                    }
+
+                    if (TryNormalizeUnsupportedPatternMatchingFromErrors(
+                            errors,
+                            workingExpression,
+                            out var patternNormalizedExpression)
+                        && !string.Equals(patternNormalizedExpression, workingExpression, StringComparison.Ordinal))
+                    {
+                        workingExpression = patternNormalizedExpression;
+                        changed = true;
+                    }
+
+                    foreach (var import in InferMissingExtensionStaticImports(errors, compilationAssemblies))
+                    {
+                        if (synthesizedUsingStaticTypes.Add(import))
+                        {
+                            changed = true;
+                        }
+                    }
+
+                    if (!changed)
+                    {
+                        return Failure(
+                            $"Compilation error: {string.Join("; ", errors.Select(d => d.GetMessage()))}",
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                    }
+                }
+                roslynCompilationWatch.Stop();
+                roslynCompilationTime = roslynCompilationWatch.Elapsed;
+
+                // Emit to MemoryStream and load into the user's isolated ALC.
+                var evalAssemblyLoadWatch = Stopwatch.StartNew();
+                Assembly evalAssembly;
+                using (var ms = new MemoryStream())
                 {
-                    return Failure(
-                        $"Compilation error: {string.Join("; ", errors.Select(d => d.GetMessage()))}",
-                        sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                    var emitResult = compilation.Emit(ms);
+                    if (!emitResult.Success)
+                    {
+                        return Failure(
+                            $"Emit error: {string.Join("; ", emitResult.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.GetMessage()))}",
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                    }
+
+                    ms.Position = 0;
+                    evalAssembly = alcCtx.LoadEvalAssembly(ms);
                 }
-            }
+                evalAssemblyLoadWatch.Stop();
+                evalAssemblyLoadTime = evalAssemblyLoadWatch.Elapsed;
 
-            // Emit to MemoryStream and load into the user's isolated ALC.
-            Assembly evalAssembly;
-            using (var ms = new MemoryStream())
-            {
-                var emitResult = compilation.Emit(ms);
-                if (!emitResult.Success)
-                {
-                    return Failure(
-                        $"Emit error: {string.Join("; ", emitResult.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.GetMessage()))}",
-                        sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
-                }
+                var runType = evalAssembly.GetType("__QueryLensRunner__")
+                    ?? throw new InvalidOperationException("Could not find __QueryLensRunner__ in eval assembly.");
+                runMethod = runType.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
+                    ?? throw new InvalidOperationException("Could not find Run method in __QueryLensRunner__.");
 
-                ms.Position = 0;
-                evalAssembly = alcCtx.LoadEvalAssembly(ms);
-            }
-
-            var runType = evalAssembly.GetType("__QueryLensRunner__")
-                ?? throw new InvalidOperationException("Could not find __QueryLensRunner__ in eval assembly.");
-            var runMethod = runType.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
-                ?? throw new InvalidOperationException("Could not find Run method in __QueryLensRunner__.");
+                _evalRunnerCache[evalCacheKey] = new EvalRunnerEntry(evalAssembly, runMethod);
+            } // end else (eval runner cache miss)
 
             // 7. Execute and capture SQL.
             var warnings = new List<QueryWarning>();
             IReadOnlyList<QuerySqlCommand> commands;
 
+            var runnerExecutionWatch = Stopwatch.StartNew();
             var runPayload = runMethod.Invoke(null, [dbInstance]);
             var (queryable, captureSkipReason, captureError, capturedCommands) = ParseExecutionPayload(runPayload);
+            runnerExecutionWatch.Stop();
+            TimeSpan? runnerExecutionTime = runnerExecutionWatch.Elapsed;
 
+            TimeSpan? toQueryStringFallbackTime = null;
             if (capturedCommands.Count > 0)
             {
                 commands = capturedCommands;
@@ -274,7 +420,10 @@ public sealed partial class QueryEvaluator
                         alcCtx.LoadedAssemblies);
                 }
 
+                var toQueryStringStopwatch = Stopwatch.StartNew();
                 var sql = TryToQueryString(queryable, alcCtx.LoadedAssemblies);
+                toQueryStringStopwatch.Stop();
+                toQueryStringFallbackTime = toQueryStringStopwatch.Elapsed;
                 if (sql is null)
                 {
                     return Failure(
@@ -340,6 +489,16 @@ public sealed partial class QueryEvaluator
             }
 
             sw.Stop();
+            var stageTimings = new EvaluationStageTimings(
+                contextResolutionTime,
+                dbContextCreationTime,
+                metadataReferenceBuildTime,
+                roslynCompilationTime,
+                compilationRetryCount,
+                evalAssemblyLoadTime,
+                runnerExecutionTime,
+                toQueryStringFallbackTime);
+
             return new QueryTranslationResult
             {
                 Success = true,
@@ -347,7 +506,7 @@ public sealed partial class QueryEvaluator
                 Commands = commands,
                 Parameters = commands[0].Parameters,
                 Warnings = warnings,
-                Metadata = BuildMetadata(dbContextType, alcCtx.LoadedAssemblies, sw.Elapsed, creationStrategy),
+                Metadata = BuildMetadata(dbContextType, alcCtx.LoadedAssemblies, sw.Elapsed, creationStrategy, stageTimings),
             };
         }
         catch (OperationCanceledException)
@@ -361,17 +520,28 @@ public sealed partial class QueryEvaluator
                 : ex.Message;
             return Failure(msg, sw.Elapsed, null, null);
         }
+        finally
+        {
+            if (dbContextLease is not null)
+            {
+                await dbContextLease.DisposeAsync();
+            }
+        }
     }
 
-    private static (object Instance, string Strategy) CreateDbContextInstance(
+    internal static (object Instance, string Strategy) CreateDbContextInstance(
         Type dbContextType,
-        IEnumerable<Assembly> userAssemblies)
+        IEnumerable<Assembly> userAssemblies,
+        string? executableAssemblyPath = null)
     {
-        var all = AssemblyLoadContext.Default.Assemblies.Concat(userAssemblies);
+        var all = AssemblyLoadContext
+            .Default.Assemblies.Concat(userAssemblies)
+            .ToList();
 
         var fromQueryLens = DesignTimeDbContextFactory.TryCreateQueryLensFactory(
             dbContextType,
             all,
+            executableAssemblyPath,
             out var queryLensFailure);
         if (fromQueryLens is not null)
             return (fromQueryLens, "querylens-factory");
@@ -379,6 +549,7 @@ public sealed partial class QueryEvaluator
         var fromDesignTime = DesignTimeDbContextFactory.TryCreate(
             dbContextType,
             all,
+            executableAssemblyPath,
             out var designTimeFailure);
         if (fromDesignTime is not null)
             return (fromDesignTime, "design-time-factory");
@@ -386,9 +557,14 @@ public sealed partial class QueryEvaluator
         var details = string.Join(" ", new[] { queryLensFailure, designTimeFailure }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
+        var executableHint = string.IsNullOrWhiteSpace(executableAssemblyPath)
+            ? "Use the compiled executable assembly (API / Worker / Console) as the QueryLens target."
+            : $"Selected executable assembly: '{Path.GetFileName(executableAssemblyPath)}'.";
+
         throw new InvalidOperationException(
             $"No factory found for '{dbContextType.FullName}'. " +
-            "Add an IQueryLensDbContextFactory<T> implementation to your project. " +
+            "Add an IQueryLensDbContextFactory<T> implementation to your executable project (API / Worker / Console), not in a class library. " +
+            executableHint + " " +
             "See the QueryLens README for setup instructions." +
             (string.IsNullOrWhiteSpace(details) ? string.Empty : $" Details: {details}"));
     }
