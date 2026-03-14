@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import {
     commands,
     env,
@@ -33,21 +34,31 @@ export function activate(context: ExtensionContext) {
     queryLensOutputChannel = window.createOutputChannel('EF QueryLens');
     context.subscriptions.push(queryLensOutputChannel);
 
-    // Let's resolve the path to the compiled DLL of the LSP server
-    const serverPath = context.asAbsolutePath(
-        path.join('..', '..', 'EFQueryLens.Lsp', 'bin', 'Debug', 'net10.0', 'EFQueryLens.Lsp.dll')
+    const lspBuildDir = context.asAbsolutePath(
+        path.join('..', '..', 'EFQueryLens.Lsp', 'bin', 'Debug', 'net10.0')
     );
+    const daemonBuildDir = context.asAbsolutePath(
+        path.join('..', '..', 'EFQueryLens.Daemon', 'bin', 'Debug', 'net10.0')
+    );
+
+    const stagedRuntime = stageRuntimeBinaries(lspBuildDir, daemonBuildDir);
+
+    const serverPath = stagedRuntime?.lspDllPath
+        ?? path.join(lspBuildDir, 'EFQueryLens.Lsp.dll');
     const fallbackRepoRoot = path.resolve(context.extensionPath, '..', '..', '..');
     const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath ?? fallbackRepoRoot;
-    const daemonDllPath = context.asAbsolutePath(
-        path.join('..', '..', 'EFQueryLens.Daemon', 'bin', 'Debug', 'net10.0', 'EFQueryLens.Daemon.dll')
-    );
-    const daemonExePath = context.asAbsolutePath(
-        path.join('..', '..', 'EFQueryLens.Daemon', 'bin', 'Debug', 'net10.0', 'EFQueryLens.Daemon.exe')
-    );
+    const daemonDllPath = stagedRuntime?.daemonDllPath
+        ?? path.join(daemonBuildDir, 'EFQueryLens.Daemon.dll');
+    const daemonExePath = stagedRuntime?.daemonExePath
+        ?? path.join(daemonBuildDir, 'EFQueryLens.Daemon.exe');
 
     const settings = readSettings();
     logOutput(`activate workspace=${workspaceRoot}`);
+    if (stagedRuntime) {
+        logOutput(`[EFQueryLens] runtime staging root=${stagedRuntime.stagingRoot}`);
+    } else {
+        logOutput('[EFQueryLens] runtime staging unavailable; using build output paths directly');
+    }
 
     const serverEnv: NodeJS.ProcessEnv = {
         ...process.env,
@@ -55,6 +66,7 @@ export function activate(context: ExtensionContext) {
         QUERYLENS_DAEMON_WORKSPACE: workspaceRoot,
         QUERYLENS_DAEMON_START_TIMEOUT_MS: '30000',
         QUERYLENS_DAEMON_CONNECT_TIMEOUT_MS: '10000',
+        QUERYLENS_DAEMON_SHUTDOWN_ON_DISPOSE: '1',
         QUERYLENS_MAX_CODELENS_PER_DOCUMENT: String(settings.maxCodeLensPerDocument),
         QUERYLENS_CODELENS_DEBOUNCE_MS: String(settings.codeLensDebounceMs),
         QUERYLENS_CODELENS_USE_MODEL_FILTER: settings.codeLensUseModelFilter ? '1' : '0',
@@ -87,23 +99,6 @@ export function activate(context: ExtensionContext) {
         documentSelector: [{ scheme: 'file', language: 'csharp' }],
         outputChannel: queryLensOutputChannel,
         middleware: {
-            provideCodeLenses: async (document, token, next) => {
-                const start = Date.now();
-                const result = await next(document, token);
-
-                // Remove "Preview SQL" CodeLens badges — hover is the primary UX.
-                const filtered = Array.isArray(result)
-                    ? result.filter((lens: { command?: { command?: string } }) => lens?.command?.command !== 'efquerylens.showSql')
-                    : result;
-
-                if (settings.debugLogsEnabled) {
-                    const elapsed = Date.now() - start;
-                    const count = Array.isArray(filtered) ? filtered.length : 0;
-                    logOutput(`[EFQueryLens] provideCodeLenses uri=${document.uri.toString()} count=${count} elapsedMs=${elapsed}`);
-                }
-
-                return filtered;
-            },
             provideHover: async (document, position, token, next) => {
                 const hover = await next(document, position, token);
                 return enableTrustedHoverCommands(hover, ['efquerylens.copySql', 'efquerylens.showSql', 'efquerylens.openSqlEditor']);
@@ -198,14 +193,43 @@ export function activate(context: ExtensionContext) {
         }
     );
 
+    const restartCommand = commands.registerCommand(
+        'efquerylens.restart',
+        async () => {
+            if (!client) {
+                window.showWarningMessage('EF QueryLens: language client is not initialized yet.');
+                return;
+            }
+
+            try {
+                const response = await client.sendRequest('efquerylens/daemon/restart', {});
+                const success = !!(response && typeof response === 'object' && (response as { success?: unknown }).success === true);
+                const message = response && typeof response === 'object' && typeof (response as { message?: unknown }).message === 'string'
+                    ? (response as { message: string }).message
+                    : (success ? 'Daemon restarted.' : 'Daemon restart did not complete.');
+
+                if (success) {
+                    window.showInformationMessage(`EF QueryLens: ${message}`);
+                } else {
+                    window.showWarningMessage(`EF QueryLens: ${message}`);
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                window.showErrorMessage(`EF QueryLens: daemon restart failed. ${message}`);
+            }
+        }
+    );
+
     context.subscriptions.push(showSqlCommand);
     context.subscriptions.push(copySqlCommand);
     context.subscriptions.push(openSqlEditorCommand);
     context.subscriptions.push(showSqlFromCursorCommand);
     context.subscriptions.push(copySqlFromCursorCommand);
     context.subscriptions.push(openOutputCommand);
+    context.subscriptions.push(restartCommand);
 
-    const scheduleWarmup = (document: TextDocument | undefined) => {
+    const scheduleWarmup = (editor: { document: TextDocument; selection: Selection } | undefined) => {
+        const document = editor?.document;
         if (!document) {
             return;
         }
@@ -224,6 +248,15 @@ export function activate(context: ExtensionContext) {
             return;
         }
 
+        const requestedLine = typeof editor?.selection?.active?.line === 'number'
+            ? editor.selection.active.line
+            : 0;
+        const requestedCharacter = typeof editor?.selection?.active?.character === 'number'
+            ? editor.selection.active.character
+            : 0;
+        const line = Math.max(0, Math.floor(requestedLine));
+        const character = Math.max(0, Math.floor(requestedCharacter));
+
         warmupInFlightUris.add(uri);
 
         const onReady = (client as unknown as { onReady?: () => Promise<void> }).onReady;
@@ -233,45 +266,14 @@ export function activate(context: ExtensionContext) {
 
         void readyPromise.then(async () => {
             try {
-                const codeLenses = await client.sendRequest('textDocument/codeLens', {
-                    textDocument: { uri },
-                }) as unknown;
-
-                let line = 0;
-                let character = 0;
-                if (Array.isArray(codeLenses)) {
-                    for (const lens of codeLenses) {
-                        const args = (lens as { command?: { arguments?: unknown[] } })?.command?.arguments;
-                        if (Array.isArray(args) && args.length >= 3) {
-                            const lensLine = Number(args[1]);
-                            const lensCharacter = Number(args[2]);
-                            if (Number.isFinite(lensLine) && Number.isFinite(lensCharacter)) {
-                                line = Math.max(0, Math.floor(lensLine));
-                                character = Math.max(0, Math.floor(lensCharacter));
-                                break;
-                            }
-                        }
-
-                        const start = (lens as { range?: { start?: { line?: number; character?: number } } })?.range?.start;
-                        const startLine = start?.line;
-                        const startCharacter = start?.character;
-                        if (typeof startLine === 'number' && typeof startCharacter === 'number'
-                            && Number.isFinite(startLine) && Number.isFinite(startCharacter)) {
-                            line = Math.max(0, Math.floor(startLine));
-                            character = Math.max(0, Math.floor(startCharacter));
-                            break;
-                        }
-                    }
-                }
-
-                await client.sendRequest('textDocument/hover', {
+                await client.sendRequest('efquerylens/warmup', {
                     textDocument: { uri },
                     position: { line, character },
                 });
 
                 warmedDocumentVersions.set(uri, document.version);
                 if (settings.debugLogsEnabled) {
-                    logOutput(`[EFQueryLens] warmup hover uri=${uri} line=${line} character=${character}`);
+                    logOutput(`[EFQueryLens] warmup rpc uri=${uri} line=${line} character=${character}`);
                 }
             } catch (error) {
                 if (settings.debugLogsEnabled) {
@@ -284,14 +286,41 @@ export function activate(context: ExtensionContext) {
         });
     };
 
+    const requestDaemonRestartOnActivate = async (): Promise<void> => {
+        if (!client) {
+            return;
+        }
+
+        const onReady = (client as unknown as { onReady?: () => Promise<void> }).onReady;
+        const readyPromise = typeof onReady === 'function'
+            ? onReady.call(client)
+            : Promise.resolve();
+
+        await readyPromise;
+
+        try {
+            const response = await client.sendRequest('efquerylens/daemon/restart', {});
+            const success = !!(response && typeof response === 'object' && (response as { success?: unknown }).success === true);
+            const message = response && typeof response === 'object' && typeof (response as { message?: unknown }).message === 'string'
+                ? (response as { message: string }).message
+                : (success ? 'Daemon restarted.' : 'Daemon restart did not complete.');
+
+            logOutput(`[EFQueryLens] startup-daemon-restart success=${success} message=${message}`);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logOutput(`[EFQueryLens] startup-daemon-restart failed reason=${message}`);
+        }
+    };
+
     context.subscriptions.push(
-        workspace.onDidOpenTextDocument(document => scheduleWarmup(document)),
-        window.onDidChangeActiveTextEditor(editor => scheduleWarmup(editor?.document))
+        window.onDidChangeActiveTextEditor(editor => scheduleWarmup(editor))
     );
 
     client.start();
     logOutput('language-client-started');
-    scheduleWarmup(window.activeTextEditor?.document);
+    void requestDaemonRestartOnActivate().finally(() => {
+        scheduleWarmup(window.activeTextEditor);
+    });
 }
 
 export function deactivate(): Thenable<void> | undefined {
@@ -843,6 +872,74 @@ function describeMode(mode: string): string {
 
 function logOutput(message: string): void {
     queryLensOutputChannel?.appendLine(message);
+}
+
+function stageRuntimeBinaries(
+    lspBuildDir: string,
+    daemonBuildDir: string
+): { lspDllPath: string; daemonDllPath: string; daemonExePath: string; stagingRoot: string } | null {
+    try {
+        const lspDll = path.join(lspBuildDir, 'EFQueryLens.Lsp.dll');
+        const daemonDll = path.join(daemonBuildDir, 'EFQueryLens.Daemon.dll');
+        const daemonExe = path.join(daemonBuildDir, 'EFQueryLens.Daemon.exe');
+
+        if (!fs.existsSync(lspDll) || !fs.existsSync(daemonDll)) {
+            return null;
+        }
+
+        const stagingBaseRoot = path.join(os.tmpdir(), 'EFQueryLens', 'vscode-runtime');
+        const stagingRoot = path.join(stagingBaseRoot, `${Date.now()}-${process.pid}`);
+        const lspStageDir = path.join(stagingRoot, 'lsp');
+        const daemonStageDir = path.join(stagingRoot, 'daemon');
+
+        fs.mkdirSync(lspStageDir, { recursive: true });
+        fs.mkdirSync(daemonStageDir, { recursive: true });
+        fs.cpSync(lspBuildDir, lspStageDir, { recursive: true, force: true });
+        fs.cpSync(daemonBuildDir, daemonStageDir, { recursive: true, force: true });
+
+        cleanupOldStagingRoots(stagingBaseRoot, stagingRoot);
+
+        return {
+            lspDllPath: path.join(lspStageDir, 'EFQueryLens.Lsp.dll'),
+            daemonDllPath: path.join(daemonStageDir, 'EFQueryLens.Daemon.dll'),
+            daemonExePath: path.join(daemonStageDir, 'EFQueryLens.Daemon.exe'),
+            stagingRoot,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function cleanupOldStagingRoots(stagingBaseRoot: string, activeStagingRoot: string): void {
+    try {
+        const maxEntries = 5;
+        const maxAgeMs = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+
+        const entries = fs.readdirSync(stagingBaseRoot, { withFileTypes: true })
+            .filter(entry => entry.isDirectory())
+            .map(entry => {
+                const fullPath = path.join(stagingBaseRoot, entry.name);
+                const mtimeMs = fs.statSync(fullPath).mtimeMs;
+                return { fullPath, mtimeMs };
+            })
+            .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (entry.fullPath === activeStagingRoot) {
+                continue;
+            }
+
+            const tooManyEntries = i >= maxEntries;
+            const tooOld = now - entry.mtimeMs > maxAgeMs;
+            if (tooManyEntries || tooOld) {
+                fs.rmSync(entry.fullPath, { recursive: true, force: true });
+            }
+        }
+    } catch {
+        // Best-effort cleanup only.
+    }
 }
 
 function enableTrustedHoverCommands(

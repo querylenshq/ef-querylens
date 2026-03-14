@@ -1,0 +1,28 @@
+[QL-Engine] shadow-cache-cleanup root=C:\Users\nemina\AppData\Local\Temp\EFQueryLens\shadow
+[QL-Engine] dbcontext-pool-create type=SlaPlusDbContext strategy=querylens-factory
+[QL-Engine] dbcontext-pool-release type=Sla.Plus.Infrastructure.DataAccess.SlaPlusDbContext
+[QL-Engine] translate-timing assembly=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll success=True totalMs=9396 contextMs=591 dbContextMs=1584 refsMs=78 compileMs=1358 retries=0 evalLoadMs=453 runnerMs=4928 fallbackMs=
+[run-1] took 10091ms success=True sqlLen=577
+[QL-Engine] dbcontext-pool-hit type=SlaPlusDbContext
+[QL-Engine] dbcontext-pool-release type=Sla.Plus.Infrastructure.DataAccess.SlaPlusDbContext
+[run-2] took 866ms success=True sqlLen=577
+[QL-Engine] translate-timing assembly=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll success=True totalMs=808 contextMs=19 dbContextMs=0 refsMs=81 compileMs=437 retries=0 evalLoadMs=101 runnerMs=22 fallbackMs=
+[QL-Engine] dbcontext-pool-hit type=SlaPlusDbContext
+[QL-Engine] dbcontext-pool-release type=Sla.Plus.Infrastructure.DataAccess.SlaPlusDbContext
+[run-3] took 744ms success=True sqlLen=577
+[QL-Engine] translate-timing assembly=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll success=True totalMs=689 contextMs=16 dbContextMs=0 refsMs=77 compileMs=341 retries=0 evalLoadMs=80 runnerMs=29 fallbackMs=
+[QL-Engine] dbcontext-pool-hit type=SlaPlusDbContext
+[QL-Engine] dbcontext-pool-release type=Sla.Plus.Infrastructure.DataAccess.SlaPlusDbContext
+[run-4] took 77ms success=True sqlLen=577
+[QL-Engine] translate-timing assembly=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll success=True totalMs=22 contextMs=16 dbContextMs=0 refsMs=0 compileMs=0 retries=0 evalLoadMs=0 runnerMs=4 fallbackMs=
+[QL-Engine] dbcontext-pool-hit type=SlaPlusDbContext
+[QL-Engine] dbcontext-pool-release type=Sla.Plus.Infrastructure.DataAccess.SlaPlusDbContext
+[run-5] took 73ms success=True sqlLen=577
+[QL-Engine] translate-timing assembly=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll success=True totalMs=14 contextMs=12 dbContextMs=0 refsMs=0 compileMs=0 retries=0 evalLoadMs=0 runnerMs=1 fallbackMs=
+[QL-Engine] dbcontext-pool-hit type=SlaPlusDbContext
+[QL-Engine] dbcontext-pool-release type=Sla.Plus.Infrastructure.DataAccess.SlaPlusDbContext
+[QL-Engine] translate-timing assembly=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll success=True totalMs=14 contextMs=12 dbContextMs=0 refsMs=0 compileMs=0 retries=0 evalLoadMs=0 runnerMs=0 fallbackMs=
+[run-6] took 71ms success=True sqlLen=577
+[QL-Engine] dbcontext-pool-evict assembly=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll removed=1
+[QL-Engine] alc-release reason=dispose source=C:\tsp\plus-web\src\Sla.Plus.Ui\bin\Debug\net8.0\Sla.Plus.Ui.dll shadow=C:\Users\nemina\AppData\Local\Temp\EFQueryLens\shadow\bundles\AE867972D274DDC3\Sla.Plus.Ui.dll
+[QL-Engine] shadow-cache-cleanup root=C:\Users\nemina\AppData\Local\Temp\EFQueryLens\shadow

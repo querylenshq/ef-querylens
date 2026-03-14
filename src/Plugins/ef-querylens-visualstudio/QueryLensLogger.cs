@@ -32,24 +32,22 @@ internal static class QueryLensLogger
             }
 
             Debug.Write(line);
-            Console.Error.Write(line);
         }
         catch
         {
-            // Best-effort logging only. Never throw from logger.
+            // Best effort only.
         }
     }
 
     private static string BuildLine(string level, string message, Exception? exception)
     {
-        var processId = Environment.ProcessId;
         var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture);
         var builder = new StringBuilder();
         builder.Append(now)
             .Append("Z [")
             .Append(level)
             .Append("] pid=")
-            .Append(processId)
+            .Append(Process.GetCurrentProcess().Id)
             .Append(" ")
             .Append(message);
 
@@ -58,9 +56,7 @@ internal static class QueryLensLogger
             builder.Append(" | ex=")
                 .Append(exception.GetType().Name)
                 .Append(": ")
-                .Append(exception.Message)
-                .AppendLine()
-                .Append(exception.StackTrace);
+                .Append(exception.Message);
         }
 
         builder.AppendLine();

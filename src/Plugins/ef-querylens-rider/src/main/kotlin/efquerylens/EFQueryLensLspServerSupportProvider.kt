@@ -9,13 +9,12 @@ import com.intellij.platform.lsp.api.LspServer
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
-import org.eclipse.lsp4j.HoverParams
-import org.eclipse.lsp4j.Position
-import org.eclipse.lsp4j.TextDocumentIdentifier
+import org.eclipse.lsp4j.ExecuteCommandParams
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -24,6 +23,11 @@ import kotlin.io.path.name
 import kotlin.io.path.pathString
 
 class EFQueryLensLspServerSupportProvider : LspServerSupportProvider {
+    private val warmedDocumentUrls = ConcurrentHashMap.newKeySet<String>()
+    @Volatile
+    private var startupRestartRequested = false
+    private val startupRestartLock = Any()
+
     override fun fileOpened(project: Project, file: VirtualFile, serverStarter: LspServerSupportProvider.LspServerStarter) {
         logInfo(project, "[EFQueryLens] fileOpened path='${file.path}' extension='${file.extension}'")
         if (!isSupported(file)) {
@@ -36,25 +40,70 @@ class EFQueryLensLspServerSupportProvider : LspServerSupportProvider {
         
         val server = LspServerManager.getInstance(project).getServersForProvider(EFQueryLensLspServerSupportProvider::class.java).firstOrNull()
         if (server != null) {
-            scheduleWarmup(server, file)
+            scheduleStartupPlumbing(server, file)
         }
     }
 
-    private fun scheduleWarmup(server: LspServer, file: VirtualFile) {
+    private fun scheduleStartupPlumbing(server: LspServer, file: VirtualFile) {
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 // Wait a bit for the server to be fully ready if it just started
                 Thread.sleep(1000)
-                logInfo(server.project, "[EFQueryLens] Firing warmup hover for '${file.path}'")
-                val params = HoverParams(
-                    TextDocumentIdentifier(file.url),
-                    Position(0, 0) // Just warm up the first few lines
-                )
-                server.sendRequestSync(5000) { it.textDocumentService.hover(params) }
-                logInfo(server.project, "[EFQueryLens] Warmup hover completed for '${file.path}'")
+                requestDaemonRestartOnActivate(server)
+                requestWarmup(server, file)
             } catch (e: Exception) {
-                logWarn(server.project, "[EFQueryLens] Warmup hover failed", e)
+                logWarn(server.project, "[EFQueryLens] Startup plumbing failed", e)
             }
+        }
+    }
+
+    private fun requestDaemonRestartOnActivate(server: LspServer) {
+        if (startupRestartRequested) {
+            return
+        }
+
+        synchronized(startupRestartLock) {
+            if (startupRestartRequested) {
+                return
+            }
+
+            startupRestartRequested = true
+        }
+
+        try {
+            val response = server.sendRequestSync(10000) {
+                it.workspaceService.executeCommand(
+                    ExecuteCommandParams("efquerylens.daemon.restart", emptyList())
+                )
+            }
+
+            logInfo(server.project, "[EFQueryLens] Startup daemon restart response='$response'")
+        } catch (e: Exception) {
+            logWarn(server.project, "[EFQueryLens] Startup daemon restart failed", e)
+        }
+    }
+
+    private fun requestWarmup(server: LspServer, file: VirtualFile) {
+        if (!warmedDocumentUrls.add(file.url)) {
+            return
+        }
+
+        try {
+            val warmupPayload = mapOf(
+                "textDocument" to mapOf("uri" to file.url),
+                "position" to mapOf("line" to 0, "character" to 0)
+            )
+
+            val response = server.sendRequestSync(5000) {
+                it.workspaceService.executeCommand(
+                    ExecuteCommandParams("efquerylens.warmup", listOf(warmupPayload))
+                )
+            }
+
+            logInfo(server.project, "[EFQueryLens] Warmup command completed for '${file.path}' response='$response'")
+        } catch (e: Exception) {
+            warmedDocumentUrls.remove(file.url)
+            logWarn(server.project, "[EFQueryLens] Warmup command failed for '${file.path}'", e)
         }
     }
 
@@ -232,9 +281,13 @@ private class EFQueryLensServerDescriptor(
         // Rider can cancel/re-issue hover requests aggressively; allow a short grace
         // window so canceled requests can still reuse an in-flight hover computation.
         withEnvironment("QUERYLENS_HOVER_CANCEL_GRACE_MS", "1200")
+        // Show a lightweight progress indicator if hover translation is slow.
+        withEnvironment("QUERYLENS_HOVER_PROGRESS_NOTIFY", "1")
+        withEnvironment("QUERYLENS_HOVER_PROGRESS_DELAY_MS", "350")
         // Rider cold starts can take longer to bring daemon online than VS Code.
         withEnvironment("QUERYLENS_DAEMON_START_TIMEOUT_MS", "30000")
         withEnvironment("QUERYLENS_DAEMON_CONNECT_TIMEOUT_MS", "10000")
+        withEnvironment("QUERYLENS_DAEMON_SHUTDOWN_ON_DISPOSE", "1")
         withEnvironment("QUERYLENS_LSP_LOG_FILE", lspLogFilePath.absolutePathString())
 
         if (repositoryRoot == null) {

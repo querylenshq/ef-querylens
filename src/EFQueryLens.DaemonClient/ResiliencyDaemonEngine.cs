@@ -18,6 +18,8 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
     private readonly int _connectTimeoutMs;
     private readonly int _startTimeoutMs;
     private readonly Action<string>? _debugLog;
+    private readonly bool _shutdownDaemonOnDispose;
+    private bool _ownsDaemonLifecycle;
     private readonly SemaphoreSlim _reconnectGate = new(1, 1);
     private volatile bool _disposed;
 
@@ -29,6 +31,8 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
         string contextName,
         int connectTimeoutMs = 2500,
         int startTimeoutMs = 10000,
+        bool shutdownDaemonOnDispose = false,
+        bool ownsDaemonLifecycle = false,
         Action<string>? debugLog = null)
     {
         _inner = inner;
@@ -38,6 +42,8 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
         _contextName = contextName;
         _connectTimeoutMs = connectTimeoutMs;
         _startTimeoutMs = startTimeoutMs;
+        _shutdownDaemonOnDispose = shutdownDaemonOnDispose;
+        _ownsDaemonLifecycle = ownsDaemonLifecycle;
         _debugLog = debugLog;
     }
 
@@ -56,8 +62,58 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
+
+        if (_shutdownDaemonOnDispose && _ownsDaemonLifecycle)
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await _inner.ShutdownDaemonAsync(cts.Token);
+                _debugLog?.Invoke("daemon-shutdown-on-dispose requested");
+            }
+            catch (Exception ex)
+            {
+                _debugLog?.Invoke($"daemon-shutdown-on-dispose failed type={ex.GetType().Name} message={ex.Message}");
+            }
+        }
+
         await _inner.DisposeAsync();
         _reconnectGate.Dispose();
+    }
+
+    /// <summary>
+    /// Requests daemon restart by shutting down current daemon and reconnecting.
+    /// </summary>
+    public async Task<bool> RestartDaemonAsync(CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        await _reconnectGate.WaitAsync(ct);
+        try
+        {
+            _debugLog?.Invoke($"daemon-restart requested workspace={_workspacePath}");
+
+            try
+            {
+                using var shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                shutdownCts.CancelAfter(TimeSpan.FromSeconds(2));
+                await _inner.ShutdownDaemonAsync(shutdownCts.Token);
+            }
+            catch (Exception ex)
+            {
+                _debugLog?.Invoke($"daemon-restart shutdown phase warning type={ex.GetType().Name} message={ex.Message}");
+            }
+
+            await Task.Delay(150, ct);
+            await ReconnectCoreAsync(ct);
+            _ownsDaemonLifecycle = true;
+            _debugLog?.Invoke("daemon-restart success");
+            return true;
+        }
+        finally
+        {
+            _reconnectGate.Release();
+        }
     }
 
     private async Task<T> ExecuteWithReconnectAsync<T>(
@@ -87,50 +143,55 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
         await _reconnectGate.WaitAsync(ct);
         try
         {
-            _debugLog?.Invoke($"daemon-reconnect workspace={_workspacePath}");
-
-            var newPipeName = await DaemonLocator.TryGetOrStartDaemonAsync(
-                _workspacePath,
-                _daemonExecutablePath,
-                _daemonAssemblyPath,
-                timeoutMilliseconds: _startTimeoutMs,
-                debugLog: _debugLog,
-                ct: ct);
-
-            if (string.IsNullOrWhiteSpace(newPipeName))
-                throw new InvalidOperationException(
-                    $"QueryLens daemon unavailable for workspace '{_workspacePath}'.");
-
-            _debugLog?.Invoke($"daemon-reconnect new-pipe={newPipeName}");
-
-            var pipe = new NamedPipeClientStream(
-                ".",
-                newPipeName,
-                PipeDirection.InOut,
-                PipeOptions.Asynchronous);
-
-            try
-            {
-                using var timeoutCts = new CancellationTokenSource(_connectTimeoutMs);
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-                await pipe.ConnectAsync(linkedCts.Token);
-            }
-            catch
-            {
-                await pipe.DisposeAsync();
-                throw;
-            }
-
-            var oldEngine = _inner;
-            _inner = new DaemonBackedEngine(pipe, _contextName);
-            await oldEngine.DisposeAsync();
-
-            _debugLog?.Invoke("daemon-reconnect success");
+            await ReconnectCoreAsync(ct);
         }
         finally
         {
             _reconnectGate.Release();
         }
+    }
+
+    private async Task ReconnectCoreAsync(CancellationToken ct)
+    {
+        _debugLog?.Invoke($"daemon-reconnect workspace={_workspacePath}");
+
+        var newPipeName = await DaemonLocator.TryGetOrStartDaemonAsync(
+            _workspacePath,
+            _daemonExecutablePath,
+            _daemonAssemblyPath,
+            timeoutMilliseconds: _startTimeoutMs,
+            debugLog: _debugLog,
+            ct: ct);
+
+        if (string.IsNullOrWhiteSpace(newPipeName))
+            throw new InvalidOperationException(
+                $"QueryLens daemon unavailable for workspace '{_workspacePath}'.");
+
+        _debugLog?.Invoke($"daemon-reconnect new-pipe={newPipeName}");
+
+        var pipe = new NamedPipeClientStream(
+            ".",
+            newPipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+
+        try
+        {
+            using var timeoutCts = new CancellationTokenSource(_connectTimeoutMs);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            await pipe.ConnectAsync(linkedCts.Token);
+        }
+        catch
+        {
+            await pipe.DisposeAsync();
+            throw;
+        }
+
+        var oldEngine = _inner;
+        _inner = new DaemonBackedEngine(pipe, _contextName);
+        await oldEngine.DisposeAsync();
+
+        _debugLog?.Invoke("daemon-reconnect success");
     }
 
     private static bool IsDaemonTransportFailure(Exception ex)

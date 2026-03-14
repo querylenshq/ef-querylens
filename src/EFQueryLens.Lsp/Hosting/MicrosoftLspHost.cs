@@ -16,7 +16,8 @@ internal static class MicrosoftLspHost
         var documentManager = new DocumentManager();
         var lspHandler = new LanguageServerHandler(
             hover: new HoverHandler(documentManager, new HoverPreviewService(engine)),
-            codeLens: new CodeLensHandler(documentManager, new CodeLensPreviewService()),
+            warmup: new WarmupHandler(documentManager, engine),
+            daemonControl: new DaemonControlHandler(engine),
             inlayHint: new InlayHintHandler(documentManager, new CodeLensPreviewService()),
             textSync: new TextDocumentSyncHandler(documentManager),
             debugEnabled: debugEnabled);

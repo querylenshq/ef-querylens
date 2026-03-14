@@ -14,10 +14,13 @@ namespace EFQueryLens.Lsp.Hosting;
 internal sealed class LanguageServerHandler
 {
     private readonly HoverHandler _hover;
-    private readonly CodeLensHandler _codeLens;
+    private readonly WarmupHandler _warmup;
+    private readonly DaemonControlHandler _daemonControl;
     private readonly InlayHintHandler _inlayHint;
     private readonly TextDocumentSyncHandler _textSync;
     private readonly bool _debugEnabled;
+    private readonly bool _hoverProgressEnabled;
+    private readonly int _hoverProgressDelayMs;
     private bool _shutdownRequested;
 
     /// <summary>
@@ -28,16 +31,26 @@ internal sealed class LanguageServerHandler
 
     public LanguageServerHandler(
         HoverHandler hover,
-        CodeLensHandler codeLens,
+        WarmupHandler warmup,
+        DaemonControlHandler daemonControl,
         InlayHintHandler inlayHint,
         TextDocumentSyncHandler textSync,
         bool debugEnabled = false)
     {
         _hover = hover;
-        _codeLens = codeLens;
+        _warmup = warmup;
+        _daemonControl = daemonControl;
         _inlayHint = inlayHint;
         _textSync = textSync;
         _debugEnabled = debugEnabled;
+        _hoverProgressEnabled = ReadBoolEnvironmentVariable(
+            "QUERYLENS_HOVER_PROGRESS_NOTIFY",
+            fallback: false);
+        _hoverProgressDelayMs = ReadIntEnvironmentVariable(
+            "QUERYLENS_HOVER_PROGRESS_DELAY_MS",
+            fallback: 350,
+            min: 0,
+            max: 5_000);
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -79,25 +92,109 @@ internal sealed class LanguageServerHandler
     // ── Hover ─────────────────────────────────────────────────────────────────
 
     [JsonRpcMethod("textDocument/hover", UseSingleObjectParameterDeserialization = true)]
-    public Task<Hover?> HoverAsync(TextDocumentPositionParams request, CancellationToken ct)
+    public async Task<Hover?> HoverAsync(TextDocumentPositionParams request, CancellationToken ct)
     {
         if (_debugEnabled) Console.Error.WriteLine($"[QL-LSP] request method=textDocument/hover");
-        return _hover.HandleAsync(request, ct);
+
+        if (!_hoverProgressEnabled || JsonRpc is null)
+        {
+            return await _hover.HandleAsync(request, ct);
+        }
+
+        var hoverTask = _hover.HandleAsync(request, ct);
+        if (hoverTask.IsCompleted)
+        {
+            return await hoverTask;
+        }
+
+        using var delayCts = new CancellationTokenSource();
+        var delayTask = Task.Delay(_hoverProgressDelayMs, delayCts.Token);
+        var winner = await Task.WhenAny(hoverTask, delayTask);
+        if (winner == hoverTask)
+        {
+            delayCts.Cancel();
+            return await hoverTask;
+        }
+
+        var progressToken = Guid.NewGuid().ToString("N");
+        var progressStarted = await TryStartHoverProgressAsync(progressToken);
+
+        try
+        {
+            return await hoverTask;
+        }
+        finally
+        {
+            if (progressStarted)
+            {
+                await TryEndHoverProgressAsync(progressToken, ct.IsCancellationRequested
+                    ? "SQL preview canceled."
+                    : "SQL preview ready.");
+            }
+        }
     }
 
-    // ── Code lens ────────────────────────────────────────────────────────────
-
-    [JsonRpcMethod("textDocument/codeLens", UseSingleObjectParameterDeserialization = true)]
-    public async Task<CodeLens[]> CodeLensAsync(CodeLensParams request, CancellationToken ct)
+    [JsonRpcMethod("efquerylens/warmup", UseSingleObjectParameterDeserialization = true)]
+    public Task<WarmupResponse> WarmupAsync(TextDocumentPositionParams request, CancellationToken ct)
     {
-        if (_debugEnabled) Console.Error.WriteLine($"[QL-LSP] request method=textDocument/codeLens");
-        var result = await _codeLens.HandleAsync(request, ct);
-        return result ?? [];
+        if (_debugEnabled) Console.Error.WriteLine($"[QL-LSP] request method=efquerylens/warmup");
+        return _warmup.HandleAsync(request, ct);
     }
 
-    [JsonRpcMethod("codeLens/resolve", UseSingleObjectParameterDeserialization = true)]
-    public Task<CodeLens> CodeLensResolveAsync(CodeLens request, CancellationToken ct) =>
-        _codeLens.ResolveAsync(request, ct);
+    [JsonRpcMethod("efquerylens/daemon/restart", UseSingleObjectParameterDeserialization = true)]
+    public Task<DaemonRestartResponse> RestartDaemonAsync(JToken? _ = null, CancellationToken ct = default)
+    {
+        if (_debugEnabled) Console.Error.WriteLine("[QL-LSP] request method=efquerylens/daemon/restart");
+        return _daemonControl.RestartAsync(ct);
+    }
+
+    [JsonRpcMethod("workspace/executeCommand", UseSingleObjectParameterDeserialization = true)]
+    public async Task<JToken?> ExecuteCommandAsync(JObject request, CancellationToken ct)
+    {
+        var command = request["command"]?.Value<string>();
+        if (_debugEnabled) Console.Error.WriteLine($"[QL-LSP] request method=workspace/executeCommand command={command ?? "<null>"}");
+
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return new JObject
+            {
+                ["success"] = false,
+                ["message"] = "Missing command.",
+            };
+        }
+
+        if (command.Equals("efquerylens.warmup", StringComparison.OrdinalIgnoreCase))
+        {
+            var arguments = request["arguments"] as JArray;
+            var warmupRequest = arguments?.Count > 0
+                ? arguments[0].ToObject<TextDocumentPositionParams>()
+                : null;
+
+            if (warmupRequest is null)
+            {
+                return new JObject
+                {
+                    ["success"] = false,
+                    ["message"] = "Missing or invalid warmup request payload.",
+                };
+            }
+
+            var warmupResponse = await _warmup.HandleAsync(warmupRequest, ct);
+            return JObject.FromObject(warmupResponse);
+        }
+
+        if (command.Equals("efquerylens.daemon.restart", StringComparison.OrdinalIgnoreCase))
+        {
+            var restartResponse = await _daemonControl.RestartAsync(ct);
+            return JObject.FromObject(restartResponse);
+        }
+
+        return new JObject
+        {
+            ["success"] = false,
+            ["message"] = $"Unsupported command '{command}'.",
+        };
+    }
 
     // ── Inlay hints ──────────────────────────────────────────────────────────
 
@@ -115,6 +212,118 @@ internal sealed class LanguageServerHandler
 
     // ── Server capabilities ──────────────────────────────────────────────────
 
+    private async Task<bool> TryStartHoverProgressAsync(string progressToken)
+    {
+        var rpc = JsonRpc;
+        if (rpc is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await rpc.InvokeWithParameterObjectAsync<JToken?>(
+                "window/workDoneProgress/create",
+                new JObject { ["token"] = progressToken },
+                CancellationToken.None);
+
+            await rpc.NotifyAsync(
+                "$/progress",
+                new JObject
+                {
+                    ["token"] = progressToken,
+                    ["value"] = new JObject
+                    {
+                        ["kind"] = "begin",
+                        ["title"] = "EF QueryLens",
+                        ["message"] = "Processing SQL preview...",
+                        ["cancellable"] = false,
+                    }
+                });
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (_debugEnabled)
+            {
+                Console.Error.WriteLine($"[QL-LSP] hover-progress-start failed type={ex.GetType().Name} message={ex.Message}");
+            }
+
+            return false;
+        }
+    }
+
+    private async Task TryEndHoverProgressAsync(string progressToken, string message)
+    {
+        var rpc = JsonRpc;
+        if (rpc is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await rpc.NotifyAsync(
+                "$/progress",
+                new JObject
+                {
+                    ["token"] = progressToken,
+                    ["value"] = new JObject
+                    {
+                        ["kind"] = "end",
+                        ["message"] = message,
+                    }
+                });
+        }
+        catch (Exception ex)
+        {
+            if (_debugEnabled)
+            {
+                Console.Error.WriteLine($"[QL-LSP] hover-progress-end failed type={ex.GetType().Name} message={ex.Message}");
+            }
+        }
+    }
+
+    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (!int.TryParse(raw, out var value))
+        {
+            return fallback;
+        }
+
+        if (value < min)
+        {
+            return min;
+        }
+
+        if (value > max)
+        {
+            return max;
+        }
+
+        return value;
+    }
+
+    private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        if (bool.TryParse(raw, out var parsed))
+        {
+            return parsed;
+        }
+
+        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
+               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
+               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static JObject CreateInitializeResult() => new()
     {
         ["capabilities"] = new JObject
@@ -126,7 +335,16 @@ internal sealed class LanguageServerHandler
                 ["save"] = new JObject { ["includeText"] = true },
             },
             ["hoverProvider"] = true,
-            ["codeLensProvider"] = new JObject { ["resolveProvider"] = false },
+            ["inlayHintProvider"] = new JObject
+            {
+                ["resolveProvider"] = true,
+            },
+            ["executeCommandProvider"] = new JObject
+            {
+                ["commands"] = new JArray(
+                    "efquerylens.warmup",
+                    "efquerylens.daemon.restart")
+            },
         },
     };
 }

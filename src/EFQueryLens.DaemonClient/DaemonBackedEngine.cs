@@ -71,6 +71,14 @@ public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
         return response.Result;
     }
 
+    /// <summary>
+    /// Requests graceful daemon shutdown over RPC.
+    /// </summary>
+    public async Task ShutdownDaemonAsync(CancellationToken ct = default)
+    {
+        await _proxy.ShutdownAsync(ct);
+    }
+
     public ValueTask DisposeAsync()
     {
         _rpc.Dispose();

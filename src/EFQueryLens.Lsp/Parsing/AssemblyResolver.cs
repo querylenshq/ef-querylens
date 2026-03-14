@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 
 namespace EFQueryLens.Lsp.Parsing;
@@ -12,6 +13,17 @@ namespace EFQueryLens.Lsp.Parsing;
 /// </summary>
 public static class AssemblyResolver
 {
+    private sealed record CachedAssemblySelection(string TargetAssemblyPath, long ExpiresAtUtcTicks);
+
+    private static readonly ConcurrentDictionary<string, CachedAssemblySelection> TargetAssemblyCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly int TargetAssemblyCacheTtlMs = ReadIntEnvironmentVariable(
+        "QUERYLENS_ASSEMBLY_RESOLVER_CACHE_TTL_MS",
+        fallback: 5_000,
+        min: 0,
+        max: 120_000);
+
     /// <summary>
     /// Walks up the directory tree from the given source file path to find the nearest
     /// .csproj file, determines if it's executable or a class library, and resolves the
@@ -19,8 +31,14 @@ public static class AssemblyResolver
     /// </summary>
     public static string? TryGetTargetAssembly(string sourceFilePath)
     {
-        var debugLog = $"Started at: {sourceFilePath}\n";
-        var currentDir = Path.GetDirectoryName(sourceFilePath);
+        var normalizedSourceFilePath = Path.GetFullPath(sourceFilePath);
+        if (TryGetCachedTargetAssembly(normalizedSourceFilePath, out var cachedTargetAssembly))
+        {
+            return cachedTargetAssembly;
+        }
+
+        var debugLog = $"Started at: {normalizedSourceFilePath}\n";
+        var currentDir = Path.GetDirectoryName(normalizedSourceFilePath);
 
         // Step 1: Find the nearest .csproj
         string? csprojFile = null;
@@ -62,14 +80,18 @@ public static class AssemblyResolver
         if (IsExecutableProject(csprojContent))
         {
             debugLog += "  -> Project is executable, using own bin dir\n";
-            return FindDllInBin(projectDir, assemblyName, ref debugLog)
-                   ?? $"DEBUG_FAIL:\n{debugLog}";
+            var resolved = FindDllInBin(projectDir, assemblyName, ref debugLog)
+                           ?? $"DEBUG_FAIL:\n{debugLog}";
+            CacheTargetAssembly(normalizedSourceFilePath, resolved);
+            return resolved;
         }
 
-        // Step 4: It's a class library — find a host executable project
+        // Step 4: It is a class library — find a host executable project
         debugLog += "  -> Project is a class library, searching for host executable...\n";
-        return FindHostExecutableAssembly(csprojFile, assemblyName, ref debugLog)
-               ?? $"DEBUG_FAIL:\n{debugLog}";
+        var hostResolved = FindHostExecutableAssembly(csprojFile, assemblyName, ref debugLog)
+                           ?? $"DEBUG_FAIL:\n{debugLog}";
+        CacheTargetAssembly(normalizedSourceFilePath, hostResolved);
+        return hostResolved;
     }
 
     /// <summary>
@@ -95,13 +117,92 @@ public static class AssemblyResolver
     }
 
     /// <summary>
+    /// Returns true if the project directory contains a source file with an
+    /// IQueryLensDbContextFactory implementation — i.e. the user explicitly set
+    /// this project up as the QueryLens host.
+    /// </summary>
+    private static bool HasQueryLensFactory(string projectDir)
+    {
+        foreach (var file in EnumerateProjectSourceFiles(projectDir))
+        {
+            var fileName = Path.GetFileName(file);
+            if (fileName.Contains("QueryLensDbContextFactory", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            try
+            {
+                var text = File.ReadAllText(file);
+                if (text.Contains("IQueryLensDbContextFactory<", StringComparison.Ordinal))
+                    return true;
+            }
+            catch
+            {
+                // Ignore unreadable files and continue scanning.
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Enumerates user source files for a project while skipping generated/output folders
+    /// so scanning remains deterministic and resilient on large solutions.
+    /// </summary>
+    private static IEnumerable<string> EnumerateProjectSourceFiles(string projectDir)
+    {
+        var pending = new Stack<string>();
+        pending.Push(projectDir);
+
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(current, "*.cs", SearchOption.TopDirectoryOnly);
+            }
+            catch
+            {
+                files = [];
+            }
+
+            foreach (var file in files)
+                yield return file;
+
+            IEnumerable<string> directories;
+            try
+            {
+                directories = Directory.EnumerateDirectories(current);
+            }
+            catch
+            {
+                directories = [];
+            }
+
+            foreach (var dir in directories)
+            {
+                var name = Path.GetFileName(dir);
+                if (name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals(".git", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                pending.Push(dir);
+            }
+        }
+    }
+
+    /// <summary>
     /// Finds a host executable project that references the given class library.
     /// Strategy:
     ///   1. Walk up to find the .sln file
     ///   2. Parse the .sln to find all project paths
     ///   3. For each executable project, check if it references the class library
-    ///   4. Among matching projects, pick the one whose bin folder contains the library DLL
-    ///      and has the most recent build timestamp
+    ///   4. Among matching projects, prefer projects that contain a QueryLens factory
+    ///      implementation; use most-recent build timestamp as a tiebreaker
     /// </summary>
     private static string? FindHostExecutableAssembly(
         string libraryCsprojPath,
@@ -146,7 +247,9 @@ public static class AssemblyResolver
 
         debugLog += $"  -> Found {projectEntries.Count} other projects in solution\n";
 
-        // Step 4c: Find executable projects that reference the class library
+        // Step 4c: Find executable projects in the solution. We do not require a direct
+        // ProjectReference here because many host apps reference the target library
+        // transitively (e.g. UI -> Infrastructure -> Application).
         var candidates = new List<(string CsprojPath, string AssemblyName)>();
 
         foreach (var projPath in projectEntries)
@@ -156,10 +259,6 @@ public static class AssemblyResolver
                 var content = File.ReadAllText(projPath);
 
                 if (!IsExecutableProject(content))
-                    continue;
-
-                // Check if this project references the library (directly)
-                if (!content.Contains(libraryCsprojName, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 var exeAssemblyName = Path.GetFileNameWithoutExtension(projPath);
@@ -182,10 +281,12 @@ public static class AssemblyResolver
             return null;
         }
 
-        // Step 4d: Among candidates, find one whose bin folder contains the library DLL
-        //          and pick the most recently built one
-        string? bestDll = null;
-        DateTime bestTimestamp = DateTime.MinValue;
+        // Step 4d: Among candidates, find one whose bin folder contains the library DLL.
+        // Prefer projects that explicitly contain a QueryLensDbContextFactory source file
+        // (the user set them up as the QueryLens host) over projects that are merely
+        // referencing the library for other purposes (e.g. data-migration workers).
+        // Within the same tier, the most recently built DLL wins.
+        var scored = new List<(string HostDll, DateTime Timestamp, bool HasFactory)>();
 
         foreach (var (csprojPath, exeAssemblyName) in candidates)
         {
@@ -206,7 +307,7 @@ public static class AssemblyResolver
                 continue;
             }
 
-            // Found it! Now find the host's own DLL in the same tfm subfolder
+            // Found it — now find the host's own DLL in the same tfm subfolder
             var libraryDll = libraryDlls.OrderByDescending(File.GetLastWriteTimeUtc).First();
             var tfmDir = Path.GetDirectoryName(libraryDll)!;
 
@@ -218,14 +319,17 @@ public static class AssemblyResolver
             }
 
             var ts = File.GetLastWriteTimeUtc(hostDll);
-            debugLog += $"  -> {exeAssemblyName}: found at {hostDll} (timestamp: {ts:u})\n";
+            var hasFactory = HasQueryLensFactory(projDir);
+            debugLog += $"  -> {exeAssemblyName}: found at {hostDll} (timestamp: {ts:u}, hasFactory: {hasFactory})\n";
 
-            if (ts > bestTimestamp)
-            {
-                bestDll = hostDll;
-                bestTimestamp = ts;
-            }
+            scored.Add((hostDll, ts, hasFactory));
         }
+
+        var bestDll = scored
+            .OrderByDescending(x => x.HasFactory ? 1 : 0)
+            .ThenByDescending(x => x.Timestamp)
+            .Select(x => x.HostDll)
+            .FirstOrDefault();
 
         if (bestDll is not null)
         {
@@ -261,5 +365,68 @@ public static class AssemblyResolver
 
         debugLog += $"  -> EXCEPTION: Searched for {assemblyName}.dll in {binDir} recursively but found 0 files.\n";
         return null;
+    }
+
+    private static bool TryGetCachedTargetAssembly(string sourceFilePath, out string targetAssemblyPath)
+    {
+        targetAssemblyPath = string.Empty;
+
+        if (TargetAssemblyCacheTtlMs <= 0)
+        {
+            return false;
+        }
+
+        if (!TargetAssemblyCache.TryGetValue(sourceFilePath, out var cached))
+        {
+            return false;
+        }
+
+        if (cached.ExpiresAtUtcTicks <= DateTime.UtcNow.Ticks || !File.Exists(cached.TargetAssemblyPath))
+        {
+            TargetAssemblyCache.TryRemove(sourceFilePath, out _);
+            return false;
+        }
+
+        targetAssemblyPath = cached.TargetAssemblyPath;
+        return true;
+    }
+
+    private static void CacheTargetAssembly(string sourceFilePath, string? resolvedAssemblyPath)
+    {
+        if (TargetAssemblyCacheTtlMs <= 0)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(resolvedAssemblyPath)
+            || resolvedAssemblyPath.StartsWith("DEBUG_FAIL", StringComparison.Ordinal)
+            || !File.Exists(resolvedAssemblyPath))
+        {
+            return;
+        }
+
+        var expires = DateTime.UtcNow.AddMilliseconds(TargetAssemblyCacheTtlMs).Ticks;
+        TargetAssemblyCache[sourceFilePath] = new CachedAssemblySelection(resolvedAssemblyPath, expires);
+    }
+
+    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (!int.TryParse(raw, out var value))
+        {
+            return fallback;
+        }
+
+        if (value < min)
+        {
+            return min;
+        }
+
+        if (value > max)
+        {
+            return max;
+        }
+
+        return value;
     }
 }

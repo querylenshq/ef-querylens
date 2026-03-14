@@ -88,7 +88,21 @@ internal static class DesignTimeDbContextFactory
                             m.GetParameters().Length == 0 &&
                             m.ReturnType.FullName == dbContextType.FullName));
             }
-            catch { continue; } // ReflectionTypeLoadException on some assemblies
+            catch (ReflectionTypeLoadException rtle)
+            {
+                // Surface which dependencies were missing so callers can diagnose the failure
+                // rather than silently skipping the assembly and reporting "No factory found".
+                var loaderMessages = (rtle.LoaderExceptions ?? [])
+                    .Where(e => e is not null)
+                    .Select(e => e!.Message)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(3);
+                var loaderDetail = string.Join("; ", loaderMessages);
+                failureReason ??= $"Could not scan '{asm.GetName().Name}' for QueryLens factory" +
+                    (string.IsNullOrWhiteSpace(loaderDetail) ? "." : $": {loaderDetail}");
+                continue;
+            }
+            catch { continue; } // Native or otherwise unscannable assemblies
 
             if (factoryType is null) continue;
 
@@ -202,7 +216,19 @@ internal static class DesignTimeDbContextFactory
                         i.GetGenericTypeDefinition().FullName == InterfaceName &&
                         i.GetGenericArguments()[0].FullName == dbContextType.FullName));
             }
-            catch { continue; } // ReflectionTypeLoadException on some assemblies
+            catch (ReflectionTypeLoadException rtle)
+            {
+                var loaderMessages = (rtle.LoaderExceptions ?? [])
+                    .Where(e => e is not null)
+                    .Select(e => e!.Message)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(3);
+                var loaderDetail = string.Join("; ", loaderMessages);
+                failureReason ??= $"Could not scan '{asm.GetName().Name}' for design-time factory" +
+                    (string.IsNullOrWhiteSpace(loaderDetail) ? "." : $": {loaderDetail}");
+                continue;
+            }
+            catch { continue; }
 
             if (factoryType is null) continue;
 
