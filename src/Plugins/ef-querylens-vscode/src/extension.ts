@@ -76,8 +76,8 @@ export function activate(context: ExtensionContext) {
         QUERYLENS_DAEMON_START_TIMEOUT_MS: '30000',
         QUERYLENS_DAEMON_CONNECT_TIMEOUT_MS: '10000',
         QUERYLENS_DAEMON_SHUTDOWN_ON_DISPOSE: '1',
-        // Use a fixed rolling window (last N samples) for status average latency.
-        QUERYLENS_AVG_WINDOW_SAMPLES: '20',
+        // Keep rolling-window latency at 20 samples by default, but honor explicit env overrides.
+        QUERYLENS_AVG_WINDOW_SAMPLES: process.env.QUERYLENS_AVG_WINDOW_SAMPLES ?? '20',
         // Keep shared hover computations alive briefly when VS Code rapidly cancels/reissues hover requests.
         QUERYLENS_HOVER_CANCEL_GRACE_MS: '1500',
         // VS Code hides inline SQL Preview badges; hover/command actions remain available.

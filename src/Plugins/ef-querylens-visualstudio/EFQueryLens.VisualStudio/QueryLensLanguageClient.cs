@@ -375,8 +375,11 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
         processStartInfo.Environment["QUERYLENS_DAEMON_CONNECT_TIMEOUT_MS"] = "10000";
         // Keep daemon alive across VS language-client disposal to avoid UI teardown stalls.
         processStartInfo.Environment["QUERYLENS_DAEMON_SHUTDOWN_ON_DISPOSE"] = "0";
-        // Use a fixed rolling window (last N samples) for status average latency.
-        processStartInfo.Environment["QUERYLENS_AVG_WINDOW_SAMPLES"] = "20";
+        // Keep rolling-window latency at 20 samples by default, but honor explicit env overrides.
+        if (string.IsNullOrWhiteSpace(processStartInfo.Environment["QUERYLENS_AVG_WINDOW_SAMPLES"]))
+        {
+            processStartInfo.Environment["QUERYLENS_AVG_WINDOW_SAMPLES"] = "20";
+        }
         processStartInfo.Environment["QUERYLENS_MAX_CODELENS_PER_DOCUMENT"] = DefaultMaxCodeLensPerDocument.ToString(System.Globalization.CultureInfo.InvariantCulture);
         processStartInfo.Environment["QUERYLENS_CODELENS_DEBOUNCE_MS"] = DefaultCodeLensDebounceMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         processStartInfo.Environment["QUERYLENS_CODELENS_USE_MODEL_FILTER"] = "0";
