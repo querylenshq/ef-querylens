@@ -1,4 +1,5 @@
 using EFQueryLens.Lsp.Handlers;
+using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
@@ -129,6 +130,13 @@ internal sealed class LanguageServerHandler
                     : "SQL preview ready.");
             }
         }
+    }
+
+    [JsonRpcMethod("efquerylens/hover", UseSingleObjectParameterDeserialization = true)]
+    public Task<QueryLensStructuredHoverResult?> StructuredHoverAsync(TextDocumentPositionParams request, CancellationToken ct)
+    {
+        if (_debugEnabled) Console.Error.WriteLine($"[QL-LSP] request method=efquerylens/hover");
+        return _hover.HandleStructuredAsync(request, ct);
     }
 
     [JsonRpcMethod("efquerylens/warmup", UseSingleObjectParameterDeserialization = true)]

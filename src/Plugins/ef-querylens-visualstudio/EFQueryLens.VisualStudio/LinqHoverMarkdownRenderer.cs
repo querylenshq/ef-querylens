@@ -100,6 +100,112 @@ internal static class LinqHoverMarkdownRenderer
         return hostBorder;
     }
 
+    public static FrameworkElement CreateFromStructured(QueryLensStructuredHoverResponse response, string uri, int line, int character)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (!response.Success)
+        {
+            var errorMessage = response.ErrorMessage ?? "Translation failed.";
+            return CreateFromMarkdown($"**QueryLens Error**\n```text\n{errorMessage}\n```");
+        }
+
+        var statements = response.Statements ?? [];
+        var firstSql = statements.Count > 0 ? statements[0].Sql : null;
+        var enrichedSql = BuildEnrichedSqlContentFromResponse(firstSql, response);
+        var copySql = enrichedSql ?? firstSql;
+
+        var queryParams = $"uri={Uri.EscapeDataString(uri)}&line={line}&character={character}";
+        var statementWord = response.CommandCount == 1 ? "query" : "queries";
+        var headerText = string.IsNullOrWhiteSpace(copySql)
+            ? $"**QueryLens · {response.CommandCount} {statementWord}**"
+            : $"**QueryLens · {response.CommandCount} {statementWord}** | [Copy SQL](efquerylens://copySql?{queryParams}) | [Open SQL Editor](efquerylens://openSqlEditor?{queryParams})";
+
+        var hostBorder = new Border
+        {
+            Background = Brushes.Transparent,
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(0),
+            MinWidth = 380,
+            MaxHeight = 420,
+            MaxWidth = 860,
+        };
+
+        var layoutGrid = new Grid();
+        layoutGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        layoutGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        var headerElement = RenderHeaderLine(headerText, copySql);
+        Grid.SetRow(headerElement, 0);
+        layoutGrid.Children.Add(headerElement);
+
+        var scrollViewer = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+
+        var stack = new StackPanel();
+        foreach (var stmt in statements)
+        {
+            if (!string.IsNullOrWhiteSpace(stmt.SplitLabel))
+            {
+                stack.Children.Add(RenderParagraph($"*{stmt.SplitLabel}*", copySql));
+            }
+            var sqlLines = (stmt.Sql ?? string.Empty).Replace("\r\n", "\n").Split('\n').ToList();
+            stack.Children.Add(RenderCodeBlock("sql", sqlLines));
+        }
+
+        var warnings = response.Warnings ?? [];
+        if (warnings.Count > 0)
+        {
+            stack.Children.Add(RenderHeading("Notes", 13, copySql));
+            foreach (var w in warnings)
+            {
+                stack.Children.Add(RenderBullet(w, copySql));
+            }
+        }
+
+        scrollViewer.Content = stack;
+        Grid.SetRow(scrollViewer, 1);
+        layoutGrid.Children.Add(scrollViewer);
+        hostBorder.Child = layoutGrid;
+
+        return hostBorder;
+    }
+
+    private static string? BuildEnrichedSqlContentFromResponse(string? rawSql, QueryLensStructuredHoverResponse response)
+    {
+        if (string.IsNullOrWhiteSpace(rawSql)) return null;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("-- EF QueryLens");
+
+        if (!string.IsNullOrWhiteSpace(response.SourceFile))
+        {
+            var lineDisplay = response.SourceLine > 0 ? $", line {response.SourceLine}" : string.Empty;
+            sb.AppendLine($"-- Source:    {response.SourceFile}{lineDisplay}");
+        }
+
+        AppendCommentedExpression(sb, "LINQ", response.SourceExpression);
+
+        if (!string.IsNullOrWhiteSpace(response.DbContextType))
+        {
+            sb.AppendLine($"-- DbContext: {response.DbContextType}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(response.ProviderName))
+        {
+            sb.AppendLine($"-- Provider:  {response.ProviderName}");
+        }
+
+        sb.AppendLine();
+        sb.Append(rawSql);
+        return sb.ToString();
+    }
+
     private static string StripQueryLensMetadataComment(string markdown)
     {
         return System.Text.RegularExpressions.Regex.Replace(

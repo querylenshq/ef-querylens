@@ -57,6 +57,14 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         var applicableSnapshotSpan = new SnapshotSpan(snapshot, new Span(linqSpan.Start, linqSpan.Length));
         ITrackingSpan? applicableTrackingSpan = snapshot.CreateTrackingSpan(applicableSnapshotSpan, SpanTrackingMode.EdgeInclusive);
 
+        // Try structured hover first (VS-optimized path: typed SQL, always-pinned header, no markdown parsing).
+        var structuredElement = await TryGetStructuredContentAsync(triggerPoint.Value, snapshot, linqSpan, cancellationToken);
+        if (structuredElement is not null)
+        {
+            return new QuickInfoItem(applicableTrackingSpan, structuredElement);
+        }
+
+        // Markdown fallback for compatibility with older daemon builds.
         var hoverMarkdown = await TryGetHoverMarkdownAsync(triggerPoint.Value, snapshot, linqSpan, cancellationToken);
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -103,6 +111,45 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
 
         result = LinqChainExtractorInProc.TryExtractLinqAtPositionWithSpan(sourceText, position + 1);
         return result;
+    }
+
+    private async Task<System.Windows.FrameworkElement?> TryGetStructuredContentAsync(SnapshotPoint triggerPoint, ITextSnapshot snapshot, TextSpan linqSpan, CancellationToken cancellationToken)
+    {
+        if (!textBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document)
+            || string.IsNullOrWhiteSpace(document.FilePath))
+        {
+            return null;
+        }
+
+        var uri = new Uri(document.FilePath).AbsoluteUri;
+        var attempts = BuildHoverAttempts(triggerPoint, snapshot, linqSpan);
+        for (var i = 0; i < attempts.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var attempt = attempts[i];
+            Log($"Structured hover attempt {i + 1}/{attempts.Count} ({attempt.Label}) line={attempt.Line} char={attempt.Character}");
+
+            var response = await QueryLensLanguageClient.TryGetStructuredHoverAsync(
+                document.FilePath,
+                attempt.Line,
+                attempt.Character,
+                cancellationToken);
+
+            if (response is not null)
+            {
+                Log($"Structured hover resolved on attempt {i + 1} ({attempt.Label}), success={response.Success}");
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+                return LinqHoverMarkdownRenderer.CreateFromStructured(response, uri, attempt.Line, attempt.Character);
+            }
+
+            if (i < attempts.Count - 1)
+            {
+                await Task.Delay(120, cancellationToken);
+            }
+        }
+
+        Log("Structured hover returned null for all attempts, falling back to markdown.");
+        return null;
     }
 
     private async Task<string> TryGetHoverMarkdownAsync(SnapshotPoint triggerPoint, ITextSnapshot snapshot, TextSpan linqSpan, CancellationToken cancellationToken)

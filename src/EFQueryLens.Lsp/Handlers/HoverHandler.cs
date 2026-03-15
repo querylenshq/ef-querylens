@@ -21,6 +21,9 @@ internal sealed class HoverHandler
     private readonly ConcurrentDictionary<string, CachedHoverResult> _hoverCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CachedHoverResult> _semanticHoverCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Lazy<Task<Hover?>>> _inflightSemanticHover = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedStructuredResult> _structuredHoverCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedStructuredResult> _semanticStructuredHoverCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<Task<QueryLensStructuredHoverResult?>>> _inflightSemanticStructuredHover = new(StringComparer.OrdinalIgnoreCase);
     private readonly int _hoverCacheTtlMs;
     private readonly int _hoverCancellationGraceMs;
     private readonly bool _debugEnabled;
@@ -229,6 +232,215 @@ internal sealed class HoverHandler
         {
             _inflightSemanticHover.TryRemove(inFlightKey, out _);
         }
+    }
+
+    // ── Structured hover (efquerylens/hover) ─────────────────────────────────
+
+    public async Task<QueryLensStructuredHoverResult?> HandleStructuredAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
+    {
+        var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
+        var documentUri = request.TextDocument.Uri.ToString();
+        var sourceText = await GetSourceTextAsync(documentUri, filePath, cancellationToken);
+        if (string.IsNullOrWhiteSpace(sourceText))
+        {
+            return null;
+        }
+
+        LogHoverDebug($"structured-hover-request path={filePath} line={request.Position.Line} char={request.Position.Character}");
+        var hasSemanticContext = TryResolveSemanticHoverContext(
+            sourceText,
+            request.Position.Line,
+            request.Position.Character,
+            out var semanticContext);
+
+        var effectiveLine = hasSemanticContext ? semanticContext!.EffectiveLine : request.Position.Line;
+        var effectiveCharacter = hasSemanticContext ? semanticContext!.EffectiveCharacter : request.Position.Character;
+
+        var cacheKey = BuildHoverCacheKey(
+            filePath,
+            sourceText,
+            request.Position.Line,
+            request.Position.Character,
+            semanticContext);
+
+        if (TryGetCachedStructured(cacheKey, out var cachedResult))
+        {
+            LogHoverDebug($"structured-hover-cache-hit line={effectiveLine} char={effectiveCharacter}");
+            return cachedResult;
+        }
+
+        if (semanticContext is not null && TryGetSemanticCachedStructured(semanticContext.SemanticKey, out var semanticCached))
+        {
+            LogHoverDebug($"structured-hover-semantic-cache-hit line={effectiveLine} char={effectiveCharacter}");
+            CacheStructured(cacheKey, semanticCached, semanticContext);
+            return semanticCached;
+        }
+
+        if (semanticContext is not null)
+        {
+            var inFlightKey = BuildInFlightKey(filePath, semanticContext);
+            var lazyTask = _inflightSemanticStructuredHover.GetOrAdd(
+                inFlightKey,
+                _ => new Lazy<Task<QueryLensStructuredHoverResult?>>(
+                    () => ComputeAndCacheStructuredSemanticHoverAsync(
+                        inFlightKey,
+                        cacheKey,
+                        filePath,
+                        sourceText,
+                        semanticContext),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            try
+            {
+                var sharedTask = lazyTask.Value;
+                var sharedResult = await WaitWithCancellationAsync(sharedTask, cancellationToken);
+                CacheStructured(cacheKey, sharedResult, semanticContext);
+                return sharedResult;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                var sharedTask = lazyTask.Value;
+                var (completed, salvagedResult) = await TryGetResultWithinGraceAsync(sharedTask, _hoverCancellationGraceMs);
+                if (completed)
+                {
+                    CacheStructured(cacheKey, salvagedResult, semanticContext);
+                    LogHoverDebug($"structured-hover-cancel-salvaged line={effectiveLine} char={effectiveCharacter}");
+                    return salvagedResult;
+                }
+
+                if (TryGetSemanticCachedStructured(semanticContext.SemanticKey, out var semanticCachedAfterCancel))
+                {
+                    CacheStructured(cacheKey, semanticCachedAfterCancel, semanticContext);
+                    return semanticCachedAfterCancel;
+                }
+
+                return null;
+            }
+        }
+
+        var sw = Stopwatch.StartNew();
+        QueryLensStructuredHoverResult? computed;
+        try
+        {
+            computed = await ComputeStructuredHoverAsync(
+                filePath,
+                sourceText,
+                effectiveLine,
+                effectiveCharacter,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            LogHoverDebug($"structured-hover-canceled line={effectiveLine} char={effectiveCharacter}");
+            return null;
+        }
+
+        sw.Stop();
+        LogHoverDebug($"structured-hover-compute-finished line={effectiveLine} char={effectiveCharacter} elapsedMs={sw.ElapsedMilliseconds} hasResult={computed is not null}");
+        CacheStructured(cacheKey, computed, semanticContext);
+        return computed;
+    }
+
+    private async Task<QueryLensStructuredHoverResult?> ComputeAndCacheStructuredSemanticHoverAsync(
+        string inFlightKey,
+        string cacheKey,
+        string filePath,
+        string sourceText,
+        SemanticHoverContext semanticContext)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var computed = await ComputeStructuredHoverAsync(
+                filePath,
+                sourceText,
+                semanticContext.EffectiveLine,
+                semanticContext.EffectiveCharacter,
+                CancellationToken.None);
+            sw.Stop();
+            LogHoverDebug(
+                $"structured-hover-compute-finished line={semanticContext.EffectiveLine} char={semanticContext.EffectiveCharacter} " +
+                $"elapsedMs={sw.ElapsedMilliseconds} hasResult={computed is not null}");
+            CacheStructured(cacheKey, computed, semanticContext);
+            return computed;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            LogHoverDebug(
+                $"structured-hover-compute-failed line={semanticContext.EffectiveLine} char={semanticContext.EffectiveCharacter} " +
+                $"elapsedMs={sw.ElapsedMilliseconds} type={ex.GetType().Name} message={ex.Message}");
+            throw;
+        }
+        finally
+        {
+            _inflightSemanticStructuredHover.TryRemove(inFlightKey, out _);
+        }
+    }
+
+    private async Task<QueryLensStructuredHoverResult?> ComputeStructuredHoverAsync(
+        string filePath,
+        string sourceText,
+        int line,
+        int character,
+        CancellationToken cancellationToken)
+    {
+        var result = await _hoverPreviewService.BuildStructuredAsync(
+            filePath,
+            sourceText,
+            line,
+            character,
+            cancellationToken);
+
+        if (!result.Success &&
+            result.ErrorMessage?.StartsWith("Could not extract a LINQ query expression", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return null;
+        }
+
+        return result;
+    }
+
+    private bool TryGetCachedStructured(string cacheKey, out QueryLensStructuredHoverResult? result)
+    {
+        result = null;
+        if (_hoverCacheTtlMs <= 0) return false;
+        if (!_structuredHoverCache.TryGetValue(cacheKey, out var cached)) return false;
+        var expiresAtTicks = cached.CreatedAtTicks + TimeSpan.FromMilliseconds(_hoverCacheTtlMs).Ticks;
+        if (expiresAtTicks <= DateTime.UtcNow.Ticks)
+        {
+            _structuredHoverCache.TryRemove(cacheKey, out _);
+            return false;
+        }
+        result = cached.Result;
+        return true;
+    }
+
+    private bool TryGetSemanticCachedStructured(string semanticKey, out QueryLensStructuredHoverResult? result)
+    {
+        result = null;
+        if (_hoverCacheTtlMs <= 0) return false;
+        if (!_semanticStructuredHoverCache.TryGetValue(semanticKey, out var cached)) return false;
+        var expiresAtTicks = cached.CreatedAtTicks + TimeSpan.FromMilliseconds(_hoverCacheTtlMs).Ticks;
+        if (expiresAtTicks <= DateTime.UtcNow.Ticks)
+        {
+            _semanticStructuredHoverCache.TryRemove(semanticKey, out _);
+            return false;
+        }
+        result = cached.Result;
+        return result is not null;
+    }
+
+    private void CacheStructured(string cacheKey, QueryLensStructuredHoverResult? result, SemanticHoverContext? semanticContext)
+    {
+        if (_hoverCacheTtlMs <= 0) return;
+        _structuredHoverCache[cacheKey] = new CachedStructuredResult(DateTime.UtcNow.Ticks, result);
+        if (semanticContext is not null && result is not null)
+        {
+            _semanticStructuredHoverCache[semanticContext.SemanticKey] = new CachedStructuredResult(DateTime.UtcNow.Ticks, result);
+        }
+        if (_structuredHoverCache.Count > 2_000) _structuredHoverCache.Clear();
+        if (_semanticStructuredHoverCache.Count > 2_000) _semanticStructuredHoverCache.Clear();
     }
 
     private async Task<string?> GetSourceTextAsync(string documentUri, string filePath, CancellationToken cancellationToken)
@@ -603,4 +815,6 @@ internal sealed class HoverHandler
     private sealed record SemanticHoverContext(string SemanticKey, int EffectiveLine, int EffectiveCharacter);
 
     private sealed record CachedHoverResult(long CreatedAtTicks, Hover? Hover);
+
+    private sealed record CachedStructuredResult(long CreatedAtTicks, QueryLensStructuredHoverResult? Result);
 }

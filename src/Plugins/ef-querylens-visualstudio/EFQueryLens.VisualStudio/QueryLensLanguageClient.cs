@@ -179,6 +179,51 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
         return result;
     }
 
+    internal static async Task<QueryLensStructuredHoverResponse?> TryGetStructuredHoverAsync(
+        string filePath,
+        int line,
+        int character,
+        CancellationToken cancellationToken)
+    {
+        var client = Current;
+        if (client is null) return null;
+        var languageServerRpc = client.rpc;
+        if (languageServerRpc is null) return null;
+
+        try
+        {
+            Log($"structured-hover-request-start file={Path.GetFileName(filePath)} line={line} char={character}");
+            var uri = new Uri(filePath).AbsoluteUri;
+            var response = await languageServerRpc.InvokeWithParameterObjectAsync<JToken?>(
+                "efquerylens/hover",
+                new JObject
+                {
+                    ["textDocument"] = new JObject { ["uri"] = uri },
+                    ["position"] = new JObject
+                    {
+                        ["line"] = Math.Max(0, line),
+                        ["character"] = Math.Max(0, character),
+                    }
+                },
+                cancellationToken);
+
+            if (response is null || response.Type == Newtonsoft.Json.Linq.JTokenType.Null)
+            {
+                Log($"structured-hover-request-null file={Path.GetFileName(filePath)} line={line} char={character}");
+                return null;
+            }
+
+            var result = response.ToObject<QueryLensStructuredHoverResponse>();
+            Log($"structured-hover-request-success file={Path.GetFileName(filePath)} line={line} char={character} success={result?.Success}");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Log($"structured-hover-request-failed type={ex.GetType().Name} message={ex.Message}");
+            return null;
+        }
+    }
+
     internal static async Task<string?> TryGetHoverMarkdownAsync(
         string filePath,
         int line,
@@ -523,4 +568,25 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
             // Best effort only.
         }
     }
+}
+
+internal sealed class QueryLensSqlStatementDto
+{
+    public string? Sql { get; set; }
+    public string? SplitLabel { get; set; }
+}
+
+internal sealed class QueryLensStructuredHoverResponse
+{
+    public bool Success { get; set; }
+    public string? ErrorMessage { get; set; }
+    public List<QueryLensSqlStatementDto>? Statements { get; set; }
+    public int CommandCount { get; set; }
+    public string? SourceExpression { get; set; }
+    public string? DbContextType { get; set; }
+    public string? ProviderName { get; set; }
+    public string? SourceFile { get; set; }
+    public int SourceLine { get; set; }
+    public List<string>? Warnings { get; set; }
+    public string? Mode { get; set; }
 }
