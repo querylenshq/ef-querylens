@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Grpc;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using EFQueryLens.Lsp.Parsing;
 using EFQueryLens.Lsp.Services;
@@ -56,6 +57,26 @@ internal sealed class HoverHandler
             min: 0,
             max: 2_000);
         _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+    }
+
+    public void HandleDaemonEvent(DaemonEvent daemonEvent)
+    {
+        switch (daemonEvent.EventCase)
+        {
+            case DaemonEvent.EventOneofCase.StateChanged:
+                InvalidateCaches(
+                    $"state-changed context={daemonEvent.StateChanged.ContextName} state={daemonEvent.StateChanged.State}");
+                break;
+
+            case DaemonEvent.EventOneofCase.ConfigReloaded:
+                InvalidateCaches("config-reloaded");
+                break;
+
+            case DaemonEvent.EventOneofCase.AssemblyChanged:
+                InvalidateCaches(
+                    $"assembly-changed context={daemonEvent.AssemblyChanged.ContextName}");
+                break;
+        }
     }
 
     public async Task<Hover?> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
@@ -882,6 +903,18 @@ internal sealed class HoverHandler
         return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
                || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
                || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void InvalidateCaches(string reason)
+    {
+        _hoverCache.Clear();
+        _semanticHoverCache.Clear();
+        _structuredHoverCache.Clear();
+        _semanticStructuredHoverCache.Clear();
+        _inflightSemanticHover.Clear();
+        _inflightSemanticStructuredHover.Clear();
+
+        LogHoverDebug($"hover-cache-invalidated reason={reason}");
     }
 
     private void LogHoverDebug(string message)

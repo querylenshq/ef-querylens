@@ -1,4 +1,5 @@
 using EFQueryLens.Core;
+using EFQueryLens.Core.Grpc;
 using Grpc.Core;
 using System.Net.Sockets;
 
@@ -60,7 +61,7 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
         ExplainRequest request, CancellationToken ct = default) =>
         _inner.ExplainAsync(request, ct);
 
-    public async Task<ModelSnapshot> InspectModelAsync(
+    public async Task<EFQueryLens.Core.ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request, CancellationToken ct = default) =>
         await ExecuteWithReconnectAsync(e => e.InspectModelAsync(request, ct), ct);
 
@@ -127,6 +128,46 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
         finally
         {
             _reconnectGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Runs a resilient daemon event subscription loop. If the stream drops due to
+    /// transport issues, this method reconnects and re-subscribes until cancelled.
+    /// </summary>
+    public async Task RunDaemonEventSubscriptionAsync(
+        Action<DaemonEvent> onEvent,
+        CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(onEvent);
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await _inner.SubscribeAsync(onEvent, ct);
+                if (!ct.IsCancellationRequested)
+                {
+                    _debugLog?.Invoke("daemon-subscribe-ended will-reconnect");
+                    await ReconnectAsync(ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex) when (IsDaemonTransportFailure(ex) && !ct.IsCancellationRequested)
+            {
+                _debugLog?.Invoke(
+                    $"daemon-subscribe-failed will-reconnect type={ex.GetType().Name} message={ex.Message}");
+                await ReconnectAsync(ct);
+            }
+
+            if (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(150, ct);
+            }
         }
     }
 

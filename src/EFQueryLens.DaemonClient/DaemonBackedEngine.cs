@@ -123,6 +123,23 @@ public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
         await _client.PingAsync(new PingRequest(), cancellationToken: ct).ResponseAsync;
     }
 
+    public async Task SubscribeAsync(Action<DaemonEvent> onEvent, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(onEvent);
+
+        using var call = _client.Subscribe(new SubscribeRequest(), cancellationToken: ct);
+        while (await call.ResponseStream.MoveNext(ct))
+        {
+            var daemonEvent = call.ResponseStream.Current;
+            if (daemonEvent is null)
+            {
+                continue;
+            }
+
+            onEvent(daemonEvent);
+        }
+    }
+
     public ValueTask DisposeAsync()
     {
         _channel.Dispose();

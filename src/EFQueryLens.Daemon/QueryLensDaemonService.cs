@@ -18,11 +18,13 @@ internal sealed class QueryLensDaemonService(
 {
     private readonly bool _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
     private readonly DateTime _startedUtc = DateTime.UtcNow;
+    private readonly ConcurrentDictionary<string, string> _contextAssemblyPaths = new(StringComparer.Ordinal);
 
     public override async Task<TranslateResponse> Translate(TranslateRequest request, ServerCallContext context)
     {
         var sw = Stopwatch.StartNew();
         var domainRequest = request.Request.ToDomain();
+        TrackAssemblyPath(request.ContextName, domainRequest.AssemblyPath);
 
         LogDebug(
             $"translate-start context={request.ContextName} assembly={domainRequest.AssemblyPath} " +
@@ -68,6 +70,7 @@ internal sealed class QueryLensDaemonService(
                 request.ContextName,
                 request.Request.ToDomain(),
                 context.CancellationToken);
+            TrackAssemblyPath(request.ContextName, request.Request.AssemblyPath);
 
             if (queued.Status is QueryTranslationStatus.Ready)
             {
@@ -123,6 +126,7 @@ internal sealed class QueryLensDaemonService(
             AssemblyPath = request.AssemblyPath,
             DbContextTypeName = request.HasDbContextTypeName ? request.DbContextTypeName : null,
         };
+        TrackAssemblyPath(request.ContextName, request.AssemblyPath);
 
         var snapshot = await engine.InspectModelAsync(domainRequest, context.CancellationToken);
         TrackState(request.ContextName, DaemonWarmState.Ready);
@@ -214,6 +218,23 @@ internal sealed class QueryLensDaemonService(
 
         contextStates[contextName] = state;
         eventStreamBroker.PublishStateChanged(contextName, state);
+    }
+
+    private void TrackAssemblyPath(string contextName, string? assemblyPath)
+    {
+        if (string.IsNullOrWhiteSpace(contextName) || string.IsNullOrWhiteSpace(assemblyPath))
+        {
+            return;
+        }
+
+        if (_contextAssemblyPaths.TryGetValue(contextName, out var existing)
+            && string.Equals(existing, assemblyPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _contextAssemblyPaths[contextName] = assemblyPath;
+        eventStreamBroker.PublishAssemblyChanged(contextName, assemblyPath);
     }
 
     private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
