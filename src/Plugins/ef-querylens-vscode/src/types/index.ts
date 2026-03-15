@@ -1,6 +1,9 @@
 export type QueryLensSqlDialect = 'auto' | 'sql' | 'mysql' | 'transactsql';
 
+export type QueryLensMetadataProvenance = 'server' | 'fallback';
+
 export type QueryLensHoverMetadata = {
+    MetadataProvenance: QueryLensMetadataProvenance;
     SourceExpression: string;
     ExecutedExpression: string;
     Mode: string;

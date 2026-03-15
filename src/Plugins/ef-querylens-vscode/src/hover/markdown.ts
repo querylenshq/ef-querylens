@@ -67,6 +67,7 @@ export function extractQueryLensMetadata(markdown: string): QueryLensHoverMetada
         }
 
         return {
+            MetadataProvenance: 'server',
             SourceExpression: parsed.SourceExpression,
             ExecutedExpression: parsed.ExecutedExpression,
             Mode: typeof parsed.Mode === 'string' ? parsed.Mode : 'direct',
@@ -92,6 +93,9 @@ export function prependQueryLensContextComments(sql: string, metadata: QueryLens
 
     const lines: string[] = [];
     lines.push('-- EF QueryLens');
+    if (metadata.MetadataProvenance === 'fallback') {
+        lines.push('-- Metadata: inferred from cursor context because structured hover metadata was unavailable.');
+    }
 
     if (metadata.SourceFile) {
         const lineDisplay = metadata.SourceLine > 0 ? `, line ${metadata.SourceLine}` : '';

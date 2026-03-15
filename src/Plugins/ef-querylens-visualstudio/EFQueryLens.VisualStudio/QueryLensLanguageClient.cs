@@ -24,7 +24,7 @@ using StreamJsonRpc;
 [Export(typeof(ILanguageClient))]
 [ContentType("CSharp")]
 [Name("EF QueryLens")]
-internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClientCustomMessage2
+internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClientCustomMessage2, IDisposable
 {
     private const int DefaultMaxCodeLensPerDocument = 50;
     private const int DefaultCodeLensDebounceMilliseconds = 250;
@@ -35,7 +35,10 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
     private static string? currentLspLogPath;
 
     private Process? serverProcess;
+    private Task? serverErrorPumpTask;
+    private CancellationTokenSource? serverErrorPumpCts;
     private JsonRpc? rpc;
+    private int disposeRequested;
 
     internal static QueryLensLanguageClient? Current { get; private set; }
 
@@ -69,6 +72,11 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
 
     public async Task<Connection?> ActivateAsync(CancellationToken cancellationToken)
     {
+        if (Volatile.Read(ref disposeRequested) == 1)
+        {
+            throw new ObjectDisposedException(nameof(QueryLensLanguageClient));
+        }
+
         var extensionDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
             ?? throw new InvalidOperationException("Unable to resolve extension assembly directory.");
 
@@ -102,10 +110,33 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
         }
 
         Log($"lsp-process-started pid={serverProcess.Id} path={serverPath} workspace={workspaceRoot}");
-        _ = PumpServerErrorStreamAsync(serverProcess, cancellationToken);
+        var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (Sync)
+        {
+            serverErrorPumpCts = pumpCts;
+            serverErrorPumpTask = PumpServerErrorStreamAsync(serverProcess, pumpCts.Token);
+        }
 
         await Task.Yield();
         return new Connection(serverProcess.StandardOutput.BaseStream, serverProcess.StandardInput.BaseStream);
+    }
+
+    public void Dispose()
+    {
+        DisposeCore("dispose");
+        GC.SuppressFinalize(this);
+    }
+
+    internal static void DisposeCurrent()
+    {
+        QueryLensLanguageClient? current;
+        lock (Sync)
+        {
+            current = Current;
+            Current = null;
+        }
+
+        current?.Dispose();
     }
 
     public async Task OnLoadedAsync()
@@ -133,18 +164,18 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
         return Task.CompletedTask;
     }
 
-    internal static async Task<(bool Success, string Message)> RequestDaemonRestartAsync(CancellationToken cancellationToken)
+    internal static async Task<(bool Success, string Code, string Message)> RequestDaemonRestartAsync(CancellationToken cancellationToken)
     {
         var client = Current;
         if (client is null)
         {
-            return (false, "Language client is not active yet.");
+            return (false, QueryLensErrorCodes.DaemonRestartClientNotReady, "Language client is not active yet.");
         }
 
         var languageServerRpc = client.rpc;
         if (languageServerRpc is null)
         {
-            return (false, "Language server RPC channel is not ready yet.");
+            return (false, QueryLensErrorCodes.DaemonRestartRpcNotReady, "Language server RPC channel is not ready yet.");
         }
 
         try
@@ -157,13 +188,15 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
             var success = response?["success"]?.Value<bool>() == true;
             var message = response?["message"]?.Value<string>()
                 ?? (success ? "Daemon restarted." : "Daemon restart did not complete.");
-
-            return (success, message);
+            var code = success
+                ? "OK"
+                : QueryLensErrorCodes.DaemonRestartIncomplete;
+            return (success, code, message);
         }
         catch (Exception ex)
         {
-            Log($"daemon-restart-request-failed type={ex.GetType().Name} message={ex.Message}");
-            return (false, $"Daemon restart failed: {ex.Message}");
+            Log($"daemon-restart-request-failed code={QueryLensErrorCodes.DaemonRestartFailed} type={ex.GetType().Name} message={ex.Message}");
+            return (false, QueryLensErrorCodes.DaemonRestartFailed, $"Daemon restart failed: {ex.Message}");
         }
     }
 
@@ -567,6 +600,86 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
         {
             // Best effort only.
         }
+    }
+
+    private void DisposeCore(string reason)
+    {
+        if (Interlocked.Exchange(ref disposeRequested, 1) == 1)
+        {
+            return;
+        }
+
+        CancellationTokenSource? errorPumpCts;
+        JsonRpc? rpcToDispose;
+        Process? processToDispose;
+
+        lock (Sync)
+        {
+            serverErrorPumpTask = null;
+            errorPumpCts = serverErrorPumpCts;
+            serverErrorPumpCts = null;
+            rpcToDispose = rpc;
+            rpc = null;
+            processToDispose = serverProcess;
+            serverProcess = null;
+            if (ReferenceEquals(Current, this))
+            {
+                Current = null;
+            }
+        }
+
+        try
+        {
+            errorPumpCts?.Cancel();
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        try
+        {
+            rpcToDispose?.Dispose();
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        if (processToDispose is not null)
+        {
+            try
+            {
+                if (!processToDispose.HasExited)
+                {
+                    processToDispose.Kill();
+                }
+            }
+            catch
+            {
+                // Best effort only.
+            }
+
+            try
+            {
+                processToDispose.Dispose();
+            }
+            catch
+            {
+                // Best effort only.
+            }
+        }
+
+        try
+        {
+            errorPumpCts?.Dispose();
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        Log($"language-client-disposed reason={reason}");
     }
 }
 

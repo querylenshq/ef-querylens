@@ -8,9 +8,10 @@ import { LanguageClient } from 'vscode-languageclient/node';
 
 import { SqlActionHandlers } from './sqlActions';
 import { QueryLensSettings } from '../types';
+import { formatLogMessage, formatUserMessage } from '../utils/errors';
 
 export type QueryLensCommandRegistryOptions = {
-    settings: QueryLensSettings;
+    getSettings: () => QueryLensSettings;
     sqlActions: SqlActionHandlers;
     getClient: () => LanguageClient | undefined;
     outputChannel: OutputChannel | undefined;
@@ -19,7 +20,7 @@ export type QueryLensCommandRegistryOptions = {
 
 export function registerQueryLensCommands(options: QueryLensCommandRegistryOptions): Disposable[] {
     const {
-        settings,
+        getSettings,
         sqlActions,
         getClient,
         outputChannel,
@@ -29,6 +30,7 @@ export function registerQueryLensCommands(options: QueryLensCommandRegistryOptio
     const showSqlCommand = commands.registerCommand(
         'efquerylens.showSql',
         async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
+            const settings = getSettings();
             if (settings.debugLogsEnabled) {
                 logCommandInvocation(logOutput, 'showSql', uriInput, lineInput, characterInput);
             }
@@ -39,6 +41,7 @@ export function registerQueryLensCommands(options: QueryLensCommandRegistryOptio
     const copySqlCommand = commands.registerCommand(
         'efquerylens.copySql',
         async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
+            const settings = getSettings();
             if (settings.debugLogsEnabled) {
                 logCommandInvocation(logOutput, 'copySql', uriInput, lineInput, characterInput);
             }
@@ -55,6 +58,7 @@ export function registerQueryLensCommands(options: QueryLensCommandRegistryOptio
     const openSqlEditorCommand = commands.registerCommand(
         'efquerylens.openSqlEditor',
         async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
+            const settings = getSettings();
             if (settings.debugLogsEnabled) {
                 logCommandInvocation(logOutput, 'openSqlEditor', uriInput, lineInput, characterInput);
             }
@@ -80,7 +84,7 @@ export function registerQueryLensCommands(options: QueryLensCommandRegistryOptio
         async () => {
             const client = getClient();
             if (!client) {
-                window.showWarningMessage('EF QueryLens: language client is not initialized yet.');
+                window.showWarningMessage(formatUserMessage('QL1005_DAEMON_RESTART_NOT_READY', 'Language client is not initialized yet.'));
                 return;
             }
 
@@ -91,11 +95,13 @@ export function registerQueryLensCommands(options: QueryLensCommandRegistryOptio
                 if (success) {
                     window.showInformationMessage(`EF QueryLens: ${message}`);
                 } else {
-                    window.showWarningMessage(`EF QueryLens: ${message}`);
+                    logOutput(formatLogMessage('QL1007_DAEMON_RESTART_INCOMPLETE', `daemon restart incomplete message=${message}`));
+                    window.showWarningMessage(formatUserMessage('QL1007_DAEMON_RESTART_INCOMPLETE', message));
                 }
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
-                window.showErrorMessage(`EF QueryLens: daemon restart failed. ${message}`);
+                logOutput(formatLogMessage('QL1006_DAEMON_RESTART_FAILED', `daemon restart failed reason=${message}`));
+                window.showErrorMessage(formatUserMessage('QL1006_DAEMON_RESTART_FAILED', `Daemon restart failed. ${message}`));
             }
         }
     );

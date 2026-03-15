@@ -30,6 +30,10 @@
         "title": "EF QueryLens: Copy SQL"
       },
       {
+        "command": "efquerylens.openSqlEditor",
+        "title": "EF QueryLens: Open SQL Editor"
+      },
+      {
         "command": "efquerylens.restart",
         "title": "EF QueryLens: Restart Language Server"
       },

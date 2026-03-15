@@ -1,9 +1,10 @@
 import { TextEditor } from 'vscode';
 import { LanguageClient } from 'vscode-languageclient/node';
+import { formatLogMessage } from '../utils/errors';
 
 export type WarmupManagerOptions = {
     getClient: () => LanguageClient | undefined;
-    debugLogsEnabled: boolean;
+    getDebugLogsEnabled: () => boolean;
     logOutput: (message: string) => void;
 };
 
@@ -13,9 +14,62 @@ export type WarmupManager = {
 };
 
 export function createWarmupManager(options: WarmupManagerOptions): WarmupManager {
-    const { getClient, debugLogsEnabled, logOutput } = options;
+    const { getClient, getDebugLogsEnabled, logOutput } = options;
     const warmedDocumentVersions = new Map<string, number>();
     const warmupInFlightUris = new Set<string>();
+    const latestRequestedWarmups = new Map<string, { version: number; line: number; character: number }>();
+
+    const queueWarmupRequest = (uri: string, version: number, line: number, character: number): void => {
+        latestRequestedWarmups.set(uri, { version, line, character });
+        if (warmupInFlightUris.has(uri)) {
+            return;
+        }
+
+        const client = getClient();
+        if (!client) {
+            return;
+        }
+
+        void runWarmupRequest(client, uri);
+    };
+
+    const runWarmupRequest = async (client: LanguageClient, uri: string): Promise<void> => {
+        const request = latestRequestedWarmups.get(uri);
+        if (!request) {
+            return;
+        }
+
+        warmupInFlightUris.add(uri);
+        await whenClientReady(client);
+
+        try {
+            await client.sendRequest('efquerylens/warmup', {
+                textDocument: { uri },
+                position: { line: request.line, character: request.character },
+            });
+
+            warmedDocumentVersions.set(uri, request.version);
+            if (getDebugLogsEnabled()) {
+                logOutput(
+                    `[EFQueryLens] warmup rpc uri=${uri} line=${request.line} character=${request.character} version=${request.version}`
+                );
+            }
+        } catch (error) {
+            if (getDebugLogsEnabled()) {
+                const message = error instanceof Error ? error.message : String(error);
+                logOutput(formatLogMessage('QL1008_WARMUP_FAILED', `warmup skipped uri=${uri} reason=${message}`));
+            }
+        } finally {
+            warmupInFlightUris.delete(uri);
+            const latest = latestRequestedWarmups.get(uri);
+            if (latest && latest.version > request.version) {
+                const refreshedClient = getClient();
+                if (refreshedClient) {
+                    void runWarmupRequest(refreshedClient, uri);
+                }
+            }
+        }
+    };
 
     const scheduleWarmup = (editor: TextEditor | undefined): void => {
         const client = getClient();
@@ -51,28 +105,7 @@ export function createWarmupManager(options: WarmupManagerOptions): WarmupManage
         const line = Math.max(0, Math.floor(requestedLine));
         const character = Math.max(0, Math.floor(requestedCharacter));
 
-        warmupInFlightUris.add(uri);
-
-        void whenClientReady(client).then(async () => {
-            try {
-                await client.sendRequest('efquerylens/warmup', {
-                    textDocument: { uri },
-                    position: { line, character },
-                });
-
-                warmedDocumentVersions.set(uri, document.version);
-                if (debugLogsEnabled) {
-                    logOutput(`[EFQueryLens] warmup rpc uri=${uri} line=${line} character=${character}`);
-                }
-            } catch (error) {
-                if (debugLogsEnabled) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    logOutput(`[EFQueryLens] warmup skipped uri=${uri} reason=${message}`);
-                }
-            } finally {
-                warmupInFlightUris.delete(uri);
-            }
-        });
+        queueWarmupRequest(uri, document.version, line, character);
     };
 
     const requestDaemonRestartOnActivate = async (): Promise<void> => {
@@ -90,10 +123,14 @@ export function createWarmupManager(options: WarmupManagerOptions): WarmupManage
                 ? (response as { message: string }).message
                 : (success ? 'Daemon restarted.' : 'Daemon restart did not complete.');
 
-            logOutput(`[EFQueryLens] startup-daemon-restart success=${success} message=${message}`);
+            if (success) {
+                logOutput(`[EFQueryLens] startup-daemon-restart success=true message=${message}`);
+            } else {
+                logOutput(formatLogMessage('QL1007_DAEMON_RESTART_INCOMPLETE', `startup daemon restart incomplete message=${message}`));
+            }
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            logOutput(`[EFQueryLens] startup-daemon-restart failed reason=${message}`);
+            logOutput(formatLogMessage('QL1006_DAEMON_RESTART_FAILED', `startup daemon restart failed reason=${message}`));
         }
     };
 

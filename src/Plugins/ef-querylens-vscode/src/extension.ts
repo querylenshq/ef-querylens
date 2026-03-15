@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+    commands,
     ExtensionContext,
     Hover,
     OutputChannel,
@@ -22,6 +23,7 @@ import { registerQueryLensCommands } from './commands/registry';
 import { createSqlActionHandlers } from './commands/sqlActions';
 import { stageRuntimeBinaries } from './runtime/staging';
 import { createWarmupManager } from './runtime/warmup';
+import { QueryLensSettings } from './types';
 
 let client: LanguageClient | undefined;
 let queryLensOutputChannel: OutputChannel | undefined;
@@ -57,7 +59,7 @@ export function activate(context: ExtensionContext) {
     const daemonExePath = stagedRuntime?.daemonExePath
         ?? path.join(packagedDaemonDir, 'EFQueryLens.Daemon.exe');
 
-    const settings = readSettings();
+    let currentSettings = readSettings();
     logOutput(`activate workspace=${workspaceRoot}`);
     logOutput(`[EFQueryLens] runtime source=packaged lsp=${packagedLspDir} daemon=${packagedDaemonDir}`);
     if (stagedRuntime) {
@@ -80,20 +82,20 @@ export function activate(context: ExtensionContext) {
         QUERYLENS_MAX_CODELENS_PER_DOCUMENT: '0',
         // InlayHint SQL Preview labels are used by Rider; disable them for VS Code UX.
         QUERYLENS_MAX_INLAY_HINTS_PER_DOCUMENT: '0',
-        QUERYLENS_CODELENS_DEBOUNCE_MS: String(settings.codeLensDebounceMs),
-        QUERYLENS_CODELENS_USE_MODEL_FILTER: settings.codeLensUseModelFilter ? '1' : '0',
-        QUERYLENS_DEBUG: settings.debugLogsEnabled ? '1' : '0',
+        QUERYLENS_CODELENS_DEBOUNCE_MS: String(currentSettings.codeLensDebounceMs),
+        QUERYLENS_CODELENS_USE_MODEL_FILTER: currentSettings.codeLensUseModelFilter ? '1' : '0',
+        QUERYLENS_DEBUG: currentSettings.debugLogsEnabled ? '1' : '0',
     };
 
     if (fs.existsSync(daemonExePath)) {
         serverEnv.QUERYLENS_DAEMON_EXE = daemonExePath;
-    } else if (settings.debugLogsEnabled) {
+    } else if (currentSettings.debugLogsEnabled) {
         logOutput(`[EFQueryLens] daemon exe not found at ${daemonExePath}`);
     }
 
     if (fs.existsSync(daemonDllPath)) {
         serverEnv.QUERYLENS_DAEMON_DLL = daemonDllPath;
-    } else if (settings.debugLogsEnabled) {
+    } else if (currentSettings.debugLogsEnabled) {
         logOutput(`[EFQueryLens] daemon dll not found at ${daemonDllPath}`);
     }
 
@@ -133,7 +135,7 @@ export function activate(context: ExtensionContext) {
 
     const sqlActions = createSqlActionHandlers(() => client);
     const commandDisposables = registerQueryLensCommands({
-        settings,
+        getSettings: () => currentSettings,
         sqlActions,
         getClient: () => client,
         outputChannel: queryLensOutputChannel,
@@ -143,11 +145,36 @@ export function activate(context: ExtensionContext) {
 
     const warmupManager = createWarmupManager({
         getClient: () => client,
-        debugLogsEnabled: settings.debugLogsEnabled,
+        getDebugLogsEnabled: () => currentSettings.debugLogsEnabled,
         logOutput,
     });
     context.subscriptions.push(
         window.onDidChangeActiveTextEditor(editor => warmupManager.scheduleWarmup(editor))
+    );
+    context.subscriptions.push(
+        workspace.onDidChangeConfiguration(async event => {
+            if (!event.affectsConfiguration('efquerylens')) {
+                return;
+            }
+
+            const previousSettings = currentSettings;
+            currentSettings = readSettings();
+            logOutput(
+                `[EFQueryLens] settings-updated formatOnShow=${currentSettings.formatSqlOnShow} dialect=${currentSettings.sqlDialect} debug=${currentSettings.debugLogsEnabled}`
+            );
+
+            if (!requiresLanguageServerRestart(previousSettings, currentSettings)) {
+                return;
+            }
+
+            const selection = await window.showInformationMessage(
+                'EF QueryLens: some setting changes require a language server restart to fully apply.',
+                'Restart Now'
+            );
+            if (selection === 'Restart Now') {
+                await commands.executeCommand('efquerylens.restart');
+            }
+        })
     );
 
     client.start();
@@ -166,4 +193,10 @@ export function deactivate(): Thenable<void> | undefined {
 
 function logOutput(message: string): void {
     queryLensOutputChannel?.appendLine(message);
+}
+
+function requiresLanguageServerRestart(previous: QueryLensSettings, next: QueryLensSettings): boolean {
+    return previous.codeLensDebounceMs !== next.codeLensDebounceMs
+        || previous.codeLensUseModelFilter !== next.codeLensUseModelFilter
+        || previous.debugLogsEnabled !== next.debugLogsEnabled;
 }

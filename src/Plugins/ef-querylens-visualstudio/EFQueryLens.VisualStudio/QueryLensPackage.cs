@@ -42,27 +42,27 @@ internal sealed class QueryLensPackage : AsyncPackage
 
     private void HandleRestartDaemonCommand(object sender, EventArgs e)
     {
-        _ = JoinableTaskFactory.RunAsync(async delegate
+        RunCommand(async cancellationToken =>
         {
-            var result = await QueryLensLanguageClient.RequestDaemonRestartAsync(CancellationToken.None);
+            var result = await QueryLensLanguageClient.RequestDaemonRestartAsync(cancellationToken);
 
-            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             var icon = result.Success ? OLEMSGICON.OLEMSGICON_INFO : OLEMSGICON.OLEMSGICON_WARNING;
             VsShellUtilities.ShowMessageBox(
                 this,
-                result.Message,
+                result.Success ? result.Message : $"[{result.Code}] {result.Message}",
                 "EF QueryLens",
                 icon,
                 OLEMSGBUTTON.OLEMSGBUTTON_OK,
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
-            });
+        });
     }
 
     private void HandleOpenLogsCommand(object sender, EventArgs e)
     {
-        _ = JoinableTaskFactory.RunAsync(async delegate
+        RunCommand(async cancellationToken =>
         {
-            var (success, message) = await QueryLensLogOpener.StartTailInOutputWindowAsync(this, CancellationToken.None);
+            var (success, message) = await QueryLensLogOpener.StartTailInOutputWindowAsync(this, cancellationToken);
 
             if (success)
             {
@@ -77,6 +77,50 @@ internal sealed class QueryLensPackage : AsyncPackage
                 OLEMSGICON.OLEMSGICON_WARNING,
                 OLEMSGBUTTON.OLEMSGBUTTON_OK,
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
-            });
+        });
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            QueryLensLogOpener.StopTail();
+            QueryLensLanguageClient.DisposeCurrent();
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private void RunCommand(Func<CancellationToken, Task> action)
+    {
+        if (action is null)
+        {
+            throw new ArgumentNullException(nameof(action));
+        }
+
+        var commandTask = JoinableTaskFactory.RunAsync(async delegate
+        {
+            try
+            {
+                await action(CancellationToken.None);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during shutdown.
+            }
+            catch (Exception ex)
+            {
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
+                VsShellUtilities.ShowMessageBox(
+                    this,
+                    $"[{QueryLensErrorCodes.CommandExecutionFailed}] EF QueryLens command failed: {ex.Message}",
+                    "EF QueryLens",
+                    OLEMSGICON.OLEMSGICON_CRITICAL,
+                    OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                    OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+            }
+        });
+
+        commandTask.FileAndForget("efquerylens/QueryLensPackage/RunCommand");
     }
 }

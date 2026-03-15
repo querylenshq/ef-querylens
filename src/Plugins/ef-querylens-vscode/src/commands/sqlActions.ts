@@ -18,6 +18,7 @@ import {
 } from '../hover/markdown';
 import { formatSql } from '../sql/formatting';
 import { QueryLensHoverMetadata, QueryLensSqlDialect } from '../types';
+import { formatUserMessage } from '../utils/errors';
 import { clamp, coerceNonNegativeInt, parseUri } from '../utils/parsing';
 
 export type SqlActionHandlers = {
@@ -46,7 +47,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
     ): Promise<void> {
         const uri = parseUri(uriInput);
         if (!uri) {
-            window.showWarningMessage('EF QueryLens: unable to resolve document URI for SQL preview.');
+            window.showWarningMessage(formatUserMessage('QL1002_INVALID_URI', 'Unable to resolve document URI for SQL preview.'));
             return;
         }
 
@@ -139,7 +140,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
 
         const uri = parseUri(uriInput);
         if (!uri) {
-            window.showWarningMessage('EF QueryLens: unable to resolve document URI for SQL preview.');
+            window.showWarningMessage(formatUserMessage('QL1002_INVALID_URI', 'Unable to resolve document URI for SQL preview.'));
             return null;
         }
 
@@ -156,7 +157,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
 
             const hoverText = extractHoverText(hover);
             if (!hoverText) {
-                window.showInformationMessage('EF QueryLens: no SQL preview available at this location.');
+                window.showInformationMessage(formatUserMessage('QL1003_HOVER_EMPTY', 'No SQL preview available at this location.'));
                 return null;
             }
 
@@ -173,13 +174,14 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
             return hoverText;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            window.showErrorMessage(`EF QueryLens: failed to retrieve SQL preview. ${message}`);
+            window.showErrorMessage(formatUserMessage('QL1004_HOVER_REQUEST_FAILED', `Failed to retrieve SQL preview. ${message}`));
             return null;
         }
     }
 
     function createFallbackMetadata(sourceUri: string, zeroBasedLine: number): QueryLensHoverMetadata {
         return {
+            MetadataProvenance: 'fallback',
             SourceExpression: '',
             ExecutedExpression: '',
             Mode: 'direct',

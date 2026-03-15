@@ -101,6 +101,38 @@ internal static class QueryLensLogOpener
         return (true, selectedPath);
     }
 
+    internal static void StopTail()
+    {
+        lock (tailSync)
+        {
+            if (tailTimer is not null)
+            {
+                try
+                {
+                    tailTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                }
+                catch
+                {
+                    // Best effort only.
+                }
+
+                try
+                {
+                    tailTimer.Dispose();
+                }
+                catch
+                {
+                    // Best effort only.
+                }
+
+                tailTimer = null;
+            }
+
+            activeLogPath = null;
+            lastReadPosition = 0;
+        }
+    }
+
     private static void EnsureFileExists(string path)
     {
         var directory = Path.GetDirectoryName(path);
