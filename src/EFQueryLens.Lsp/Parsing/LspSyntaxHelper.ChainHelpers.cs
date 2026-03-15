@@ -1,0 +1,196 @@
+using System.Collections.Generic;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
+
+namespace EFQueryLens.Lsp.Parsing;
+
+public static partial class LspSyntaxHelper
+{
+    private static string? TryExtractRootContextVariable(ExpressionSyntax expression)
+    {
+        var current = expression;
+        string? lastMemberName = null;
+
+        while (true)
+        {
+            switch (current)
+            {
+                case InvocationExpressionSyntax invocation:
+                    current = invocation.Expression;
+                    continue;
+
+                case MemberAccessExpressionSyntax memberAccess:
+                    lastMemberName = memberAccess.Name.Identifier.Text;
+                    current = memberAccess.Expression;
+                    continue;
+
+                case ParenthesizedExpressionSyntax parenthesized:
+                    current = parenthesized.Expression;
+                    continue;
+
+                case IdentifierNameSyntax identifier:
+                    return identifier.Identifier.Text;
+
+                case ThisExpressionSyntax:
+                    return lastMemberName;
+
+                default:
+                    return lastMemberName;
+            }
+        }
+    }
+
+    private static bool TryGetTerminalMethodName(InvocationExpressionSyntax invocation, out string methodName)
+    {
+        methodName = string.Empty;
+
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        methodName = memberAccess.Name.Identifier.Text;
+        return TerminalMethods.Contains(methodName);
+    }
+
+    private static bool IsInsideLambda(SyntaxNode node)
+    {
+        return node.Ancestors().Any(a =>
+            a is SimpleLambdaExpressionSyntax
+                or ParenthesizedLambdaExpressionSyntax
+                or AnonymousMethodExpressionSyntax);
+    }
+
+    private static bool TryGetStatementAnchorSpan(
+        SyntaxTree tree,
+        SyntaxNode expression,
+        out LinePosition start,
+        out LinePosition end)
+    {
+        start = default;
+        end = default;
+        var anchorToken = TryGetValueIntroducerToken(expression);
+        if (anchorToken.RawKind == 0)
+        {
+            return false;
+        }
+
+        var anchorLineSpan = tree.GetLineSpan(anchorToken.Span);
+        start = anchorLineSpan.StartLinePosition;
+        end = anchorLineSpan.EndLinePosition;
+        return true;
+    }
+
+    private static SyntaxToken TryGetValueIntroducerToken(SyntaxNode expression)
+    {
+        foreach (var ancestor in expression.Ancestors())
+        {
+            if (ancestor is ReturnStatementSyntax returnStmt && returnStmt.Expression?.FullSpan.Contains(expression.Span.Start) == true)
+            {
+                return returnStmt.ReturnKeyword;
+            }
+
+            if (ancestor is EqualsValueClauseSyntax equalsValue && equalsValue.Value.FullSpan.Contains(expression.Span.Start))
+            {
+                return equalsValue.EqualsToken;
+            }
+
+            if (ancestor is AssignmentExpressionSyntax assign && assign.Right.FullSpan.Contains(expression.Span.Start))
+            {
+                return assign.OperatorToken;
+            }
+
+            if (ancestor is StatementSyntax)
+            {
+                break;
+            }
+        }
+
+        var statement = expression.Ancestors().FirstOrDefault(a => a is StatementSyntax) as StatementSyntax;
+        return statement?.GetFirstToken() ?? default;
+    }
+
+    private static InvocationExpressionSyntax GetOutermostInvocationChain(InvocationExpressionSyntax invocation)
+    {
+        var current = invocation;
+        while (current.Parent is MemberAccessExpressionSyntax or InvocationExpressionSyntax)
+        {
+            if (current.Parent is InvocationExpressionSyntax parentInvocation)
+            {
+                current = parentInvocation;
+                continue;
+            }
+
+            if (current.Parent is MemberAccessExpressionSyntax memberAccess
+                && memberAccess.Parent is InvocationExpressionSyntax parentCall)
+            {
+                current = parentCall;
+                continue;
+            }
+
+            break;
+        }
+
+        return current;
+    }
+
+    private static bool IsLikelyQueryChain(InvocationExpressionSyntax invocation)
+    {
+        var methodNames = GetInvocationChainMethodNames(invocation).ToArray();
+
+        if (methodNames.Length == 0)
+        {
+            return false;
+        }
+
+        return methodNames.Any(name => TerminalMethods.Contains(name) || QueryChainMethods.Contains(name));
+    }
+
+    private static IEnumerable<string> GetInvocationChainMethodNames(InvocationExpressionSyntax invocation)
+    {
+        SyntaxNode? current = invocation;
+
+        while (current is InvocationExpressionSyntax currentInvocation)
+        {
+            if (currentInvocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+            {
+                yield break;
+            }
+
+            yield return memberAccess.Name.Identifier.Text;
+
+            current = memberAccess.Expression;
+        }
+    }
+
+    private static bool LooksLikeDbContextRoot(string? rootName)
+    {
+        if (string.IsNullOrWhiteSpace(rootName))
+        {
+            return false;
+        }
+
+        if (string.Equals(rootName, "db", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(rootName, "_db", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(rootName, "context", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(rootName, "dbContext", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(rootName, "_dbContext", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return rootName.Contains("context", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeStaticTypeRoot(string? rootName)
+    {
+        if (string.IsNullOrWhiteSpace(rootName))
+        {
+            return false;
+        }
+
+        return char.IsUpper(rootName[0]);
+    }
+}
