@@ -12,6 +12,48 @@ namespace EFQueryLens.Core.Tests;
 public class DaemonGrpcTransportTests
 {
     [Fact]
+    public async Task InvalidateCache_WhenQueuedResultExists_RemovesCachedEntries()
+    {
+        var workspacePath = CreateWorkspacePath();
+        Directory.CreateDirectory(workspacePath);
+
+        try
+        {
+            var daemonAssemblyPath = ResolveDaemonAssemblyPath();
+            var port = await StartDaemonAsync(workspacePath, daemonAssemblyPath, TimeSpan.FromSeconds(20));
+            var contextName = $"invalidate-{Guid.NewGuid():N}";
+
+            await using var engine = new DaemonBackedEngine("127.0.0.1", port, contextName);
+            using var channel = GrpcChannel.ForAddress($"http://127.0.0.1:{port}");
+            var grpcClient = new DaemonService.DaemonServiceClient(channel);
+
+            var request = new TranslationRequest
+            {
+                AssemblyPath = Path.Combine(workspacePath, "missing-sample.dll"),
+                Expression = "db.Users.Where(u => u.Id == 99)",
+            };
+
+            _ = await WaitForReadyAsync(engine, request, TimeSpan.FromSeconds(10));
+
+            var response = await grpcClient.InvalidateCacheAsync(new InvalidateCacheRequest
+            {
+                ContextName = contextName,
+                Scope = CacheInvalidationScope.QueryResults,
+            });
+
+            Assert.True(response.Success);
+            Assert.True(
+                response.RemovedCachedResults >= 1,
+                $"Expected at least one cached entry to be removed but got {response.RemovedCachedResults}.");
+        }
+        finally
+        {
+            TryKillDaemonFromPidFile(workspacePath);
+            TryDeleteDirectory(workspacePath);
+        }
+    }
+
+    [Fact]
     public async Task Subscribe_WhenQueryLensConfigChanges_StreamsConfigReloadedEvent()
     {
         var workspacePath = CreateWorkspacePath();

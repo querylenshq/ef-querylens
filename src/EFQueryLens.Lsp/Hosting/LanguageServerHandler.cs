@@ -153,6 +153,36 @@ internal sealed class LanguageServerHandler
         return _daemonControl.RestartAsync(ct);
     }
 
+    [JsonRpcMethod("efquerylens/preview/recalculate", UseSingleObjectParameterDeserialization = true)]
+    public async Task<JObject> RecalculatePreviewAsync(TextDocumentPositionParams request, CancellationToken ct)
+    {
+        if (_debugEnabled) Console.Error.WriteLine("[QL-LSP] request method=efquerylens/preview/recalculate");
+
+        var invalidateResponse = await _daemonControl.InvalidateQueryCachesAsync(ct);
+        if (!invalidateResponse.Success)
+        {
+            return new JObject
+            {
+                ["success"] = false,
+                ["message"] = invalidateResponse.Message,
+                ["removedCachedResults"] = invalidateResponse.RemovedCachedResults,
+                ["removedInflightJobs"] = invalidateResponse.RemovedInflightJobs,
+            };
+        }
+
+        _hover.InvalidateForManualRecalculate();
+        var hover = await _hover.HandleStructuredAsync(request, ct);
+
+        return new JObject
+        {
+            ["success"] = true,
+            ["message"] = "Preview cache invalidated and query recalculated.",
+            ["removedCachedResults"] = invalidateResponse.RemovedCachedResults,
+            ["removedInflightJobs"] = invalidateResponse.RemovedInflightJobs,
+            ["hover"] = hover is null ? null : JObject.FromObject(hover),
+        };
+    }
+
     [JsonRpcMethod("workspace/executeCommand", UseSingleObjectParameterDeserialization = true)]
     public async Task<JToken?> ExecuteCommandAsync(JObject request, CancellationToken ct)
     {
@@ -192,6 +222,25 @@ internal sealed class LanguageServerHandler
         {
             var restartResponse = await _daemonControl.RestartAsync(ct);
             return JObject.FromObject(restartResponse);
+        }
+
+        if (command.Equals("efquerylens.preview.recalculate", StringComparison.OrdinalIgnoreCase))
+        {
+            var arguments = request["arguments"] as JArray;
+            var recalculateRequest = arguments?.Count > 0
+                ? arguments[0].ToObject<TextDocumentPositionParams>()
+                : null;
+
+            if (recalculateRequest is null)
+            {
+                return new JObject
+                {
+                    ["success"] = false,
+                    ["message"] = "Missing or invalid recalculate request payload.",
+                };
+            }
+
+            return await RecalculatePreviewAsync(recalculateRequest, ct);
         }
 
         return new JObject
@@ -334,7 +383,8 @@ internal sealed class LanguageServerHandler
                 {
                     ["commands"] = new JArray(
                         "efquerylens.warmup",
-                        "efquerylens.daemon.restart")
+                        "efquerylens.daemon.restart",
+                        "efquerylens.preview.recalculate")
                 },
             },
         };

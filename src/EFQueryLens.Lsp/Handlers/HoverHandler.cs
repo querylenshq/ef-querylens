@@ -79,6 +79,11 @@ internal sealed class HoverHandler
         }
     }
 
+    public void InvalidateForManualRecalculate()
+    {
+        InvalidateCaches("manual-recalculate");
+    }
+
     public async Task<Hover?> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
     {
         var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);

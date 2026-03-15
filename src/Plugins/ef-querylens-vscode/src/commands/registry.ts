@@ -38,6 +38,18 @@ export function registerQueryLensCommands(options: QueryLensCommandRegistryOptio
         }
     );
 
+    const recalculateCommand = commands.registerCommand(
+        'efquerylens.recalculate',
+        async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
+            const settings = getSettings();
+            if (settings.debugLogsEnabled) {
+                logCommandInvocation(logOutput, 'recalculate', uriInput, lineInput, characterInput);
+            }
+
+            await sqlActions.recalculatePreviewFromLens(uriInput, lineInput, characterInput);
+        }
+    );
+
     const copySqlCommand = commands.registerCommand(
         'efquerylens.copySql',
         async (uriInput: unknown, lineInput: unknown, characterInput: unknown) => {
@@ -108,6 +120,7 @@ export function registerQueryLensCommands(options: QueryLensCommandRegistryOptio
 
     return [
         showSqlCommand,
+        recalculateCommand,
         copySqlCommand,
         openSqlEditorCommand,
         openOutputCommand,

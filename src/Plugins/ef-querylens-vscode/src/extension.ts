@@ -118,7 +118,7 @@ export function activate(context: ExtensionContext) {
             },
             provideHover: async (document, position, token, next) => {
                 const hover = await next(document, position, token);
-                return enableTrustedHoverCommands(hover as Hover | null, ['efquerylens.copySql', 'efquerylens.showSql', 'efquerylens.openSqlEditor']);
+                return enableTrustedHoverCommands(hover as Hover | null, ['efquerylens.copySql', 'efquerylens.showSql', 'efquerylens.openSqlEditor', 'efquerylens.recalculate']);
             }
         },
         synchronize: {

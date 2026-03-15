@@ -4,6 +4,7 @@ using EFQueryLens.DaemonClient;
 namespace EFQueryLens.Lsp.Handlers;
 
 internal sealed record DaemonRestartResponse(bool Success, string Message);
+internal sealed record DaemonCacheInvalidateResponse(bool Success, string Message, int RemovedCachedResults, int RemovedInflightJobs);
 
 internal sealed class DaemonControlHandler
 {
@@ -38,6 +39,39 @@ internal sealed class DaemonControlHandler
         {
             LogDebug($"daemon-restart-request failed type={ex.GetType().Name} message={ex.Message}");
             return new DaemonRestartResponse(false, $"Daemon restart failed: {ex.Message}");
+        }
+    }
+
+    public async Task<DaemonCacheInvalidateResponse> InvalidateQueryCachesAsync(CancellationToken cancellationToken)
+    {
+        if (_engine is not ResiliencyDaemonEngine resiliency)
+        {
+            return new DaemonCacheInvalidateResponse(
+                false,
+                "Daemon cache invalidation is unavailable for this engine mode.",
+                0,
+                0);
+        }
+
+        try
+        {
+            var response = await resiliency.InvalidateQueryCachesAsync(cancellationToken);
+            LogDebug(
+                $"daemon-cache-invalidate success={response.Success} cachedRemoved={response.RemovedCachedResults} " +
+                $"inflightRemoved={response.RemovedInflightJobs}");
+
+            return new DaemonCacheInvalidateResponse(
+                response.Success,
+                string.IsNullOrWhiteSpace(response.Message)
+                    ? (response.Success ? "Preview cache invalidated." : "Preview cache invalidation did not complete.")
+                    : response.Message,
+                response.RemovedCachedResults,
+                response.RemovedInflightJobs);
+        }
+        catch (Exception ex)
+        {
+            LogDebug($"daemon-cache-invalidate failed type={ex.GetType().Name} message={ex.Message}");
+            return new DaemonCacheInvalidateResponse(false, $"Preview cache invalidation failed: {ex.Message}", 0, 0);
         }
     }
 

@@ -154,7 +154,7 @@ internal static class LinqHoverMarkdownRenderer
         var statusLabel = BuildStructuredStatusLabel(status, response.AvgTranslationMs);
         var headerText = string.IsNullOrWhiteSpace(copySql)
             ? $"**QueryLens · {response.CommandCount} {statementWord} · {statusLabel}**"
-            : $"**QueryLens · {response.CommandCount} {statementWord} · {statusLabel}** | [Copy SQL](efquerylens://copySql?{queryParams}) | [Open SQL Editor](efquerylens://openSqlEditor?{queryParams})";
+            : $"**QueryLens · {response.CommandCount} {statementWord} · {statusLabel}** | [Copy SQL](efquerylens://copySql?{queryParams}) | [Open SQL Editor](efquerylens://openSqlEditor?{queryParams}) | [Recalculate](efquerylens://recalculate?{queryParams})";
 
         var hostBorder = new Border
         {
@@ -911,6 +911,24 @@ internal static class LinqHoverMarkdownRenderer
                 return;
             }
 
+            if (host == "recalculate"
+                && TryExtractHoverCommandArgs(uri, out var documentUri, out var line, out var character))
+            {
+                var recalculateTask = ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
+                {
+                    var result = await QueryLensLanguageClient.RequestPreviewRecalculateAsync(
+                        documentUri,
+                        line,
+                        character,
+                        default);
+
+                    Log($"hover-recalculate-link success={result.Success} message={TruncateForLog(result.Message, 180)}");
+                });
+                recalculateTask.FileAndForget("efquerylens/LinqHoverMarkdownRenderer/Recalculate");
+
+                return;
+            }
+
             return;
         }
 
@@ -960,6 +978,49 @@ internal static class LinqHoverMarkdownRenderer
         {
             // Ignore.
         }
+    }
+
+    private static bool TryExtractHoverCommandArgs(Uri uri, out string documentUri, out int line, out int character)
+    {
+        documentUri = string.Empty;
+        line = 0;
+        character = 0;
+
+        if (string.IsNullOrWhiteSpace(uri.Query))
+        {
+            return false;
+        }
+
+        foreach (var part in uri.Query.TrimStart('?').Split(new[] { '&' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split(new[] { '=' }, 2, StringSplitOptions.None);
+            if (pair.Length != 2)
+            {
+                continue;
+            }
+
+            var key = Uri.UnescapeDataString(pair[0]);
+            var value = Uri.UnescapeDataString(pair[1]);
+
+            if (key.Equals("uri", StringComparison.OrdinalIgnoreCase))
+            {
+                documentUri = value;
+                continue;
+            }
+
+            if (key.Equals("line", StringComparison.OrdinalIgnoreCase))
+            {
+                _ = int.TryParse(value, out line);
+                continue;
+            }
+
+            if (key.Equals("character", StringComparison.OrdinalIgnoreCase))
+            {
+                _ = int.TryParse(value, out character);
+            }
+        }
+
+        return !string.IsNullOrWhiteSpace(documentUri);
     }
 
     private static QueryLensHoverMetadata? TryExtractQueryLensMetadata(string markdown)

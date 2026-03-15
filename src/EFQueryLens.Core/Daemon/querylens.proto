@@ -7,6 +7,7 @@ service DaemonService {
   rpc Translate(TranslateRequest) returns (TranslateResponse);
   rpc TranslateQueued(QueuedTranslateRequest) returns (QueuedTranslateResponse);
   rpc InspectModel(InspectModelRequest) returns (InspectModelResponse);
+  rpc InvalidateCache(InvalidateCacheRequest) returns (InvalidateCacheResponse);
   rpc GetState(GetStateRequest) returns (GetStateResponse);
   rpc Ping(PingRequest) returns (PingResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
@@ -30,6 +31,11 @@ enum DaemonWarmState {
   DAEMON_WARM_STATE_COLD = 0;
   DAEMON_WARM_STATE_WARMING = 1;
   DAEMON_WARM_STATE_READY = 2;
+}
+
+enum CacheInvalidationScope {
+  CACHE_INVALIDATION_SCOPE_QUERY_RESULTS = 0;
+  CACHE_INVALIDATION_SCOPE_ALL = 1;
 }
 
 message QueryWarning {
@@ -152,6 +158,18 @@ message ModelSnapshot {
 
 message InspectModelResponse {
   ModelSnapshot result = 1;
+}
+
+message InvalidateCacheRequest {
+  string context_name = 1;
+  CacheInvalidationScope scope = 2;
+}
+
+message InvalidateCacheResponse {
+  bool success = 1;
+  string message = 2;
+  int32 removed_cached_results = 3;
+  int32 removed_inflight_jobs = 4;
 }
 
 message GetStateRequest {}

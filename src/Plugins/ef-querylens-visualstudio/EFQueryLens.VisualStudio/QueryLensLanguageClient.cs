@@ -200,6 +200,48 @@ internal sealed class QueryLensLanguageClient : ILanguageClient, ILanguageClient
         }
     }
 
+    internal static async Task<(bool Success, string Message)> RequestPreviewRecalculateAsync(
+        string documentUri,
+        int line,
+        int character,
+        CancellationToken cancellationToken)
+    {
+        var client = Current;
+        if (client?.rpc is not JsonRpc languageServerRpc)
+        {
+            return (false, "Language server RPC channel is not ready yet.");
+        }
+
+        try
+        {
+            var response = await languageServerRpc.InvokeWithParameterObjectAsync<JToken?>(
+                "efquerylens/preview/recalculate",
+                new JObject
+                {
+                    ["textDocument"] = new JObject
+                    {
+                        ["uri"] = documentUri,
+                    },
+                    ["position"] = new JObject
+                    {
+                        ["line"] = line,
+                        ["character"] = character,
+                    },
+                },
+                cancellationToken);
+
+            var success = response?["success"]?.Value<bool>() == true;
+            var message = response?["message"]?.Value<string>()
+                ?? (success ? "Preview recalculated." : "Preview recalculation did not complete.");
+            return (success, message);
+        }
+        catch (Exception ex)
+        {
+            Log($"preview-recalculate-request-failed type={ex.GetType().Name} message={ex.Message}");
+            return (false, $"Preview recalculation failed: {ex.Message}");
+        }
+    }
+
     internal static IReadOnlyList<string> GetLogFilePaths()
     {
         var result = new List<string>();

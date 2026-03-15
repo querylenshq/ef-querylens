@@ -403,9 +403,10 @@ internal sealed class HoverPreviewService
         var queryParams = $"uri={Uri.EscapeDataString(uri)}&line={line}&character={character}";
         var copyLink = $"[Copy SQL](efquerylens://copySql?{queryParams})";
         var openLink = $"[Open SQL Editor](efquerylens://openSqlEditor?{queryParams})";
+        var recalculateLink = $"[Recalculate](efquerylens://recalculate?{queryParams})";
 
         // Plain Markdown only (no HTML entities) so VS Code, VS, and Rider all render the same.
-        var header = $"**QueryLens · {commands.Count} {statementWord}** | {copyLink} | {openLink}";
+        var header = $"**QueryLens · {commands.Count} {statementWord}** | {copyLink} | {openLink} | {recalculateLink}";
 
         var body = warningLines.Length == 0
             ? $"{header}\n\n```sql\n{sql}\n```"

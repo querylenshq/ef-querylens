@@ -131,6 +131,12 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
         }
     }
 
+    public async Task<InvalidateCacheResponse> InvalidateQueryCachesAsync(CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return await ExecuteWithReconnectAsync(e => e.InvalidateQueryCachesAsync(ct), ct);
+    }
+
     /// <summary>
     /// Runs a resilient daemon event subscription loop. If the stream drops due to
     /// transport issues, this method reconnects and re-subscribes until cancelled.

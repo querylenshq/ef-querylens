@@ -225,6 +225,8 @@ function toQueryLensCommandUri(hostRaw: string, queryRaw: string): string | null
             ? 'efquerylens.openSqlEditor'
             : host === 'showsql'
                 ? 'efquerylens.showSql'
+                : host === 'recalculate'
+                    ? 'efquerylens.recalculate'
                 : null;
 
     if (!commandId) {

@@ -34,6 +34,10 @@
         "title": "EF QueryLens: Open SQL Editor"
       },
       {
+        "command": "efquerylens.recalculate",
+        "title": "EF QueryLens: Recalculate SQL Preview"
+      },
+      {
         "command": "efquerylens.restart",
         "title": "EF QueryLens: Restart Language Server"
       },

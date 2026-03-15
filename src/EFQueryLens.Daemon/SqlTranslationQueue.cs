@@ -12,7 +12,8 @@ internal sealed class SqlTranslationQueue : BackgroundService
         string SemanticKey,
         string ContextName,
         TranslationRequest Request,
-        string JobId);
+        string JobId,
+        long Epoch);
 
     private sealed record CachedTranslation(
         long CreatedAtTicks,
@@ -27,6 +28,7 @@ internal sealed class SqlTranslationQueue : BackgroundService
     private readonly bool _debugEnabled;
     private readonly int _cacheTtlMs;
     private long _lastSweepTicks;
+    private long _cacheEpoch;
 
     public SqlTranslationQueue(IQueryLensEngine engine, TranslationMetrics metrics)
     {
@@ -106,7 +108,12 @@ internal sealed class SqlTranslationQueue : BackgroundService
 
         try
         {
-            var workItem = new TranslationWorkItem(semanticKey, contextName, request, jobId);
+            var workItem = new TranslationWorkItem(
+                semanticKey,
+                contextName,
+                request,
+                jobId,
+                Interlocked.Read(ref _cacheEpoch));
             await _channel.Writer.WriteAsync(workItem, cancellationToken);
 
             var status = _metrics.IsWarming(contextName)
@@ -153,16 +160,37 @@ internal sealed class SqlTranslationQueue : BackgroundService
             }
 
             _metrics.RecordSample(workItem.ContextName, sw.ElapsedMilliseconds);
-            _resultCache[workItem.SemanticKey] = new CachedTranslation(
-                DateTime.UtcNow.Ticks,
-                workItem.JobId,
-                result);
+
+            var currentEpoch = Interlocked.Read(ref _cacheEpoch);
+            if (workItem.Epoch == currentEpoch)
+            {
+                _resultCache[workItem.SemanticKey] = new CachedTranslation(
+                    DateTime.UtcNow.Ticks,
+                    workItem.JobId,
+                    result);
+            }
+
             _inflightJobs.TryRemove(workItem.SemanticKey, out _);
 
             LogDebug(
                 $"queue-complete context={workItem.ContextName} semanticKeyLen={workItem.SemanticKey.Length} " +
                 $"elapsedMs={sw.ElapsedMilliseconds} success={result.Success}");
         }
+    }
+
+    public CacheInvalidationSummary InvalidateQueryCaches()
+    {
+        Interlocked.Increment(ref _cacheEpoch);
+
+        var removedCachedResults = _resultCache.Count;
+        var removedInflightJobs = _inflightJobs.Count;
+
+        _resultCache.Clear();
+        _inflightJobs.Clear();
+
+        LogDebug($"queue-cache-invalidate cachedRemoved={removedCachedResults} inflightRemoved={removedInflightJobs}");
+
+        return new CacheInvalidationSummary(removedCachedResults, removedInflightJobs);
     }
 
     private bool TryGetCachedReady(string semanticKey, out CachedTranslation? cached)
@@ -280,4 +308,6 @@ internal sealed class SqlTranslationQueue : BackgroundService
 
         Console.Error.WriteLine($"[QL-DAEMON-QUEUE] {message}");
     }
+
+    public readonly record struct CacheInvalidationSummary(int RemovedCachedResults, int RemovedInflightJobs);
 }

@@ -23,6 +23,7 @@ import { clamp, coerceNonNegativeInt, parseUri } from '../utils/parsing';
 
 export type SqlActionHandlers = {
     showSqlPopupFromLens(uriInput: unknown, lineInput: unknown, characterInput: unknown): Promise<void>;
+    recalculatePreviewFromLens(uriInput: unknown, lineInput: unknown, characterInput: unknown): Promise<void>;
     copySqlFromLens(
         uriInput: unknown,
         lineInput: unknown,
@@ -68,6 +69,49 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         editor.revealRange(new Range(position, position), TextEditorRevealType.InCenterIfOutsideViewport);
 
         await commands.executeCommand('editor.action.showHover');
+    }
+
+    async function recalculatePreviewFromLens(
+        uriInput: unknown,
+        lineInput: unknown,
+        characterInput: unknown
+    ): Promise<void> {
+        const client = getClient();
+        if (!client) {
+            window.showWarningMessage(formatUserMessage('QL1005_DAEMON_RESTART_NOT_READY', 'Language client is not initialized yet.'));
+            return;
+        }
+
+        const uri = parseUri(uriInput);
+        if (!uri) {
+            window.showWarningMessage(formatUserMessage('QL1002_INVALID_URI', 'Unable to resolve document URI for SQL preview.'));
+            return;
+        }
+
+        try {
+            const line = coerceNonNegativeInt(lineInput, 0);
+            const character = coerceNonNegativeInt(characterInput, 0);
+
+            const response = await client.sendRequest<unknown>('efquerylens/preview/recalculate', {
+                textDocument: { uri: uri.toString() },
+                position: { line, character },
+            });
+
+            const success = !!(response && typeof response === 'object' && (response as { success?: unknown }).success === true);
+            const message = response && typeof response === 'object' && typeof (response as { message?: unknown }).message === 'string'
+                ? (response as { message: string }).message
+                : (success ? 'Preview recalculated.' : 'Preview recalculation did not complete.');
+
+            if (!success) {
+                window.showWarningMessage(`EF QueryLens: ${message}`);
+                return;
+            }
+
+            await showSqlPopupFromLens(uri.toString(), line, character);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            window.showErrorMessage(formatUserMessage('QL1004_HOVER_REQUEST_FAILED', `Failed to recalculate SQL preview. ${message}`));
+        }
     }
 
     async function copySqlFromLens(
@@ -243,6 +287,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
 
     return {
         showSqlPopupFromLens,
+        recalculatePreviewFromLens,
         copySqlFromLens,
         openSqlEditorFromLens,
     };

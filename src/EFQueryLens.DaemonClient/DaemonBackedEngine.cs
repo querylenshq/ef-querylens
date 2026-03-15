@@ -123,6 +123,17 @@ public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
         await _client.PingAsync(new PingRequest(), cancellationToken: ct).ResponseAsync;
     }
 
+    public async Task<InvalidateCacheResponse> InvalidateQueryCachesAsync(CancellationToken ct = default)
+    {
+        var response = await _client.InvalidateCacheAsync(new InvalidateCacheRequest
+        {
+            ContextName = _contextName,
+            Scope = CacheInvalidationScope.QueryResults,
+        }, cancellationToken: ct).ResponseAsync;
+
+        return response;
+    }
+
     public async Task SubscribeAsync(Action<DaemonEvent> onEvent, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(onEvent);

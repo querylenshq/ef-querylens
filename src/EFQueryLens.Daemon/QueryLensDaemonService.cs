@@ -137,6 +137,25 @@ internal sealed class QueryLensDaemonService(
         };
     }
 
+    public override Task<InvalidateCacheResponse> InvalidateCache(
+        InvalidateCacheRequest request,
+        ServerCallContext context)
+    {
+        var summary = queue.InvalidateQueryCaches();
+
+        LogDebug(
+            $"cache-invalidate context={request.ContextName} scope={request.Scope} " +
+            $"cachedRemoved={summary.RemovedCachedResults} inflightRemoved={summary.RemovedInflightJobs}");
+
+        return Task.FromResult(new InvalidateCacheResponse
+        {
+            Success = true,
+            Message = "Daemon query caches invalidated.",
+            RemovedCachedResults = summary.RemovedCachedResults,
+            RemovedInflightJobs = summary.RemovedInflightJobs,
+        });
+    }
+
     public override Task<GetStateResponse> GetState(GetStateRequest request, ServerCallContext context)
     {
         var response = new GetStateResponse();
