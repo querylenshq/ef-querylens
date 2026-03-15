@@ -1,6 +1,6 @@
-using System.IO.Pipes;
 using EFQueryLens.Core;
-using StreamJsonRpc;
+using Grpc.Core;
+using System.Net.Sockets;
 
 namespace EFQueryLens.DaemonClient;
 
@@ -169,7 +169,7 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
     {
         _debugLog?.Invoke($"daemon-reconnect workspace={_workspacePath}");
 
-        var newPipeName = await DaemonLocator.TryGetOrStartDaemonAsync(
+        var newPort = await DaemonLocator.TryGetOrStartDaemonAsync(
             _workspacePath,
             _daemonExecutablePath,
             _daemonAssemblyPath,
@@ -177,32 +177,27 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
             debugLog: _debugLog,
             ct: ct);
 
-        if (string.IsNullOrWhiteSpace(newPipeName))
+        if (newPort is null)
             throw new InvalidOperationException(
                 $"QueryLens daemon unavailable for workspace '{_workspacePath}'.");
 
-        _debugLog?.Invoke($"daemon-reconnect new-pipe={newPipeName}");
+        _debugLog?.Invoke($"daemon-reconnect new-port={newPort.Value}");
 
-        var pipe = new NamedPipeClientStream(
-            ".",
-            newPipeName,
-            PipeDirection.InOut,
-            PipeOptions.Asynchronous);
-
+        var candidate = new DaemonBackedEngine("127.0.0.1", newPort.Value, _contextName);
         try
         {
             using var timeoutCts = new CancellationTokenSource(_connectTimeoutMs);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-            await pipe.ConnectAsync(linkedCts.Token);
+            await candidate.PingAsync(linkedCts.Token);
         }
         catch
         {
-            await pipe.DisposeAsync();
+            await candidate.DisposeAsync();
             throw;
         }
 
         var oldEngine = _inner;
-        _inner = new DaemonBackedEngine(pipe, _contextName);
+        _inner = candidate;
         await oldEngine.DisposeAsync();
 
         _debugLog?.Invoke("daemon-reconnect success");
@@ -210,8 +205,10 @@ public sealed class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
 
     private static bool IsDaemonTransportFailure(Exception ex)
     {
-        if (ex is ConnectionLostException
+        if (ex is RpcException
+            || ex is HttpRequestException
             || ex is IOException
+            || ex is SocketException
             || ex is EndOfStreamException
             || ex is ObjectDisposedException)
         {

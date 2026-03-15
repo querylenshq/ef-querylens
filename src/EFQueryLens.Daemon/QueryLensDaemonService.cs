@@ -1,48 +1,50 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using EFQueryLens.Core;
-using EFQueryLens.Core.Daemon;
-using StreamJsonRpc;
+using EFQueryLens.Core.Grpc;
+using Grpc.Core;
+using Microsoft.Extensions.Hosting;
 
 namespace EFQueryLens.Daemon;
 
-/// <summary>
-/// Server-side JSON-RPC handler registered with <see cref="JsonRpc"/> for each
-/// daemon client connection. Methods are dispatched by StreamJsonRpc matching their
-/// <see cref="JsonRpcMethodAttribute"/> wire names. One instance per connection.
-/// </summary>
 internal sealed class QueryLensDaemonService(
     IQueryLensEngine engine,
     SqlTranslationQueue queue,
     TranslationMetrics metrics,
-    CancellationTokenSource shutdownCts,
     ConcurrentDictionary<string, DaemonWarmState> contextStates,
-    DateTime startedUtc)
-    : IDaemonService
+    IHostApplicationLifetime hostLifetime)
+    : DaemonService.DaemonServiceBase
 {
     private readonly bool _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
 
-    [JsonRpcMethod(DaemonMethods.Translate)]
-    public async Task<DaemonTranslateResponse> TranslateAsync(
-        DaemonTranslateRequest request, CancellationToken cancellationToken)
+    public override async Task<TranslateResponse> Translate(TranslateRequest request, ServerCallContext context)
     {
         var sw = Stopwatch.StartNew();
+        var domainRequest = request.Request.ToDomain();
+
         LogDebug(
-            $"translate-start context={request.ContextName} assembly={request.Request.AssemblyPath} " +
-            $"exprLen={request.Request.Expression?.Length ?? 0}");
+            $"translate-start context={request.ContextName} assembly={domainRequest.AssemblyPath} " +
+            $"exprLen={domainRequest.Expression?.Length ?? 0}");
 
         TrackState(request.ContextName, DaemonWarmState.Warming);
         try
         {
-            var result = await engine.TranslateAsync(request.Request, cancellationToken);
+            var result = await engine.TranslateAsync(domainRequest, context.CancellationToken);
             sw.Stop();
-            TrackState(request.ContextName, result.Success ? DaemonWarmState.Ready : DaemonWarmState.Cold);
+
+            TrackState(
+                request.ContextName,
+                result.Success ? DaemonWarmState.Ready : DaemonWarmState.Cold);
 
             LogDebug(
                 $"translate-finished context={request.ContextName} success={result.Success} " +
                 $"elapsedMs={sw.ElapsedMilliseconds} commands={result.Commands.Count} sqlLen={(result.Sql?.Length ?? 0)}");
 
-            return new DaemonTranslateResponse { Result = result };
+            return new TranslateResponse
+            {
+                Result = result.ToProto(),
+            };
         }
         catch (Exception ex)
         {
@@ -54,37 +56,48 @@ internal sealed class QueryLensDaemonService(
         }
     }
 
-    [JsonRpcMethod(DaemonMethods.TranslateQueued)]
-    public async Task<DaemonQueuedTranslateResponse> TranslateQueuedAsync(
-        DaemonQueuedTranslateRequest request,
-        CancellationToken cancellationToken)
+    public override async Task<QueuedTranslateResponse> TranslateQueued(
+        QueuedTranslateRequest request,
+        ServerCallContext context)
     {
         try
         {
             var queued = await queue.EnqueueOrGetAsync(
                 request.SemanticKey,
                 request.ContextName,
-                request.Request,
-                cancellationToken);
+                request.Request.ToDomain(),
+                context.CancellationToken);
 
             if (queued.Status is QueryTranslationStatus.Ready)
             {
-                TrackState(request.ContextName, queued.Result?.Success == true
-                    ? DaemonWarmState.Ready
-                    : DaemonWarmState.Cold);
+                TrackState(
+                    request.ContextName,
+                    queued.Result?.Success == true
+                        ? DaemonWarmState.Ready
+                        : DaemonWarmState.Cold);
             }
             else
             {
                 TrackState(request.ContextName, DaemonWarmState.Warming);
             }
 
-            return new DaemonQueuedTranslateResponse
+            var response = new QueuedTranslateResponse
             {
-                Status = queued.Status,
-                JobId = queued.JobId,
+                Status = queued.Status.ToProto(),
                 AverageTranslationMs = queued.AverageTranslationMs,
-                Result = queued.Result,
             };
+
+            if (!string.IsNullOrWhiteSpace(queued.JobId))
+            {
+                response.JobId = queued.JobId;
+            }
+
+            if (queued.Result is not null)
+            {
+                response.Result = queued.Result.ToProto();
+            }
+
+            return response;
         }
         catch (Exception ex)
         {
@@ -92,54 +105,84 @@ internal sealed class QueryLensDaemonService(
                 $"translate-queued-failed context={request.ContextName} " +
                 $"type={ex.GetType().Name} message={ex.Message}");
 
-            return new DaemonQueuedTranslateResponse
+            return new QueuedTranslateResponse
             {
-                Status = QueryTranslationStatus.Unreachable,
-                JobId = null,
+                Status = TranslationStatus.Unreachable,
                 AverageTranslationMs = metrics.GetAverageMs(request.ContextName),
-                Result = null,
             };
         }
     }
 
-    [JsonRpcMethod(DaemonMethods.InspectModel)]
-    public async Task<DaemonInspectResponse> InspectModelAsync(
-        DaemonInspectRequest request, CancellationToken cancellationToken)
+    public override async Task<InspectModelResponse> InspectModel(
+        InspectModelRequest request,
+        ServerCallContext context)
     {
-        var result = await engine.InspectModelAsync(request.Request, cancellationToken);
+        var domainRequest = new ModelInspectionRequest
+        {
+            AssemblyPath = request.AssemblyPath,
+            DbContextTypeName = request.HasDbContextTypeName ? request.DbContextTypeName : null,
+        };
+
+        var snapshot = await engine.InspectModelAsync(domainRequest, context.CancellationToken);
         TrackState(request.ContextName, DaemonWarmState.Ready);
-        return new DaemonInspectResponse { Result = result };
+
+        return new InspectModelResponse
+        {
+            Result = snapshot.ToProto(),
+        };
     }
 
-    [JsonRpcMethod(DaemonMethods.GetState)]
-    public Task<DaemonStateResponse> GetStateAsync(CancellationToken cancellationToken = default)
+    public override Task<GetStateResponse> GetState(GetStateRequest request, ServerCallContext context)
     {
+        var response = new GetStateResponse();
         var contexts = contextStates
-            .Select(kvp => new DaemonContextState { ContextName = kvp.Key, State = kvp.Value })
-            .OrderBy(s => s.ContextName, StringComparer.Ordinal)
-            .ToArray();
-        return Task.FromResult(new DaemonStateResponse { Contexts = contexts });
+            .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+            .Select(kvp => new ContextStateEntry
+            {
+                ContextName = kvp.Key,
+                State = kvp.Value,
+            });
+        response.Contexts.AddRange(contexts);
+        return Task.FromResult(response);
     }
 
-    [JsonRpcMethod(DaemonMethods.Ping)]
-    public Task<DaemonPingResponse> PingAsync(CancellationToken cancellationToken = default)
+    public override Task<PingResponse> Ping(PingRequest request, ServerCallContext context)
     {
         var version = typeof(QueryLensDaemonService).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-        var uptime = DateTime.UtcNow - startedUtc;
-        return Task.FromResult(new DaemonPingResponse { Version = version, Uptime = uptime });
+        var uptime = DateTime.UtcNow - _startedUtc;
+        return Task.FromResult(new PingResponse
+        {
+            Version = version,
+            UptimeMs = (long)Math.Max(0, uptime.TotalMilliseconds),
+        });
     }
 
-    [JsonRpcMethod(DaemonMethods.Shutdown)]
-    public Task<DaemonShutdownResponse> ShutdownAsync(CancellationToken cancellationToken = default)
+    public override Task<ShutdownResponse> Shutdown(ShutdownRequest request, ServerCallContext context)
     {
-        shutdownCts.Cancel();
-        return Task.FromResult(new DaemonShutdownResponse());
+        hostLifetime.StopApplication();
+        return Task.FromResult(new ShutdownResponse());
+    }
+
+    public override async Task Subscribe(
+        SubscribeRequest request,
+        IServerStreamWriter<DaemonEvent> responseStream,
+        ServerCallContext context)
+    {
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+        }
     }
 
     private void TrackState(string contextName, DaemonWarmState state)
     {
         if (!string.IsNullOrWhiteSpace(contextName))
+        {
             contextStates[contextName] = state;
+        }
     }
 
     private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)

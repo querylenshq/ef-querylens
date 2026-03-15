@@ -8,10 +8,10 @@ internal sealed class PidManager : IDisposable
 {
     private readonly string _pidFilePath;
 
-    public PidManager(string workspacePath, string pipeName)
+    public PidManager(string workspacePath, int port)
     {
         _pidFilePath = DaemonWorkspaceIdentity.BuildPidFilePath(workspacePath);
-        WritePidFile(workspacePath, pipeName);
+        WritePidFile(workspacePath, port);
     }
 
     public void Dispose()
@@ -29,7 +29,7 @@ internal sealed class PidManager : IDisposable
         }
     }
 
-    private void WritePidFile(string workspacePath, string pipeName)
+    private void WritePidFile(string workspacePath, int port)
     {
         var directory = Path.GetDirectoryName(_pidFilePath);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -40,7 +40,7 @@ internal sealed class PidManager : IDisposable
         var payload = new DaemonPidInfo
         {
             ProcessId = Process.GetCurrentProcess().Id,
-            PipeName = pipeName,
+            Port = port,
             WorkspacePath = DaemonWorkspaceIdentity.NormalizeWorkspacePath(workspacePath),
             ProcessPath = Environment.ProcessPath ?? string.Empty,
             AssemblyPath = typeof(PidManager).Assembly.Location,
@@ -60,7 +60,7 @@ internal sealed class PidManager : IDisposable
     private sealed record DaemonPidInfo
     {
         public int ProcessId { get; init; }
-        public string PipeName { get; init; } = string.Empty;
+        public int Port { get; init; }
         public string WorkspacePath { get; init; } = string.Empty;
         public string ProcessPath { get; init; } = string.Empty;
         public string AssemblyPath { get; init; } = string.Empty;

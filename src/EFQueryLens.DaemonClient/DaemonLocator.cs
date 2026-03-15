@@ -116,7 +116,7 @@ public static class DaemonLocator
         return null;
     }
 
-    public static string? TryGetPipeName(
+    public static int? TryGetPort(
         string workspacePath,
         string? expectedDaemonExecutablePath = null,
         string? expectedDaemonAssemblyPath = null,
@@ -135,7 +135,7 @@ public static class DaemonLocator
             var info = JsonSerializer.Deserialize<DaemonPidInfo>(json, s_pidJsonOptions);
             if (info is null
                 || info.ProcessId <= 0
-                || string.IsNullOrWhiteSpace(info.PipeName))
+                || info.Port <= 0)
             {
                 return null;
             }
@@ -200,7 +200,7 @@ public static class DaemonLocator
                 return null;
             }
 
-            return info.PipeName;
+            return info.Port;
         }
         catch
         {
@@ -208,7 +208,7 @@ public static class DaemonLocator
         }
     }
 
-    public static async Task<string?> TryGetOrStartDaemonAsync(
+    public static async Task<int?> TryGetOrStartDaemonAsync(
         string workspacePath,
         string? daemonExecutablePath,
         string? daemonAssemblyPath,
@@ -217,14 +217,14 @@ public static class DaemonLocator
         CancellationToken ct = default)
     {
         var normalizedWorkspacePath = DaemonWorkspaceIdentity.NormalizeWorkspacePath(workspacePath);
-        var existingPipe = TryGetPipeName(
+        var existingPort = TryGetPort(
             normalizedWorkspacePath,
             expectedDaemonExecutablePath: daemonExecutablePath,
             expectedDaemonAssemblyPath: daemonAssemblyPath,
             debugLog: debugLog);
-        if (!string.IsNullOrWhiteSpace(existingPipe))
+        if (existingPort is > 0)
         {
-            return existingPipe;
+            return existingPort;
         }
 
         var startInfo = CreateDaemonStartInfo(
@@ -265,15 +265,15 @@ public static class DaemonLocator
             {
                 ct.ThrowIfCancellationRequested();
 
-                var discoveredPipe = TryGetPipeName(
+                var discoveredPort = TryGetPort(
                     normalizedWorkspacePath,
                     expectedDaemonExecutablePath: daemonExecutablePath,
                     expectedDaemonAssemblyPath: daemonAssemblyPath,
                     debugLog: debugLog);
-                if (!string.IsNullOrWhiteSpace(discoveredPipe))
+                if (discoveredPort is > 0)
                 {
-                    debugLog?.Invoke($"daemon-autostart ready pipe={discoveredPipe}");
-                    return discoveredPipe;
+                    debugLog?.Invoke($"daemon-autostart ready port={discoveredPort.Value}");
+                    return discoveredPort;
                 }
 
                 await Task.Delay(150, ct);
@@ -303,7 +303,7 @@ public static class DaemonLocator
             return new ProcessStartInfo
             {
                 FileName = daemonExecutablePath,
-                Arguments = $"--workspace \"{workspacePath}\"",
+                Arguments = $"--workspace \"{workspacePath}\" --port 0",
                 UseShellExecute = false,
                 RedirectStandardOutput = false,
                 RedirectStandardError = false,
@@ -316,7 +316,7 @@ public static class DaemonLocator
             return new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = $"\"{daemonAssemblyPath}\" --workspace \"{workspacePath}\"",
+                Arguments = $"\"{daemonAssemblyPath}\" --workspace \"{workspacePath}\" --port 0",
                 UseShellExecute = false,
                 RedirectStandardOutput = false,
                 RedirectStandardError = false,
@@ -354,7 +354,7 @@ public static class DaemonLocator
     private sealed record DaemonPidInfo
     {
         public int ProcessId { get; init; }
-        public string PipeName { get; init; } = string.Empty;
+        public int Port { get; init; }
         public string WorkspacePath { get; init; } = string.Empty;
         public string ProcessPath { get; init; } = string.Empty;
         public string AssemblyPath { get; init; } = string.Empty;

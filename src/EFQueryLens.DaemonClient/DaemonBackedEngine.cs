@@ -1,59 +1,67 @@
 using System.Diagnostics;
-using System.Text.Json;
 using EFQueryLens.Core;
 using EFQueryLens.Core.Daemon;
-using StreamJsonRpc;
+using EFQueryLens.Core.Grpc;
+using Grpc.Net.Client;
 
 namespace EFQueryLens.DaemonClient;
 
 /// <summary>
-/// <see cref="IQueryLensEngine"/> backed by a QueryLens daemon over a named pipe.
-/// The pipe connection is owned by this instance and disposed when the engine is disposed.
+/// <see cref="IQueryLensEngine"/> backed by a QueryLens daemon over gRPC loopback.
 /// </summary>
 public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
 {
-    private readonly JsonRpc _rpc;
-    private readonly IDaemonService _proxy;
+    private readonly GrpcChannel _channel;
+    private readonly DaemonService.DaemonServiceClient _client;
     private readonly string _contextName;
     private readonly bool _debugEnabled;
+    private readonly string _endpoint;
 
     /// <summary>
-    /// Creates a new <see cref="DaemonBackedEngine"/> wrapping an already-connected
-    /// full-duplex <paramref name="pipeStream"/>. Takes ownership of the stream.
+    /// Creates a new <see cref="DaemonBackedEngine"/> connected to the daemon gRPC endpoint.
     /// </summary>
-    public DaemonBackedEngine(Stream pipeStream, string contextName = "default")
+    public DaemonBackedEngine(string host, int port, string contextName = "default")
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(port);
+
         _contextName = contextName;
         _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
-        _rpc = new JsonRpc(BuildMessageHandler(pipeStream));
-        _proxy = _rpc.Attach<IDaemonService>();
-        _rpc.StartListening();
+        _endpoint = $"http://{host}:{port}";
+        _channel = GrpcChannel.ForAddress(_endpoint);
+        _client = new DaemonService.DaemonServiceClient(_channel);
     }
 
     public async Task<QueryTranslationResult> TranslateAsync(
         TranslationRequest request, CancellationToken ct = default)
     {
-        var payload = new DaemonTranslateRequest { ContextName = _contextName, Request = request };
+        var payload = new TranslateRequest
+        {
+            ContextName = _contextName,
+            Request = request.ToProto(),
+        };
+
         var sw = Stopwatch.StartNew();
         LogDebug(
-            $"translate-rpc-start context={_contextName} assembly={request.AssemblyPath} " +
+            $"translate-grpc-start endpoint={_endpoint} context={_contextName} assembly={request.AssemblyPath} " +
             $"exprLen={request.Expression?.Length ?? 0}");
 
         try
         {
-            var response = await _proxy.TranslateAsync(payload, ct);
+            var response = await _client.TranslateAsync(payload, cancellationToken: ct).ResponseAsync;
+            var result = response.Result.ToDomain();
             sw.Stop();
             LogDebug(
-                $"translate-rpc-finished context={_contextName} success={response.Result.Success} " +
+                $"translate-grpc-finished endpoint={_endpoint} context={_contextName} success={result.Success} " +
                 $"elapsedMs={sw.ElapsedMilliseconds} commands={response.Result.Commands.Count} " +
-                $"sqlLen={(response.Result.Sql?.Length ?? 0)}");
-            return response.Result;
+                $"sqlLen={(result.Sql?.Length ?? 0)}");
+            return result;
         }
         catch (Exception ex)
         {
             sw.Stop();
             LogDebug(
-                $"translate-rpc-failed context={_contextName} elapsedMs={sw.ElapsedMilliseconds} " +
+                $"translate-grpc-failed endpoint={_endpoint} context={_contextName} elapsedMs={sw.ElapsedMilliseconds} " +
                 $"type={ex.GetType().Name} message={ex.Message}");
             throw;
         }
@@ -63,20 +71,20 @@ public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
         TranslationRequest request,
         CancellationToken ct = default)
     {
-        var payload = new DaemonQueuedTranslateRequest
+        var payload = new QueuedTranslateRequest
         {
             ContextName = _contextName,
             SemanticKey = BuildSemanticKey(request),
-            Request = request,
+            Request = request.ToProto(),
         };
 
-        var response = await _proxy.TranslateQueuedAsync(payload, ct);
+        var response = await _client.TranslateQueuedAsync(payload, cancellationToken: ct).ResponseAsync;
         return new QueuedTranslationResult
         {
-            Status = response.Status,
-            JobId = response.JobId,
+            Status = response.Status.ToDomain(),
+            JobId = response.HasJobId ? response.JobId : null,
             AverageTranslationMs = response.AverageTranslationMs,
-            Result = response.Result,
+            Result = response.Result is null ? null : response.Result.ToDomain(),
         };
     }
 
@@ -84,12 +92,22 @@ public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
         ExplainRequest request, CancellationToken ct = default) =>
         throw new NotSupportedException("ExplainAsync is not yet exposed by the daemon protocol.");
 
-    public async Task<ModelSnapshot> InspectModelAsync(
+    public async Task<EFQueryLens.Core.ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request, CancellationToken ct = default)
     {
-        var payload = new DaemonInspectRequest { ContextName = _contextName, Request = request };
-        var response = await _proxy.InspectModelAsync(payload, ct);
-        return response.Result;
+        var payload = new InspectModelRequest
+        {
+            ContextName = _contextName,
+            AssemblyPath = request.AssemblyPath,
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.DbContextTypeName))
+        {
+            payload.DbContextTypeName = request.DbContextTypeName;
+        }
+
+        var response = await _client.InspectModelAsync(payload, cancellationToken: ct).ResponseAsync;
+        return response.Result.ToDomain();
     }
 
     /// <summary>
@@ -97,12 +115,17 @@ public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
     /// </summary>
     public async Task ShutdownDaemonAsync(CancellationToken ct = default)
     {
-        await _proxy.ShutdownAsync(ct);
+        await _client.ShutdownAsync(new ShutdownRequest(), cancellationToken: ct).ResponseAsync;
+    }
+
+    public async Task PingAsync(CancellationToken ct = default)
+    {
+        await _client.PingAsync(new PingRequest(), cancellationToken: ct).ResponseAsync;
     }
 
     public ValueTask DisposeAsync()
     {
-        _rpc.Dispose();
+        _channel.Dispose();
         return ValueTask.CompletedTask;
     }
 
@@ -132,20 +155,6 @@ public sealed class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
         }
 
         Console.Error.WriteLine($"[QL-DAEMON-CLIENT] {message}");
-    }
-
-    /// <summary>
-    /// Builds the StreamJsonRpc message handler for the daemon channel.
-    /// Uses 4-byte length-prefix framing with System.Text.Json camelCase serialization.
-    /// Must be identical on both client and server.
-    /// </summary>
-    internal static IJsonRpcMessageHandler BuildMessageHandler(Stream stream)
-    {
-        var formatter = new SystemTextJsonFormatter
-        {
-            JsonSerializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web),
-        };
-        return new LengthHeaderMessageHandler(stream, stream, formatter);
     }
 
     private static string BuildSemanticKey(TranslationRequest request)

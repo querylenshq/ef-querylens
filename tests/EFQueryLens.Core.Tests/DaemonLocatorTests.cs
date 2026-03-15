@@ -8,7 +8,7 @@ namespace EFQueryLens.Core.Tests;
 public class DaemonLocatorTests
 {
     [Fact]
-    public void TryGetPipeName_CamelCasePidFile_ReturnsPipeName()
+    public void TryGetPort_CamelCasePidFile_ReturnsPort()
     {
         var workspacePath = Path.Combine(Path.GetTempPath(), "querylens-workspace", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspacePath);
@@ -21,14 +21,14 @@ public class DaemonLocatorTests
             var payload = new
             {
                 processId = Process.GetCurrentProcess().Id,
-                pipeName = "querylens-test-pipe",
+                port = 51234,
                 workspacePath = DaemonWorkspaceIdentity.NormalizeWorkspacePath(workspacePath),
             };
 
             File.WriteAllText(pidFilePath, JsonSerializer.Serialize(payload));
 
-            var pipeName = DaemonLocator.TryGetPipeName(workspacePath);
-            Assert.Equal("querylens-test-pipe", pipeName);
+            var port = DaemonLocator.TryGetPort(workspacePath);
+            Assert.Equal(51234, port);
         }
         finally
         {
@@ -38,7 +38,7 @@ public class DaemonLocatorTests
     }
 
     [Fact]
-    public void TryGetPipeName_WorkspaceMismatchInPidFile_ReturnsNull()
+    public void TryGetPort_WorkspaceMismatchInPidFile_ReturnsNull()
     {
         var workspacePath = Path.Combine(Path.GetTempPath(), "querylens-workspace", Guid.NewGuid().ToString("N"));
         var otherWorkspacePath = Path.Combine(Path.GetTempPath(), "querylens-workspace", Guid.NewGuid().ToString("N"));
@@ -53,14 +53,14 @@ public class DaemonLocatorTests
             var payload = new
             {
                 processId = Process.GetCurrentProcess().Id,
-                pipeName = "querylens-test-pipe",
+                port = 51234,
                 workspacePath = DaemonWorkspaceIdentity.NormalizeWorkspacePath(otherWorkspacePath),
             };
 
             File.WriteAllText(pidFilePath, JsonSerializer.Serialize(payload));
 
-            var pipeName = DaemonLocator.TryGetPipeName(workspacePath);
-            Assert.Null(pipeName);
+            var port = DaemonLocator.TryGetPort(workspacePath);
+            Assert.Null(port);
         }
         finally
         {
