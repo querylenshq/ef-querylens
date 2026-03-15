@@ -14,6 +14,7 @@ using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.VisualStudio.Shell;
 
@@ -314,6 +315,14 @@ internal static class LinqHoverMarkdownRenderer
             codeStack.Children.Add(tb);
         }
 
+        var innerScrollViewer = new ScrollViewer
+        {
+            Content = codeStack,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        innerScrollViewer.PreviewMouseWheel += ForwardMouseWheelToOuterScrollViewer;
+
         var border = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11)),
@@ -322,15 +331,50 @@ internal static class LinqHoverMarkdownRenderer
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(8),
             Margin = new Thickness(0, 5, 0, 7),
-            Child = new ScrollViewer
-            {
-                Content = codeStack,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            },
+            Child = innerScrollViewer,
         };
 
         return border;
+    }
+
+    private static void ForwardMouseWheelToOuterScrollViewer(object sender, MouseWheelEventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (e.Handled || sender is not DependencyObject dependencyObject)
+        {
+            return;
+        }
+
+        var ancestor = FindParentScrollViewer(dependencyObject);
+        if (ancestor is null)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var forwarded = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+        {
+            RoutedEvent = UIElement.MouseWheelEvent,
+            Source = sender,
+        };
+        ancestor.RaiseEvent(forwarded);
+    }
+
+    private static ScrollViewer? FindParentScrollViewer(DependencyObject start)
+    {
+        var current = VisualTreeHelper.GetParent(start);
+        while (current is not null)
+        {
+            if (current is ScrollViewer scrollViewer)
+            {
+                return scrollViewer;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
     }
 
     private static void ApplySqlSyntaxHighlight(TextBlock target, string line)
