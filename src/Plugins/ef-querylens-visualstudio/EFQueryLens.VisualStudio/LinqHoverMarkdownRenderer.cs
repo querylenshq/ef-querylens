@@ -34,6 +34,34 @@ internal sealed class QueryLensHoverMetadata
 internal static class LinqHoverMarkdownRenderer
 {
     private static readonly string logPath = Path.Combine(Path.GetTempPath(), "EFQueryLens.VisualStudio.log");
+    private static readonly HashSet<string> sqlKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "select",
+        "from",
+        "where",
+        "and",
+        "or",
+        "not",
+        "join",
+        "inner",
+        "left",
+        "right",
+        "outer",
+        "on",
+        "group",
+        "by",
+        "order",
+        "having",
+        "limit",
+        "offset",
+        "as",
+        "in",
+        "is",
+        "null",
+        "count",
+        "distinct",
+        "exists",
+    };
 
     public static FrameworkElement Create(string linqCode)
     {
@@ -112,7 +140,9 @@ internal static class LinqHoverMarkdownRenderer
 
         var statements = response.Statements ?? [];
         var firstSql = statements.Count > 0 ? statements[0].Sql : null;
-        var enrichedSql = BuildEnrichedSqlContentFromResponse(firstSql, response);
+        var enrichedSql = string.IsNullOrWhiteSpace(response.EnrichedSql)
+            ? BuildEnrichedSqlContentFromResponse(firstSql, response)
+            : response.EnrichedSql;
         var copySql = enrichedSql ?? firstSql;
 
         var queryParams = $"uri={Uri.EscapeDataString(uri)}&line={line}&character={character}";
@@ -639,31 +669,7 @@ internal static class LinqHoverMarkdownRenderer
 
         static bool IsKeyword(string token)
         {
-            return token.Equals("select", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("from", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("where", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("and", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("or", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("not", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("join", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("inner", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("left", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("right", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("outer", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("on", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("group", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("by", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("order", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("having", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("limit", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("offset", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("as", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("in", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("is", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("null", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("count", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("distinct", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("exists", StringComparison.OrdinalIgnoreCase);
+            return sqlKeywords.Contains(token);
         }
 
         var defaultBrush = new SolidColorBrush(Color.FromRgb(0xd4, 0xd4, 0xd4));

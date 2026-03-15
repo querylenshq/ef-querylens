@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-using Microsoft.CodeAnalysis.Text;
-
 namespace EFQueryLens.VisualStudio;
 
 using System;
@@ -33,39 +31,31 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         }
 
         ITextSnapshot? snapshot = triggerPoint.Value.Snapshot;
+        if (snapshot.Length == 0)
+        {
+            return null;
+        }
+
         var position = triggerPoint.Value.Position;
-        var sourceText = snapshot.GetText();
-
-        (string? LinqCode, TextSpan? Span, string? ErrorMessage) result = TryExtractLinqAtOrNearPosition(sourceText, position);
-        if (result.LinqCode is null || !result.Span.HasValue)
-        {
-            return null;
-        }
-
-        TextSpan linqSpan = result.Span.Value;
-        if (linqSpan.Length <= 0 || linqSpan.Start < 0 || linqSpan.End > snapshot.Length)
-        {
-            Log("Linq hover span validation failed.");
-            return null;
-        }
+        var applicableSpan = BuildApplicableSpan(snapshot, position);
 
         if (!TryMarkSessionContent(session))
         {
             return null;
         }
 
-        var applicableSnapshotSpan = new SnapshotSpan(snapshot, new Span(linqSpan.Start, linqSpan.Length));
+        var applicableSnapshotSpan = new SnapshotSpan(snapshot, applicableSpan);
         ITrackingSpan? applicableTrackingSpan = snapshot.CreateTrackingSpan(applicableSnapshotSpan, SpanTrackingMode.EdgeInclusive);
 
         // Try structured hover first (VS-optimized path: typed SQL, always-pinned header, no markdown parsing).
-        var structuredElement = await TryGetStructuredContentAsync(triggerPoint.Value, snapshot, linqSpan, cancellationToken);
+        var structuredElement = await TryGetStructuredContentAsync(triggerPoint.Value, snapshot, applicableSpan, cancellationToken);
         if (structuredElement is not null)
         {
             return new QuickInfoItem(applicableTrackingSpan, structuredElement);
         }
 
         // Markdown fallback for compatibility with older daemon builds.
-        var hoverMarkdown = await TryGetHoverMarkdownAsync(triggerPoint.Value, snapshot, linqSpan, cancellationToken);
+        var hoverMarkdown = await TryGetHoverMarkdownAsync(triggerPoint.Value, snapshot, applicableSpan, cancellationToken);
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         var content = BuildQuickInfoContent(hoverMarkdown);
@@ -87,33 +77,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         }
     }
 
-    private static (string? LinqCode, TextSpan? Span, string? ErrorMessage) TryExtractLinqAtOrNearPosition(string sourceText, int position)
-    {
-        (string? LinqCode, TextSpan? Span, string? ErrorMessage) result = LinqChainExtractorInProc.TryExtractLinqAtPositionWithSpan(sourceText, position);
-        if (result.LinqCode is not null)
-        {
-            return result;
-        }
-
-        if (position > 0)
-        {
-            result = LinqChainExtractorInProc.TryExtractLinqAtPositionWithSpan(sourceText, position - 1);
-            if (result.LinqCode is not null)
-            {
-                return result;
-            }
-        }
-
-        if (position + 1 >= sourceText.Length)
-        {
-            return result;
-        }
-
-        result = LinqChainExtractorInProc.TryExtractLinqAtPositionWithSpan(sourceText, position + 1);
-        return result;
-    }
-
-    private async Task<System.Windows.FrameworkElement?> TryGetStructuredContentAsync(SnapshotPoint triggerPoint, ITextSnapshot snapshot, TextSpan linqSpan, CancellationToken cancellationToken)
+    private async Task<System.Windows.FrameworkElement?> TryGetStructuredContentAsync(SnapshotPoint triggerPoint, ITextSnapshot snapshot, Span applicableSpan, CancellationToken cancellationToken)
     {
         if (!textBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document)
             || string.IsNullOrWhiteSpace(document.FilePath))
@@ -122,7 +86,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         }
 
         var uri = new Uri(document.FilePath).AbsoluteUri;
-        var attempts = BuildHoverAttempts(triggerPoint, snapshot, linqSpan);
+        var attempts = BuildHoverAttempts(triggerPoint, snapshot, applicableSpan);
         for (var i = 0; i < attempts.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -152,7 +116,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         return null;
     }
 
-    private async Task<string> TryGetHoverMarkdownAsync(SnapshotPoint triggerPoint, ITextSnapshot snapshot, TextSpan linqSpan, CancellationToken cancellationToken)
+    private async Task<string> TryGetHoverMarkdownAsync(SnapshotPoint triggerPoint, ITextSnapshot snapshot, Span applicableSpan, CancellationToken cancellationToken)
     {
         if (!textBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document)
             || string.IsNullOrWhiteSpace(document.FilePath))
@@ -160,7 +124,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
             return BuildErrorMarkdown("Could not resolve current document path for QueryLens hover.");
         }
 
-        var attempts = BuildHoverAttempts(triggerPoint, snapshot, linqSpan);
+        var attempts = BuildHoverAttempts(triggerPoint, snapshot, applicableSpan);
         for (var i = 0; i < attempts.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -189,7 +153,57 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         return BuildErrorMarkdown("QueryLens hover response is not ready yet. Try hovering again in a moment.");
     }
 
-    private static System.Collections.Generic.List<HoverAttempt> BuildHoverAttempts(SnapshotPoint triggerPoint, ITextSnapshot snapshot, TextSpan linqSpan)
+    private static Span BuildApplicableSpan(ITextSnapshot snapshot, int position)
+    {
+        if (snapshot.Length == 0)
+        {
+            return new Span(0, 0);
+        }
+
+        var safePosition = Math.Max(0, Math.Min(position, snapshot.Length - 1));
+        var line = snapshot.GetLineFromPosition(safePosition);
+        var lineText = line.GetText();
+        if (lineText.Length == 0)
+        {
+            return new Span(safePosition, 1);
+        }
+
+        var lineOffset = Math.Max(0, Math.Min(safePosition - line.Start.Position, lineText.Length - 1));
+        if (!IsIdentifierChar(lineText[lineOffset])
+            && lineOffset > 0
+            && IsIdentifierChar(lineText[lineOffset - 1]))
+        {
+            lineOffset--;
+        }
+
+        if (!IsIdentifierChar(lineText[lineOffset]))
+        {
+            return new Span(safePosition, 1);
+        }
+
+        var start = lineOffset;
+        while (start > 0 && IsIdentifierChar(lineText[start - 1]))
+        {
+            start--;
+        }
+
+        var endExclusive = lineOffset + 1;
+        while (endExclusive < lineText.Length && IsIdentifierChar(lineText[endExclusive]))
+        {
+            endExclusive++;
+        }
+
+        var absoluteStart = line.Start.Position + start;
+        var length = Math.Max(1, endExclusive - start);
+        return new Span(absoluteStart, length);
+    }
+
+    private static bool IsIdentifierChar(char ch)
+    {
+        return char.IsLetterOrDigit(ch) || ch == '_';
+    }
+
+    private static System.Collections.Generic.List<HoverAttempt> BuildHoverAttempts(SnapshotPoint triggerPoint, ITextSnapshot snapshot, Span applicableSpan)
     {
         var attempts = new System.Collections.Generic.List<HoverAttempt>();
         var seen = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
@@ -213,12 +227,14 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         var triggerLine = triggerPoint.GetContainingLine();
         var triggerChar = Math.Max(0, triggerPoint.Position - triggerLine.Start.Position);
         AddAttempt(attempts, seen, "trigger", triggerLine.LineNumber, triggerChar);
+        AddAttemptFromAbsolute(snapshot, attempts, seen, "trigger-prev", Math.Max(0, triggerPoint.Position - 1));
+        AddAttemptFromAbsolute(snapshot, attempts, seen, "trigger-next", Math.Min(snapshot.Length - 1, triggerPoint.Position + 1));
 
         if (snapshot.Length > 0)
         {
-            var startPos = Math.Max(0, Math.Min(linqSpan.Start, snapshot.Length - 1));
-            var endPos = Math.Max(0, Math.Min(Math.Max(linqSpan.End - 1, linqSpan.Start), snapshot.Length - 1));
-            var midPos = Math.Max(0, Math.Min(linqSpan.Start + (linqSpan.Length / 2), snapshot.Length - 1));
+            var startPos = Math.Max(0, Math.Min(applicableSpan.Start, snapshot.Length - 1));
+            var endPos = Math.Max(0, Math.Min(Math.Max(applicableSpan.End - 1, applicableSpan.Start), snapshot.Length - 1));
+            var midPos = Math.Max(0, Math.Min(applicableSpan.Start + (applicableSpan.Length / 2), snapshot.Length - 1));
 
             AddAttemptFromAbsolute(snapshot, attempts, seen, "span-start", startPos);
             AddAttemptFromAbsolute(snapshot, attempts, seen, "span-mid", midPos);

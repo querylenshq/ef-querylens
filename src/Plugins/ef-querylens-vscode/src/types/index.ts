@@ -16,6 +16,26 @@ export type QueryLensHoverMetadata = {
     CreationStrategy: string;
 };
 
+export type QueryLensStructuredHoverStatement = {
+    Sql: string | null;
+    SplitLabel: string | null;
+};
+
+export type QueryLensStructuredHoverResponse = {
+    Success: boolean;
+    ErrorMessage: string | null;
+    Statements: QueryLensStructuredHoverStatement[] | null;
+    CommandCount: number;
+    SourceExpression: string | null;
+    DbContextType: string | null;
+    ProviderName: string | null;
+    SourceFile: string | null;
+    SourceLine: number;
+    Warnings: string[] | null;
+    EnrichedSql: string | null;
+    Mode: string | null;
+};
+
 export type QueryLensSettings = {
     maxCodeLensPerDocument: number;
     codeLensDebounceMs: number;

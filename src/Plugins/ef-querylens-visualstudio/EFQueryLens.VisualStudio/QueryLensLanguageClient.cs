@@ -701,5 +701,6 @@ internal sealed class QueryLensStructuredHoverResponse
     public string? SourceFile { get; set; }
     public int SourceLine { get; set; }
     public List<string>? Warnings { get; set; }
+    public string? EnrichedSql { get; set; }
     public string? Mode { get; set; }
 }

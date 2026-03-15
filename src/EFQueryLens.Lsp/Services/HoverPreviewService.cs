@@ -22,6 +22,7 @@ internal sealed record QueryLensHoverMetadataPayload
     [JsonPropertyName("SourceLine")] public int SourceLine { get; init; }
     [JsonPropertyName("DbContextType")] public string DbContextType { get; init; } = string.Empty;
     [JsonPropertyName("ProviderName")] public string ProviderName { get; init; } = string.Empty;
+    [JsonPropertyName("EnrichedSql")] public string EnrichedSql { get; init; } = string.Empty;
 }
 
 internal sealed record HoverPreviewComputationResult(bool Success, string Output);
@@ -39,6 +40,7 @@ internal sealed record QueryLensStructuredHoverResult(
     string? SourceFile,
     int SourceLine,
     IReadOnlyList<string> Warnings,
+    string? EnrichedSql,
     string? Mode);
 
 internal sealed class HoverPreviewService
@@ -149,7 +151,7 @@ internal sealed class HoverPreviewService
         CancellationToken cancellationToken)
     {
         static QueryLensStructuredHoverResult Fail(string msg) =>
-            new(false, msg, [], 0, null, null, null, null, 0, [], null);
+            new(false, msg, [], 0, null, null, null, null, 0, [], null, null);
 
         var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName);
         Console.Error.WriteLine($"[QL-Hover] structured extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName}");
@@ -232,6 +234,15 @@ internal sealed class HoverPreviewService
                 ? $"{w.Code}: {w.Message}"
                 : $"{w.Code}: {w.Message} ({w.Suggestion})").ToArray();
 
+            var firstSql = statements.Count > 0 ? statements[0].Sql : null;
+            var enrichedSql = BuildStructuredEnrichedSql(
+                firstSql,
+                sourceFile: filePath,
+                sourceLine: line + 1,
+                sourceExpression: expression,
+                dbContextType: translation.Metadata?.DbContextType,
+                providerName: translation.Metadata?.ProviderName);
+
             Console.Error.WriteLine($"[QL-Hover] structured hover-ready line={line} char={character} commands={commands.Count}");
             return new QueryLensStructuredHoverResult(
                 Success: true,
@@ -244,6 +255,7 @@ internal sealed class HoverPreviewService
                 SourceFile: filePath,
                 SourceLine: line + 1,
                 Warnings: warnings,
+                EnrichedSql: enrichedSql,
                 Mode: "direct");
         }
         catch (Exception ex)
@@ -293,6 +305,15 @@ internal sealed class HoverPreviewService
             : $"{header}\n\n```sql\n{sql}\n```\n\n**Notes**\n{string.Join("\n", warningLines)}";
 
         // Append embedded metadata comment so all 3 clients can build enriched copy/open content.
+        var firstSqlForMeta = commands.Count > 0 ? FormatSqlForDisplay(commands[0].Sql.Trim(), metadata?.ProviderName) : null;
+        var enrichedSqlForMeta = BuildStructuredEnrichedSql(
+            firstSqlForMeta,
+            sourceFile: sourceFile,
+            sourceLine: line + 1,
+            sourceExpression: sourceExpression,
+            dbContextType: metadata?.DbContextType,
+            providerName: metadata?.ProviderName) ?? string.Empty;
+
         var metaPayload = new QueryLensHoverMetadataPayload
         {
             SourceExpression = sourceExpression,
@@ -304,11 +325,65 @@ internal sealed class HoverPreviewService
             SourceLine = line + 1,                   // convert 0-based LSP line to 1-based display
             DbContextType = metadata?.DbContextType ?? string.Empty,
             ProviderName = metadata?.ProviderName ?? string.Empty,
+            EnrichedSql = enrichedSqlForMeta,
         };
         var metaJson = JsonSerializer.Serialize(metaPayload);
         var metaBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(metaJson));
 
         return $"{body}\n\n<!-- QUERYLENS_META:{metaBase64} -->";
+    }
+
+    private static string? BuildStructuredEnrichedSql(
+        string? rawSql,
+        string sourceFile,
+        int sourceLine,
+        string? sourceExpression,
+        string? dbContextType,
+        string? providerName)
+    {
+        if (string.IsNullOrWhiteSpace(rawSql))
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("-- EF QueryLens");
+
+        if (!string.IsNullOrWhiteSpace(sourceFile))
+        {
+            var lineDisplay = sourceLine > 0 ? $", line {sourceLine}" : string.Empty;
+            sb.AppendLine($"-- Source:    {sourceFile}{lineDisplay}");
+        }
+
+        AppendCommentedExpression(sb, "LINQ", sourceExpression);
+
+        if (!string.IsNullOrWhiteSpace(dbContextType))
+        {
+            sb.AppendLine($"-- DbContext: {dbContextType}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(providerName))
+        {
+            sb.AppendLine($"-- Provider:  {providerName}");
+        }
+
+        sb.AppendLine();
+        sb.Append(rawSql);
+        return sb.ToString();
+    }
+
+    private static void AppendCommentedExpression(StringBuilder sb, string label, string? expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return;
+        }
+
+        sb.AppendLine($"-- {label}:");
+        foreach (var exprLine in expression.Replace("\r\n", "\n").Split('\n'))
+        {
+            sb.AppendLine(exprLine.Length == 0 ? "--" : $"--   {exprLine.TrimEnd()}");
+        }
     }
 
     private static Dialect ResolveDialect(string? providerName) => providerName switch

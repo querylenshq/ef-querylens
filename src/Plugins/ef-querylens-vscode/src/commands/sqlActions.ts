@@ -17,7 +17,7 @@ import {
     prependQueryLensContextComments,
 } from '../hover/markdown';
 import { formatSql } from '../sql/formatting';
-import { QueryLensHoverMetadata, QueryLensSqlDialect } from '../types';
+import { QueryLensHoverMetadata, QueryLensSqlDialect, QueryLensStructuredHoverResponse } from '../types';
 import { formatUserMessage } from '../utils/errors';
 import { clamp, coerceNonNegativeInt, parseUri } from '../utils/parsing';
 
@@ -147,12 +147,21 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         try {
             const line = coerceNonNegativeInt(lineInput, 0);
             const character = coerceNonNegativeInt(characterInput, 0);
+            const uriString = uri.toString();
+
+            // Prefer structured hover which carries server-built EnrichedSql, avoiding
+            // client-side markdown extraction + metadata decoding + enrichment rebuild.
+            const structured = await tryGetStructuredHover(client, uriString, line, character);
+            if (structured?.Success && structured.EnrichedSql) {
+                const rawSql = structured.Statements?.[0]?.Sql ?? structured.EnrichedSql;
+                const formattedSql = formatSqlOnShow ? formatSql(rawSql, sqlDialect) : rawSql;
+                return includeContextComments ? structured.EnrichedSql : formattedSql;
+            }
+
+            // Markdown fallback for older daemon builds that don't return EnrichedSql.
             const hover = await client.sendRequest('textDocument/hover', {
-                textDocument: { uri: uri.toString() },
-                position: {
-                    line,
-                    character,
-                }
+                textDocument: { uri: uriString },
+                position: { line, character },
             });
 
             const hoverText = extractHoverText(hover);
@@ -162,7 +171,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
             }
 
             const metadata = extractQueryLensMetadata(hoverText)
-                ?? createFallbackMetadata(uri.toString(), line);
+                ?? createFallbackMetadata(uriString, line);
             const sqlText = extractSqlBlocks(hoverText);
             if (sqlText) {
                 const formattedSql = formatSqlOnShow ? formatSql(sqlText, sqlDialect) : sqlText;
@@ -175,6 +184,26 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             window.showErrorMessage(formatUserMessage('QL1004_HOVER_REQUEST_FAILED', `Failed to retrieve SQL preview. ${message}`));
+            return null;
+        }
+    }
+
+    async function tryGetStructuredHover(
+        client: LanguageClient,
+        uriString: string,
+        line: number,
+        character: number
+    ): Promise<QueryLensStructuredHoverResponse | null> {
+        try {
+            const response = await client.sendRequest<QueryLensStructuredHoverResponse | null>(
+                'efquerylens/hover',
+                {
+                    textDocument: { uri: uriString },
+                    position: { line, character },
+                }
+            );
+            return response ?? null;
+        } catch {
             return null;
         }
     }

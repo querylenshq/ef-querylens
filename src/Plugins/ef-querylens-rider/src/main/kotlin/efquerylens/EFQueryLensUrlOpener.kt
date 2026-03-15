@@ -76,6 +76,10 @@ class EFQueryLensUrlOpener : UrlOpener() {
 
         val rawSql = extractSqlBlocks(markdown) ?: return null
         val metadata = extractMetadata(markdown)
+        // Use server-built enriched SQL if available (avoids client-side rebuild).
+        if (!metadata?.enrichedSql.isNullOrBlank()) {
+            return metadata!!.enrichedSql
+        }
         return buildEnrichedSqlContent(rawSql, metadata, fileUri)
     }
 
@@ -116,6 +120,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
             dbContextType = strField("DbContextType"),
             providerName = strField("ProviderName"),
             creationStrategy = strField("CreationStrategy"),
+            enrichedSql = strField("EnrichedSql"),
         )
     }
 
@@ -186,4 +191,5 @@ private data class QueryLensMetadata(
     val dbContextType: String,
     val providerName: String,
     val creationStrategy: String,
+    val enrichedSql: String = "",
 )
