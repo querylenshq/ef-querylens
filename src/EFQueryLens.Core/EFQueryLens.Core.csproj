@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="Daemon\querylens.proto" GrpcServices="Both" />
+    <Protobuf Include="Transport\Daemon\querylens.proto" GrpcServices="Both" />
   </ItemGroup>
 
 </Project>
