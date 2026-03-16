@@ -46,8 +46,8 @@ public sealed partial class ProjectAssemblyContext
                 frameworkRequests.Add(("Microsoft.NETCore.App", null));
             }
 
-            // Some user projects (especially class-library outputs that need synthetic runtimeconfig)
-            // don't list AspNetCore even though factory code depends on Microsoft.Extensions.* assemblies.
+                // Some executable projects don't list AspNetCore even though factory code
+                // depends on Microsoft.Extensions.* assemblies.
             // Probe AspNetCore shared framework too, preferring the same runtime train as NETCore when known.
             if (!frameworkRequests.Any(f =>
                     string.Equals(f.Name, "Microsoft.AspNetCore.App", StringComparison.OrdinalIgnoreCase)))

@@ -22,15 +22,7 @@ public sealed partial class QueryEvaluator
         if (fromQueryLens is not null)
             return (fromQueryLens, "querylens-factory");
 
-        var fromDesignTime = DesignTimeDbContextFactory.TryCreate(
-            dbContextType,
-            all,
-            executableAssemblyPath,
-            out var designTimeFailure);
-        if (fromDesignTime is not null)
-            return (fromDesignTime, "design-time-factory");
-
-        var details = string.Join(" ", new[] { queryLensFailure, designTimeFailure }
+        var details = string.Join(" ", new[] { queryLensFailure }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
         var executableHint = string.IsNullOrWhiteSpace(executableAssemblyPath)

@@ -705,7 +705,7 @@ public class QueryEvaluatorTests : IDisposable
         Assert.True(r2.Metadata.TranslationTime < TimeSpan.FromSeconds(10));
     }
 
-    // ─── IQueryLensDbContextFactory + IDesignTimeDbContextFactory discovery ─────
+    // ─── IQueryLensDbContextFactory discovery ────────────────────────────────────
 
     [Fact]
     public async Task Evaluate_WhenQueryLensFactoryExists_StrategyIsQueryLensFactory()
@@ -729,11 +729,9 @@ public class QueryEvaluatorTests : IDisposable
     }
 
     [Fact]
-    public async Task Evaluate_QueryLensFactory_TakesPriorityOverDesignTimeFactory()
+    public async Task Evaluate_QueryLensFactory_DoesNotUseLegacyStrategyValues()
     {
-        // SampleApp has BOTH AppQueryLensFactory (IQueryLensDbContextFactory<T>) AND
-        // AppDbContextFactory (IDesignTimeDbContextFactory<T>).
-        // Priority 0 (QueryLens factory) must win over Priority 1 (design-time factory).
+        // QueryLens factory is the only supported creation path.
         var result = await TranslateAsync("db.Users");
 
         Assert.True(result.Success, result.ErrorMessage);
@@ -743,10 +741,8 @@ public class QueryEvaluatorTests : IDisposable
     }
 
     [Fact]
-    public async Task Evaluate_WhenDesignTimeFactoryExists_UsesFactoryOverBootstrap()
+    public async Task Evaluate_QueryLensFactory_StillGeneratesSqlForSimpleSet()
     {
-        // SampleApp now has a QueryLens factory (Priority 0) that wins over the
-        // design-time factory (Priority 1). Strategy must NOT be "bootstrap".
         var result = await TranslateAsync("db.Orders");
 
         Assert.True(result.Success, result.ErrorMessage);
@@ -756,7 +752,7 @@ public class QueryEvaluatorTests : IDisposable
     }
 
     [Fact]
-    public async Task Evaluate_WhenDesignTimeFactoryExists_SqlIsStillGenerated()
+    public async Task Evaluate_QueryLensFactory_StillGeneratesSqlForWhereClause()
     {
         // Verify that using the factory does not break SQL generation for
         // WHERE clauses or any other operator.

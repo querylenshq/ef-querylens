@@ -152,7 +152,7 @@ public sealed partial class ProjectAssemblyContext
         // The property name is everything up to the next dot, paren, or whitespace.
         var endIndex = 0;
         while (endIndex < afterDot.Length &&
-               char.IsLetterOrDigit(afterDot[endIndex]) || afterDot[endIndex] == '_')
+               (char.IsLetterOrDigit(afterDot[endIndex]) || afterDot[endIndex] == '_'))
         {
             endIndex++;
         }

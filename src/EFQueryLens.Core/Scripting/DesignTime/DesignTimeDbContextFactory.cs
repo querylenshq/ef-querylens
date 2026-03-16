@@ -6,9 +6,6 @@ namespace EFQueryLens.Core.Scripting;
 /// </summary>
 internal static partial class DesignTimeDbContextFactory
 {
-    private const string InterfaceName =
-        "Microsoft.EntityFrameworkCore.Design.IDesignTimeDbContextFactory`1";
-
     private const string QueryLensInterfaceName =
         "EFQueryLens.Core.IQueryLensDbContextFactory`1";
 }

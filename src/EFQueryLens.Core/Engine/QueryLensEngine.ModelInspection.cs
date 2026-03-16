@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.Loader;
 using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Scripting;
 
@@ -10,33 +9,11 @@ public sealed partial class QueryLensEngine
     // DbContext instantiation for model inspection
     private object CreateDbContextForInspection(Type dbContextType, ProjectAssemblyContext alcCtx)
     {
-        // For model inspection we keep EF design-time factory as the primary path
-        // (stable parity with EF tooling) and support QueryLens factory as fallback.
-        // Search across both user ALC and default ALC.
-        var allAssemblies = alcCtx.LoadedAssemblies.Concat(AssemblyLoadContext.Default.Assemblies);
-
-        var fromDesignTimeFactory = DesignTimeDbContextFactory.TryCreate(
+        var created = QueryEvaluator.CreateDbContextInstance(
             dbContextType,
-            allAssemblies,
+            alcCtx.LoadedAssemblies,
             alcCtx.AssemblyPath);
-        if (fromDesignTimeFactory is not null)
-        {
-            return fromDesignTimeFactory;
-        }
-
-        var fromQueryLensFactory = DesignTimeDbContextFactory.TryCreateQueryLensFactory(
-            dbContextType,
-            allAssemblies,
-            alcCtx.AssemblyPath);
-        if (fromQueryLensFactory is not null)
-        {
-            return fromQueryLensFactory;
-        }
-
-        throw new InvalidOperationException(
-            $"Could not create an instance of '{dbContextType.FullName}' for model inspection. " +
-            "Implement IDesignTimeDbContextFactory<T> or IQueryLensDbContextFactory<T> in the executable project (API / Worker / Console), not in a class library. " +
-            $"Selected executable assembly: '{Path.GetFileName(alcCtx.AssemblyPath)}'.");
+        return created.Instance;
     }
 
     // Model snapshot building

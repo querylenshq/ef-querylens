@@ -7,7 +7,7 @@ namespace EFQueryLens.Core;
 ///
 /// <para>
 /// <b>When to use:</b> Add this when your project configures provider-specific
-/// options that the automatic bootstrap path cannot infer — for example:
+/// options that SQL preview depends on — for example:
 /// <list type="bullet">
 ///   <item><description><c>UseProjectables()</c> — required for <c>[Projectable]</c> properties</description></item>
 ///   <item><description><c>MySqlSchemaBehavior.Translate</c> — required for correct table names</description></item>
@@ -37,9 +37,8 @@ namespace EFQueryLens.Core;
 ///
 /// <para>
 /// <b>Discovery:</b> QueryLens finds your factory via full-name reflection —
-/// the same technique used for <c>IDesignTimeDbContextFactory&lt;T&gt;</c>.
-/// It is prioritised above both <c>IDesignTimeDbContextFactory&lt;T&gt;</c>
-/// and the automatic bootstrap fallback.
+/// only <c>IQueryLensDbContextFactory&lt;T&gt;</c> is used for offline DbContext
+/// creation.
 /// </para>
 /// </summary>
 /// <typeparam name="TContext">The DbContext type this factory creates.</typeparam>

@@ -87,6 +87,30 @@ public class ProjectAssemblyContextTests
         Assert.NotEqual(default, ctx.AssemblyTimestamp);
     }
 
+    [Fact]
+    public void Constructor_MissingExecutableArtifacts_ThrowsInvalidOperationException()
+    {
+        var sourceDll = GetSampleMySqlAppDll();
+        var tempDir = Path.Combine(Path.GetTempPath(), "querylens-missing-artifacts-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var copiedDll = Path.Combine(tempDir, Path.GetFileName(sourceDll));
+            File.Copy(sourceDll, copiedDll, overwrite: true);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => new ProjectAssemblyContext(copiedDll));
+            Assert.Contains("executable assembly output", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(".runtimeconfig.json", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(".deps.json", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("Microsoft.Build", true)]
     [InlineData("Microsoft.Build.Framework", true)]
@@ -240,6 +264,17 @@ public class ProjectAssemblyContextTests
 
         Assert.Contains("NoSuchContext", ex.Message);
         Assert.Contains("Available", ex.Message);
+    }
+
+    [Fact]
+    public void FindDbContextType_WithExpressionHint_DisambiguatesWithoutCrashing()
+    {
+        var dll = GetSampleMySqlAppDll();
+        using var ctx = new ProjectAssemblyContext(dll);
+
+        var type = ctx.FindDbContextType(null, "db.CustomerDirectory");
+
+        Assert.Equal("SampleMySqlApp.Infrastructure.Persistence.MySqlReportingDbContext", type.FullName);
     }
 
     // ─── ALC isolation ────────────────────────────────────────────────────────

@@ -26,16 +26,13 @@ public sealed record TranslationMetadata
     /// <list type="bullet">
     ///   <item><description>
     ///     <c>"querylens-factory"</c> — an <c>IQueryLensDbContextFactory&lt;T&gt;</c>
-    ///     was found (highest priority; user-controlled offline configuration).
+    ///     created the DbContext for this request.
     ///   </description></item>
     ///   <item><description>
-    ///     <c>"design-time-factory"</c> — an <c>IDesignTimeDbContextFactory&lt;T&gt;</c>
-    ///     was found (EF Core tooling pattern).
-    ///   </description></item>
-    ///   <item><description>
-    ///     <c>"bootstrap"</c> — automatic fallback using the provider's fake connection string.
+    ///     <c>"pooled-reuse"</c> — a previously-created QueryLens factory DbContext
+    ///     instance was reused from the pool.
     ///   </description></item>
     /// </list>
     /// </summary>
-    public string CreationStrategy { get; init; } = "bootstrap";
+    public string CreationStrategy { get; init; } = "querylens-factory";
 }

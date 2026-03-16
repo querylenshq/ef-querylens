@@ -23,11 +23,11 @@ namespace EFQueryLens.Core.Scripting;
 /// </para>
 ///
 /// <para>
-/// SQL is captured by installing an <see cref="OfflineDbConnection"/> on the DbContext
-/// before execution. The connection's command stubs intercept every
-/// <c>DbCommand.Execute*</c> call, record the SQL + parameters into
-/// <see cref="SqlCaptureScope"/> (an <c>AsyncLocal</c>-based collector), and return a
-/// <see cref="FakeDbDataReader"/> so EF Core materializes "rows" without error.
+/// SQL is captured by installing a generated offline connection on the DbContext
+/// before execution. The generated command stubs intercept every
+/// <c>DbCommand.Execute*</c> call, record SQL + parameters into a generated
+/// <c>AsyncLocal</c>-based capture scope, and return a generated fake data reader
+/// so EF Core materialization completes without a real database.
 /// </para>
 ///
 /// No real database connection is ever opened.

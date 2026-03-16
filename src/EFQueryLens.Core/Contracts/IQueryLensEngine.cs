@@ -7,7 +7,8 @@ namespace EFQueryLens.Core;
 public interface IQueryLensEngine : IAsyncDisposable
 {
     /// <summary>
-    /// Translates a LINQ expression to SQL using ToQueryString().
+    /// Translates a LINQ expression to SQL using offline execution-based capture,
+    /// with ToQueryString() fallback when capture cannot be installed.
     /// Does not require a real database connection.
     /// </summary>
     Task<QueryTranslationResult> TranslateAsync(

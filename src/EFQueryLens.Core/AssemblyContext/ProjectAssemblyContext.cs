@@ -45,8 +45,8 @@ public sealed partial class ProjectAssemblyContext : IDisposable
             throw new FileNotFoundException($"Assembly not found: {assemblyPath}", assemblyPath);
 
         AssemblyPath = Path.GetFullPath(assemblyPath);
+        EnsureExecutableAssemblyArtifactsExist(AssemblyPath);
         AssemblyTimestamp = File.GetLastWriteTimeUtc(AssemblyPath);
-        EnsureRuntimeConfigDevExists(AssemblyPath);
 
         var ctx = new IsolatedLoadContext(AssemblyPath);
         _contextRef = new WeakReference<IsolatedLoadContext>(ctx);
@@ -185,6 +185,26 @@ public sealed partial class ProjectAssemblyContext : IDisposable
 
     private void EnsureNotDisposed() =>
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+    private static void EnsureExecutableAssemblyArtifactsExist(string assemblyPath)
+    {
+        var runtimeConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+        var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
+
+        if (File.Exists(runtimeConfigPath) && File.Exists(depsPath))
+            return;
+
+        var missingArtifacts = new List<string>();
+        if (!File.Exists(runtimeConfigPath))
+            missingArtifacts.Add(Path.GetFileName(runtimeConfigPath));
+        if (!File.Exists(depsPath))
+            missingArtifacts.Add(Path.GetFileName(depsPath));
+
+        throw new InvalidOperationException(
+            "QueryLens requires an executable assembly output as the target. " +
+            $"Missing {string.Join(" and ", missingArtifacts)} next to '{Path.GetFileName(assemblyPath)}'. " +
+            "Target the compiled API / Worker / Console assembly output, not a class library output.");
+    }
 
     internal static bool ShouldPreferDefaultLoadContext(string? assemblyName)
     {

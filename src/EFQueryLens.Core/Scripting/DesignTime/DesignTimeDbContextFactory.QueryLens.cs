@@ -7,7 +7,7 @@ internal static partial class DesignTimeDbContextFactory
     /// <summary>
     /// Searches <paramref name="assemblies"/> for a concrete type that implements
     /// <c>IQueryLensDbContextFactory&lt;TContext&gt;</c> — the QueryLens-native
-    /// factory interface. Prioritised above <see cref="TryCreate"/> (EF Core tooling).
+    /// factory interface.
     /// </summary>
     /// <returns>
     /// A fresh DbContext instance returned by <c>CreateOfflineContext()</c>,
