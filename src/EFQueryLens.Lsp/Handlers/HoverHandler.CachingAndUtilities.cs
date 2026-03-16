@@ -7,6 +7,9 @@ namespace EFQueryLens.Lsp.Handlers;
 
 internal sealed partial class HoverHandler
 {
+    private const int CacheMaxEntries = 2_000;
+    private const int CacheTargetEntries = 1_600;
+
     private bool TryGetCachedStructured(string cacheKey, out QueryLensStructuredHoverResult? result)
     {
         result = null;
@@ -47,8 +50,9 @@ internal sealed partial class HoverHandler
         {
             _semanticStructuredHoverCache[semanticContext.SemanticKey] = new CachedStructuredResult(DateTime.UtcNow.Ticks, result);
         }
-        if (_structuredHoverCache.Count > 2_000) _structuredHoverCache.Clear();
-        if (_semanticStructuredHoverCache.Count > 2_000) _semanticStructuredHoverCache.Clear();
+
+        TrimCacheIfNeeded(_structuredHoverCache, static cached => cached.CreatedAtTicks);
+        TrimCacheIfNeeded(_semanticStructuredHoverCache, static cached => cached.CreatedAtTicks);
     }
 
     private async Task<string?> GetSourceTextAsync(string documentUri, string filePath, CancellationToken cancellationToken)
@@ -192,49 +196,35 @@ internal sealed partial class HoverHandler
             _semanticHoverCache[semanticContext.SemanticKey] = new CachedHoverResult(DateTime.UtcNow.Ticks, hover);
         }
 
-        if (_hoverCache.Count > 2_000)
-        {
-            _hoverCache.Clear();
-        }
-
-        if (_semanticHoverCache.Count > 2_000)
-        {
-            _semanticHoverCache.Clear();
-        }
+        TrimCacheIfNeeded(_hoverCache, static cached => cached.CreatedAtTicks);
+        TrimCacheIfNeeded(_semanticHoverCache, static cached => cached.CreatedAtTicks);
     }
 
-    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
+    private static void TrimCacheIfNeeded<TValue>(
+        System.Collections.Concurrent.ConcurrentDictionary<string, TValue> cache,
+        Func<TValue, long> createdAtTicksAccessor)
     {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (!int.TryParse(raw, out var value))
+        if (cache.Count <= CacheMaxEntries)
         {
-            return fallback;
+            return;
         }
 
-        if (value < min)
+        var removeCount = cache.Count - CacheTargetEntries;
+        if (removeCount <= 0)
         {
-            return min;
+            return;
         }
 
-        return value > max ? max : value;
-    }
+        var keysToRemove = cache
+            .OrderBy(pair => createdAtTicksAccessor(pair.Value))
+            .Take(removeCount)
+            .Select(pair => pair.Key)
+            .ToArray();
 
-    private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (string.IsNullOrWhiteSpace(raw))
+        foreach (var key in keysToRemove)
         {
-            return fallback;
+            cache.TryRemove(key, out _);
         }
-
-        if (bool.TryParse(raw, out var parsed))
-        {
-            return parsed;
-        }
-
-        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
     private void InvalidateCaches(string reason)

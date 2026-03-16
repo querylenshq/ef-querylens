@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using EFQueryLens.Core.Grpc;
+using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 
@@ -7,14 +8,6 @@ namespace EFQueryLens.Lsp.Handlers;
 
 internal sealed partial class HoverHandler
 {
-    private sealed record MarkedStringOrString(string? First, MarkedString? Second)
-    {
-        public static implicit operator SumType<string, MarkedString>(MarkedStringOrString value) =>
-            value.Second is not null
-                ? new SumType<string, MarkedString>(value.Second)
-                : new SumType<string, MarkedString>(value.First ?? string.Empty);
-    }
-
     private readonly DocumentManager _documentManager;
     private readonly HoverPreviewService _hoverPreviewService;
     private readonly ConcurrentDictionary<string, CachedHoverResult> _hoverCache = new(StringComparer.OrdinalIgnoreCase);
@@ -23,37 +16,37 @@ internal sealed partial class HoverHandler
     private readonly ConcurrentDictionary<string, CachedStructuredResult> _structuredHoverCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CachedStructuredResult> _semanticStructuredHoverCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Lazy<Task<QueryLensStructuredHoverResult?>>> _inflightSemanticStructuredHover = new(StringComparer.OrdinalIgnoreCase);
-    private readonly int _hoverCacheTtlMs;
-    private readonly int _hoverCancellationGraceMs;
-    private readonly int _hoverQueuedAdaptiveWaitMs;
-    private readonly int _structuredQueuedAdaptiveWaitMs;
-    private readonly bool _debugEnabled;
+    private int _hoverCacheTtlMs;
+    private int _hoverCancellationGraceMs;
+    private int _hoverQueuedAdaptiveWaitMs;
+    private int _structuredQueuedAdaptiveWaitMs;
+    private bool _debugEnabled;
 
     public HoverHandler(DocumentManager documentManager, HoverPreviewService hoverPreviewService)
     {
         _documentManager = documentManager;
         _hoverPreviewService = hoverPreviewService;
-        _hoverCacheTtlMs = ReadIntEnvironmentVariable(
+        _hoverCacheTtlMs = LspEnvironment.ReadInt(
             "QUERYLENS_HOVER_CACHE_TTL_MS",
             fallback: 15_000,
             min: 0,
             max: 120_000);
-        _hoverCancellationGraceMs = ReadIntEnvironmentVariable(
+        _hoverCancellationGraceMs = LspEnvironment.ReadInt(
             "QUERYLENS_HOVER_CANCEL_GRACE_MS",
             fallback: 350,
             min: 0,
             max: 5_000);
-        _hoverQueuedAdaptiveWaitMs = ReadIntEnvironmentVariable(
+        _hoverQueuedAdaptiveWaitMs = LspEnvironment.ReadInt(
             "QUERYLENS_MARKDOWN_QUEUE_ADAPTIVE_WAIT_MS",
             fallback: 200,
             min: 0,
             max: 2_000);
-        _structuredQueuedAdaptiveWaitMs = ReadIntEnvironmentVariable(
+        _structuredQueuedAdaptiveWaitMs = LspEnvironment.ReadInt(
             "QUERYLENS_STRUCTURED_QUEUE_ADAPTIVE_WAIT_MS",
             fallback: 200,
             min: 0,
             max: 2_000);
-        _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+        _debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
     }
 
     public void HandleDaemonEvent(DaemonEvent daemonEvent)
@@ -79,5 +72,39 @@ internal sealed partial class HoverHandler
     public void InvalidateForManualRecalculate()
     {
         InvalidateCaches("manual-recalculate");
+    }
+
+    public void InvalidateForConfigurationChange()
+    {
+        InvalidateCaches("configuration-changed");
+    }
+
+    public void ApplyClientConfiguration(LspClientConfiguration configuration)
+    {
+        if (configuration.DebugEnabled.HasValue)
+        {
+            _debugEnabled = configuration.DebugEnabled.Value;
+            _hoverPreviewService.SetDebugEnabled(_debugEnabled);
+        }
+
+        if (configuration.HoverCacheTtlMs.HasValue)
+        {
+            _hoverCacheTtlMs = configuration.HoverCacheTtlMs.Value;
+        }
+
+        if (configuration.HoverCancelGraceMs.HasValue)
+        {
+            _hoverCancellationGraceMs = configuration.HoverCancelGraceMs.Value;
+        }
+
+        if (configuration.MarkdownQueueAdaptiveWaitMs.HasValue)
+        {
+            _hoverQueuedAdaptiveWaitMs = configuration.MarkdownQueueAdaptiveWaitMs.Value;
+        }
+
+        if (configuration.StructuredQueueAdaptiveWaitMs.HasValue)
+        {
+            _structuredQueuedAdaptiveWaitMs = configuration.StructuredQueueAdaptiveWaitMs.Value;
+        }
     }
 }

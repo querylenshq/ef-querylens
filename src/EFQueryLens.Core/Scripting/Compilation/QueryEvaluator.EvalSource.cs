@@ -13,7 +13,8 @@ public sealed partial class QueryEvaluator
         IReadOnlyList<string> stubs,
         IReadOnlySet<string> knownNamespaces,
         IReadOnlySet<string> knownTypes,
-        IReadOnlyCollection<string> synthesizedUsingStaticTypes)
+        IReadOnlyCollection<string> synthesizedUsingStaticTypes,
+        bool includeGridifyFallbackExtensions)
     {
         var sb = new StringBuilder();
 
@@ -29,6 +30,7 @@ public sealed partial class QueryEvaluator
         sb.Append(EvalSourceTemplateCatalog.SqlCaptureScope);
         sb.AppendLine();
         sb.Append(EvalSourceTemplateCatalog.OfflineCapture);
+        AppendFallbackExtensions(sb, includeGridifyFallbackExtensions);
         AppendRunner(sb, dbContextType, request, stubs);
 
         return sb.ToString();

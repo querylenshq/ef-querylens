@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using EFQueryLens.Core.AssemblyContext;
 
 namespace EFQueryLens.Core.Scripting;
@@ -85,6 +86,7 @@ public sealed partial class QueryEvaluator
             if (_evalRunnerCache.TryGetValue(evalCacheKey, out var cachedRunner))
             {
                 // Warm path: skip MetadataRefs, namespace scan, compile, emit, load.
+                TouchEvalRunnerCacheEntry(evalCacheKey, cachedRunner);
                 runMethod = cachedRunner.RunMethod;
                 metadataReferenceBuildTime = TimeSpan.Zero;
                 roslynCompilationTime = TimeSpan.Zero;
@@ -106,6 +108,7 @@ public sealed partial class QueryEvaluator
                 var workingExpression = request.Expression;
                 var stubs = new List<string>();
                 var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);
+                var includeGridifyFallbackExtensions = false;
                 var maxRetries = 5;
                 CSharpCompilation compilation;
                 var roslynCompilationWatch = Stopwatch.StartNew();
@@ -122,13 +125,14 @@ public sealed partial class QueryEvaluator
                         stubs,
                         knownNamespaces,
                         knownTypes,
-                        synthesizedUsingStaticTypes);
+                        synthesizedUsingStaticTypes,
+                        includeGridifyFallbackExtensions);
                     compilation = BuildCompilation(src, refs);
                     var errors = compilation.GetDiagnostics()
                         .Where(d => d.Severity == DiagnosticSeverity.Error)
                         .ToList();
 
-                    var hardErrors = errors.Where(e => e.Id is not ("CS0103" or "CS1061" or "CS0019" or "CS8122")).ToList();
+                    var hardErrors = errors.Where(e => e.Id is not ("CS0103" or "CS1061" or "CS0019" or "CS8122" or "CS0246" or "CS0234" or "CS0400")).ToList();
                     if (hardErrors.Count > 0)
                     {
                         return Failure(
@@ -150,13 +154,7 @@ public sealed partial class QueryEvaluator
 
                     var missingNames = errors
                         .Where(d => d.Id == "CS0103")
-                        .Select(d =>
-                        {
-                            var msg = d.GetMessage();
-                            var s = msg.IndexOf('\'');
-                            var e2 = msg.IndexOf('\'', s + 1);
-                            return s >= 0 && e2 > s ? msg[(s + 1)..e2] : null;
-                        })
+                        .Select(TryExtractMissingIdentifierFromDiagnostic)
                         .Where(n => n is not null)
                         .Distinct()
                         .Where(n => !string.IsNullOrWhiteSpace(n)
@@ -177,6 +175,7 @@ public sealed partial class QueryEvaluator
 
                     if (TryNormalizeRootContextHopFromErrors(
                             errors,
+                            compilation,
                             workingRequest.Expression,
                             dbContextType,
                             out var normalizedExpression)
@@ -206,12 +205,20 @@ public sealed partial class QueryEvaluator
                         changed = true;
                     }
 
-                    foreach (var import in InferMissingExtensionStaticImports(errors, compilationAssemblies))
+                    foreach (var import in InferMissingExtensionStaticImports(errors, compilation, compilationAssemblies))
                     {
                         if (synthesizedUsingStaticTypes.Add(import))
                         {
                             changed = true;
                         }
+                    }
+
+                    if (TryApplyGridifyFallbackFromErrors(
+                            errors,
+                            stubs,
+                            ref includeGridifyFallbackExtensions))
+                    {
+                        changed = true;
                     }
 
                     if (!changed)
@@ -248,7 +255,8 @@ public sealed partial class QueryEvaluator
                 runMethod = runType.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
                     ?? throw new InvalidOperationException("Could not find Run method in __QueryLensRunner__.");
 
-                _evalRunnerCache[evalCacheKey] = new EvalRunnerEntry(evalAssembly, runMethod);
+                _evalRunnerCache[evalCacheKey] = new EvalRunnerEntry(evalAssembly, runMethod, GetUtcNowTicks());
+                TrimCacheByLastAccess(_evalRunnerCache, MaxEvalRunnerCacheEntries, static e => e.LastAccessTicks);
             } // end else (eval runner cache miss)
 
             // 7. Execute and capture SQL.
@@ -395,5 +403,26 @@ public sealed partial class QueryEvaluator
                 await dbContextLease.DisposeAsync();
             }
         }
+    }
+
+    private static string? TryExtractMissingIdentifierFromDiagnostic(Diagnostic diagnostic)
+    {
+        if (!diagnostic.Location.IsInSource || diagnostic.Location.SourceTree is null)
+            return null;
+
+        var root = diagnostic.Location.SourceTree.GetRoot();
+        var node = root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie: true);
+
+        var identifier = node as IdentifierNameSyntax
+            ?? node.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().FirstOrDefault()
+            ?? node.AncestorsAndSelf().OfType<IdentifierNameSyntax>().FirstOrDefault();
+
+        if (identifier is not null)
+            return identifier.Identifier.ValueText;
+
+        var token = root.FindToken(diagnostic.Location.SourceSpan.Start);
+        return token.IsKind(SyntaxKind.IdentifierToken)
+            ? token.ValueText
+            : null;
     }
 }

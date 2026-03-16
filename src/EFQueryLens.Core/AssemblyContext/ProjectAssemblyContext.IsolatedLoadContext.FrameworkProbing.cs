@@ -34,20 +34,20 @@ public sealed partial class ProjectAssemblyContext
 
         private static void EnsureBaselineFrameworkRequests(ICollection<(string Name, string? Version)> frameworkRequests)
         {
-            // Resolve core runtime assemblies from Microsoft.NETCore.App.
-            var netCoreVersion = frameworkRequests
-                .FirstOrDefault(f =>
-                    string.Equals(f.Name, "Microsoft.NETCore.App", StringComparison.OrdinalIgnoreCase))
-                .Version;
-
             if (!frameworkRequests.Any(f =>
                     string.Equals(f.Name, "Microsoft.NETCore.App", StringComparison.OrdinalIgnoreCase)))
             {
                 frameworkRequests.Add(("Microsoft.NETCore.App", null));
             }
 
-                // Some executable projects don't list AspNetCore even though factory code
-                // depends on Microsoft.Extensions.* assemblies.
+            // Resolve core runtime assemblies from Microsoft.NETCore.App.
+            var netCoreVersion = frameworkRequests
+                .FirstOrDefault(f =>
+                    string.Equals(f.Name, "Microsoft.NETCore.App", StringComparison.OrdinalIgnoreCase))
+                .Version;
+
+            // Some executable projects don't list AspNetCore even though factory code
+            // depends on Microsoft.Extensions.* assemblies.
             // Probe AspNetCore shared framework too, preferring the same runtime train as NETCore when known.
             if (!frameworkRequests.Any(f =>
                     string.Equals(f.Name, "Microsoft.AspNetCore.App", StringComparison.OrdinalIgnoreCase)))

@@ -22,7 +22,7 @@ import {
 import { registerQueryLensCommands } from './commands/registry';
 import { createSqlActionHandlers } from './commands/sqlActions';
 import { stageRuntimeBinaries } from './runtime/staging';
-import { createWarmupManager } from './runtime/warmup';
+import { createWarmupManager, type WarmupManager } from './runtime/warmup';
 import { QueryLensSettings } from './types';
 
 let client: LanguageClient | undefined;
@@ -78,15 +78,12 @@ export function activate(context: ExtensionContext) {
         QUERYLENS_DAEMON_SHUTDOWN_ON_DISPOSE: '1',
         // Keep rolling-window latency at 20 samples by default, but honor explicit env overrides.
         QUERYLENS_AVG_WINDOW_SAMPLES: process.env.QUERYLENS_AVG_WINDOW_SAMPLES ?? '20',
-        // Keep shared hover computations alive briefly when VS Code rapidly cancels/reissues hover requests.
-        QUERYLENS_HOVER_CANCEL_GRACE_MS: '1500',
         // VS Code hides inline SQL Preview badges; hover/command actions remain available.
         QUERYLENS_MAX_CODELENS_PER_DOCUMENT: '0',
         // InlayHint SQL Preview labels are used by Rider; disable them for VS Code UX.
         QUERYLENS_MAX_INLAY_HINTS_PER_DOCUMENT: '0',
         QUERYLENS_CODELENS_DEBOUNCE_MS: String(currentSettings.codeLensDebounceMs),
         QUERYLENS_CODELENS_USE_MODEL_FILTER: currentSettings.codeLensUseModelFilter ? '1' : '0',
-        QUERYLENS_DEBUG: currentSettings.debugLogsEnabled ? '1' : '0',
     };
 
     if (fs.existsSync(daemonExePath)) {
@@ -112,6 +109,7 @@ export function activate(context: ExtensionContext) {
 
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'csharp' }],
+        initializationOptions: buildLspInitializationOptions(currentSettings),
         outputChannel: queryLensOutputChannel,
         middleware: {
             provideCodeLenses: async (_document, _token, _next) => {
@@ -165,6 +163,8 @@ export function activate(context: ExtensionContext) {
                 `[EFQueryLens] settings-updated formatOnShow=${currentSettings.formatSqlOnShow} dialect=${currentSettings.sqlDialect} debug=${currentSettings.debugLogsEnabled}`
             );
 
+            await pushLspRuntimeConfiguration(client, currentSettings);
+
             if (!requiresLanguageServerRestart(previousSettings, currentSettings)) {
                 return;
             }
@@ -181,9 +181,8 @@ export function activate(context: ExtensionContext) {
 
     client.start();
     logOutput('language-client-started');
-    void warmupManager.requestDaemonRestartOnActivate().finally(() => {
-        warmupManager.scheduleWarmup(window.activeTextEditor);
-    });
+    void warmupManager.requestDaemonRestartOnActivate().finally(() =>
+        warmupOnActivation(warmupManager, () => currentSettings, logOutput));
 }
 
 export function deactivate(): Thenable<void> | undefined {
@@ -199,6 +198,80 @@ function logOutput(message: string): void {
 
 function requiresLanguageServerRestart(previous: QueryLensSettings, next: QueryLensSettings): boolean {
     return previous.codeLensDebounceMs !== next.codeLensDebounceMs
-        || previous.codeLensUseModelFilter !== next.codeLensUseModelFilter
-        || previous.debugLogsEnabled !== next.debugLogsEnabled;
+        || previous.codeLensUseModelFilter !== next.codeLensUseModelFilter;
+}
+
+function buildLspInitializationOptions(settings: QueryLensSettings): unknown {
+    return {
+        queryLens: buildLspRuntimeConfiguration(settings)
+    };
+}
+
+function buildLspRuntimeConfiguration(settings: QueryLensSettings): Record<string, unknown> {
+    return {
+        debugEnabled: settings.debugLogsEnabled,
+        enableLspHover: true,
+        hoverProgressNotify: false,
+        hoverProgressDelayMs: 350,
+        hoverCacheTtlMs: 15_000,
+        hoverCancelGraceMs: 1_500,
+        markdownQueueAdaptiveWaitMs: 200,
+        structuredQueueAdaptiveWaitMs: 200,
+        warmupSuccessTtlMs: 60_000,
+        warmupFailureCooldownMs: 5_000,
+    };
+}
+
+async function pushLspRuntimeConfiguration(
+    languageClient: LanguageClient | undefined,
+    settings: QueryLensSettings,
+): Promise<void> {
+    if (!languageClient || !languageClient.isRunning()) {
+        return;
+    }
+
+    await languageClient.sendNotification('workspace/didChangeConfiguration', {
+        settings: {
+            queryLens: buildLspRuntimeConfiguration(settings)
+        }
+    });
+}
+
+async function warmupOnActivation(
+    warmupManager: WarmupManager,
+    getSettings: () => QueryLensSettings,
+    log: (message: string) => void,
+): Promise<void> {
+    if (warmupManager.scheduleWarmup(window.activeTextEditor)) {
+        return;
+    }
+
+    for (const editor of window.visibleTextEditors) {
+        if (warmupManager.scheduleWarmup(editor)) {
+            return;
+        }
+    }
+
+    try {
+        const firstCSharpUri = (await workspace.findFiles(
+            '**/*.cs',
+            '**/{bin,obj,node_modules,.git,.vs}/**',
+            1))[0];
+
+        if (!firstCSharpUri) {
+            return;
+        }
+
+        const queued = warmupManager.scheduleWarmupForUri(firstCSharpUri.toString(), 0);
+        if (queued && getSettings().debugLogsEnabled) {
+            log(`[EFQueryLens] startup-warmup uri=${firstCSharpUri.toString()}`);
+        }
+    } catch (error) {
+        if (!getSettings().debugLogsEnabled) {
+            return;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        log(`[EFQueryLens] startup-warmup skipped reason=${message}`);
+    }
 }

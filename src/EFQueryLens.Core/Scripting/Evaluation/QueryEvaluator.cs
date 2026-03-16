@@ -34,25 +34,32 @@ namespace EFQueryLens.Core.Scripting;
 /// </summary>
 public sealed partial class QueryEvaluator
 {
+    private const int MaxMetadataRefCacheEntries = 64;
+    private const int MaxEvalRunnerCacheEntries = 256;
+    private const int MaxNamespaceTypeIndexCacheEntries = 64;
+
     // Building MetadataReference objects from disk is expensive (100-500 ms for a
     // large project). Cache them keyed on assembly path + last-write timestamp +
     // assembly-set hash so the cost is paid only on initial load or after a rebuild.
     private sealed record MetadataRefEntry(
         DateTime AssemblyTimestamp,
         string AssemblySetHash,
-        MetadataReference[] Refs);
+        MetadataReference[] Refs,
+        long LastAccessTicks);
 
     private readonly ConcurrentDictionary<string, MetadataRefEntry> _refCache = new();
 
     // Compiled + loaded eval runner cache: skip the entire Roslyn pipeline on warm hits.
     // Keys follow the pattern: "shadowAssemblyPath|timestampTicks|assemblySetHash|dbContextTypeName|requestHash"
     // Evicted whenever the ALC for a shadow assembly is released (InvalidateMetadataRefCache).
-    private sealed record EvalRunnerEntry(Assembly EvalAssembly, MethodInfo RunMethod);
+    private sealed record EvalRunnerEntry(Assembly EvalAssembly, MethodInfo RunMethod, long LastAccessTicks);
     private readonly ConcurrentDictionary<string, EvalRunnerEntry> _evalRunnerCache = new(StringComparer.Ordinal);
 
     // Known namespace/type index cache keyed by assemblySetHash — the scan is expensive
     // on large projects but the result only changes when the assembly set changes.
-    private readonly ConcurrentDictionary<string, (HashSet<string> Namespaces, HashSet<string> Types)>
+    private sealed record NamespaceTypeIndexEntry(HashSet<string> Namespaces, HashSet<string> Types, long LastAccessTicks);
+
+    private readonly ConcurrentDictionary<string, NamespaceTypeIndexEntry>
         _namespaceTypeIndexCache = new(StringComparer.Ordinal);
 
     internal sealed record EvaluationStageTimings(
@@ -107,10 +114,64 @@ public sealed partial class QueryEvaluator
         IReadOnlyList<Assembly> compilationAssemblies)
     {
         if (_namespaceTypeIndexCache.TryGetValue(assemblySetHash, out var cached))
-            return cached;
+        {
+            TouchNamespaceTypeIndexCacheEntry(assemblySetHash, cached);
+            return (cached.Namespaces, cached.Types);
+        }
+
         var result = BuildKnownNamespaceAndTypeIndex(compilationAssemblies);
-        _namespaceTypeIndexCache[assemblySetHash] = result;
+        _namespaceTypeIndexCache[assemblySetHash] = new NamespaceTypeIndexEntry(
+            result.Namespaces,
+            result.Types,
+            GetUtcNowTicks());
+        TrimCacheByLastAccess(_namespaceTypeIndexCache, MaxNamespaceTypeIndexCacheEntries, static e => e.LastAccessTicks);
         return result;
+    }
+
+    private static long GetUtcNowTicks() => DateTime.UtcNow.Ticks;
+
+    private static void TrimCacheByLastAccess<TKey, TValue>(
+        ConcurrentDictionary<TKey, TValue> cache,
+        int maxEntries,
+        Func<TValue, long> getLastAccess)
+        where TKey : notnull
+    {
+        var overflow = cache.Count - maxEntries;
+        if (overflow <= 0)
+            return;
+
+        foreach (var key in cache
+                     .OrderBy(kvp => getLastAccess(kvp.Value))
+                     .Take(overflow)
+                     .Select(kvp => kvp.Key)
+                     .ToList())
+        {
+            cache.TryRemove(key, out _);
+        }
+    }
+
+    private void TouchMetadataRefCacheEntry(string key, MetadataRefEntry entry)
+    {
+        _refCache.TryUpdate(
+            key,
+            entry with { LastAccessTicks = GetUtcNowTicks() },
+            entry);
+    }
+
+    private void TouchEvalRunnerCacheEntry(string key, EvalRunnerEntry entry)
+    {
+        _evalRunnerCache.TryUpdate(
+            key,
+            entry with { LastAccessTicks = GetUtcNowTicks() },
+            entry);
+    }
+
+    private void TouchNamespaceTypeIndexCacheEntry(string key, NamespaceTypeIndexEntry entry)
+    {
+        _namespaceTypeIndexCache.TryUpdate(
+            key,
+            entry with { LastAccessTicks = GetUtcNowTicks() },
+            entry);
     }
 
     // Roslyn compilation options are reused across all eval compilations.

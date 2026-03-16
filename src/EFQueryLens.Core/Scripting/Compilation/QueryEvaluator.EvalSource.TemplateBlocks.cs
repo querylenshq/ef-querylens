@@ -87,4 +87,28 @@ public sealed partial class QueryEvaluator
 
         sb.Append(renderedRunner);
     }
+
+    private static void AppendFallbackExtensions(StringBuilder sb, bool includeGridifyFallbackExtensions)
+    {
+        if (!includeGridifyFallbackExtensions)
+            return;
+
+        sb.AppendLine();
+        sb.AppendLine("internal static class __QueryLensGridifyFallbackExtensions__");
+        sb.AppendLine("{");
+        sb.AppendLine("    public static System.Linq.IQueryable<T> ApplyFilteringAndOrdering<T>(");
+        sb.AppendLine("        this System.Linq.IQueryable<T> source,");
+        sb.AppendLine("        object? query) => source;");
+        sb.AppendLine();
+        sb.AppendLine("    public static System.Linq.IQueryable<T> ApplyFilteringAndOrdering<T>(");
+        sb.AppendLine("        this System.Linq.IQueryable<T> source,");
+        sb.AppendLine("        object? query,");
+        sb.AppendLine("        object? mapper) => source;");
+        sb.AppendLine();
+        sb.AppendLine("    public static System.Linq.IQueryable<T> ApplyPaging<T>(");
+        sb.AppendLine("        this System.Linq.IQueryable<T> source,");
+        sb.AppendLine("        int page,");
+        sb.AppendLine("        int pageSize) => source;");
+        sb.AppendLine("}");
+    }
 }

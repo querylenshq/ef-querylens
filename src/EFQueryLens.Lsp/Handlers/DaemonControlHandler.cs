@@ -1,5 +1,6 @@
 using EFQueryLens.Core;
 using EFQueryLens.DaemonClient;
+using EFQueryLens.Lsp;
 
 namespace EFQueryLens.Lsp.Handlers;
 
@@ -9,12 +10,12 @@ internal sealed record DaemonCacheInvalidateResponse(bool Success, string Messag
 internal sealed class DaemonControlHandler
 {
     private readonly IQueryLensEngine _engine;
-    private readonly bool _debugEnabled;
+    private bool _debugEnabled;
 
     public DaemonControlHandler(IQueryLensEngine engine)
     {
         _engine = engine;
-        _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+        _debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
     }
 
     public async Task<DaemonRestartResponse> RestartAsync(CancellationToken cancellationToken)
@@ -75,22 +76,12 @@ internal sealed class DaemonControlHandler
         }
     }
 
-    private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
+    public void ApplyClientConfiguration(LspClientConfiguration configuration)
     {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (string.IsNullOrWhiteSpace(raw))
+        if (configuration.DebugEnabled.HasValue)
         {
-            return fallback;
+            _debugEnabled = configuration.DebugEnabled.Value;
         }
-
-        if (bool.TryParse(raw, out var parsed))
-        {
-            return parsed;
-        }
-
-        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
     private void LogDebug(string message)

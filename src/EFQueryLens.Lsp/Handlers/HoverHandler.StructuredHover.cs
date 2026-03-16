@@ -10,31 +10,22 @@ internal sealed partial class HoverHandler
 {
     public async Task<QueryLensStructuredHoverResult?> HandleStructuredAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
     {
-        var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
-        var documentUri = request.TextDocument.Uri.ToString();
-        var sourceText = await GetSourceTextAsync(documentUri, filePath, cancellationToken);
-        if (string.IsNullOrWhiteSpace(sourceText))
+        var context = await TryCreateRequestContextAsync(
+            request,
+            cancellationToken,
+            requestLogPrefix: "structured-hover-request",
+            logNormalization: false);
+        if (context is null)
         {
             return null;
         }
 
-        LogHoverDebug($"structured-hover-request path={filePath} line={request.Position.Line} char={request.Position.Character}");
-        var hasSemanticContext = TryResolveSemanticHoverContext(
-            filePath,
-            sourceText,
-            request.Position.Line,
-            request.Position.Character,
-            out var semanticContext);
-
-        var effectiveLine = hasSemanticContext ? semanticContext!.EffectiveLine : request.Position.Line;
-        var effectiveCharacter = hasSemanticContext ? semanticContext!.EffectiveCharacter : request.Position.Character;
-
-        var cacheKey = BuildHoverCacheKey(
-            filePath,
-            sourceText,
-            request.Position.Line,
-            request.Position.Character,
-            semanticContext);
+        var filePath = context.FilePath;
+        var sourceText = context.SourceText;
+        var semanticContext = context.SemanticContext;
+        var effectiveLine = context.EffectiveLine;
+        var effectiveCharacter = context.EffectiveCharacter;
+        var cacheKey = context.CacheKey;
 
         if (TryGetCachedStructured(cacheKey, out var cachedResult))
         {
@@ -188,7 +179,7 @@ internal sealed partial class HoverHandler
                 return secondAttempt;
             }
 
-            return secondAttempt;
+            return result;
         }
 
         if (!result.Success &&

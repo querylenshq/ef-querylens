@@ -1,3 +1,4 @@
+using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Lsp.Parsing;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -8,7 +9,16 @@ internal sealed partial class WarmupHandler
 {
     private static bool IsMultipleDbContextAmbiguity(Exception ex)
     {
-        return ex.Message.Contains("Multiple DbContext types found", StringComparison.OrdinalIgnoreCase);
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is DbContextDiscoveryException discovery
+                && discovery.FailureKind == DbContextDiscoveryFailureKind.MultipleDbContextsFound)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? TryResolveDbContextTypeName(string sourceText, int line, int character)

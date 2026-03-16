@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using EFQueryLens.Lsp;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -18,7 +19,7 @@ public static partial class AssemblyResolver
     private static readonly ConcurrentDictionary<string, CachedAssemblySelection> TargetAssemblyCache =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly int TargetAssemblyCacheTtlMs = ReadIntEnvironmentVariable(
+    private static readonly int TargetAssemblyCacheTtlMs = LspEnvironment.ReadInt(
         "QUERYLENS_ASSEMBLY_RESOLVER_CACHE_TTL_MS",
         fallback: 5_000,
         min: 0,

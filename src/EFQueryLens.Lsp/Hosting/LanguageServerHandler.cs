@@ -1,4 +1,5 @@
 using EFQueryLens.Lsp.Handlers;
+using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Newtonsoft.Json.Linq;
@@ -18,9 +19,10 @@ internal sealed partial class LanguageServerHandler
     private readonly WarmupHandler _warmup;
     private readonly DaemonControlHandler _daemonControl;
     private readonly TextDocumentSyncHandler _textSync;
-    private readonly bool _debugEnabled;
-    private readonly bool _hoverProgressEnabled;
-    private readonly int _hoverProgressDelayMs;
+    private bool _debugEnabled;
+    private bool _hoverProgressEnabled;
+    private int _hoverProgressDelayMs;
+    private bool _enableLspHover;
     private bool _shutdownRequested;
 
     /// <summary>
@@ -41,23 +43,38 @@ internal sealed partial class LanguageServerHandler
         _daemonControl = daemonControl;
         _textSync = textSync;
         _debugEnabled = debugEnabled;
-        _hoverProgressEnabled = ReadBoolEnvironmentVariable(
+        _hoverProgressEnabled = LspEnvironment.ReadBool(
             "QUERYLENS_HOVER_PROGRESS_NOTIFY",
             fallback: false);
-        _hoverProgressDelayMs = ReadIntEnvironmentVariable(
+        _hoverProgressDelayMs = LspEnvironment.ReadInt(
             "QUERYLENS_HOVER_PROGRESS_DELAY_MS",
             fallback: 350,
             min: 0,
             max: 5_000);
+            _enableLspHover = LspEnvironment.ReadBool("QUERYLENS_ENABLE_LSP_HOVER", fallback: true);
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     [JsonRpcMethod("initialize", UseSingleObjectParameterDeserialization = true)]
-    public JObject Initialize(JToken? _ = null) => CreateInitializeResult();
+    public JObject Initialize(JToken? request = null)
+    {
+        var configuration = LspClientConfiguration.FromInitializeRequest(request);
+        ApplyClientConfiguration(configuration);
+
+        return CreateInitializeResult(_enableLspHover);
+    }
 
     [JsonRpcMethod("initialized")]
     public void Initialized() { }
+
+    [JsonRpcMethod("workspace/didChangeConfiguration", UseSingleObjectParameterDeserialization = true)]
+    public void DidChangeConfiguration(JToken? request = null)
+    {
+        var configuration = LspClientConfiguration.FromConfigurationChangeRequest(request);
+        ApplyClientConfiguration(configuration);
+        _hover.InvalidateForConfigurationChange();
+    }
 
     [JsonRpcMethod("shutdown")]
     public void Shutdown() => _shutdownRequested = true;
@@ -70,49 +87,43 @@ internal sealed partial class LanguageServerHandler
         JsonRpc?.Dispose();
     }
 
-    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
+    private void ApplyClientConfiguration(LspClientConfiguration configuration)
     {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (!int.TryParse(raw, out var value))
+        if (configuration.DebugEnabled.HasValue)
         {
-            return fallback;
+            _debugEnabled = configuration.DebugEnabled.Value;
         }
 
-        if (value < min)
+        if (configuration.HoverProgressNotify.HasValue)
         {
-            return min;
+            _hoverProgressEnabled = configuration.HoverProgressNotify.Value;
         }
 
-        if (value > max)
+        if (configuration.HoverProgressDelayMs.HasValue)
         {
-            return max;
+            _hoverProgressDelayMs = configuration.HoverProgressDelayMs.Value;
         }
 
-        return value;
+        if (configuration.EnableLspHover.HasValue)
+        {
+            _enableLspHover = configuration.EnableLspHover.Value;
+        }
+
+        _hover.ApplyClientConfiguration(configuration);
+        _warmup.ApplyClientConfiguration(configuration);
+        _daemonControl.ApplyClientConfiguration(configuration);
+
+        if (_debugEnabled)
+        {
+            Console.Error.WriteLine(
+                $"[QL-LSP] initialize-options applied " +
+                $"hoverEnabled={_enableLspHover} progress={_hoverProgressEnabled} " +
+                $"progressDelayMs={_hoverProgressDelayMs}");
+        }
     }
 
-    private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
+    private static JObject CreateInitializeResult(bool enableLspHover)
     {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return fallback;
-        }
-
-        if (bool.TryParse(raw, out var parsed))
-        {
-            return parsed;
-        }
-
-        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static JObject CreateInitializeResult()
-    {
-        var enableLspHover = ReadBoolEnvironmentVariable("QUERYLENS_ENABLE_LSP_HOVER", fallback: true);
-
         return new JObject
         {
             ["capabilities"] = new JObject

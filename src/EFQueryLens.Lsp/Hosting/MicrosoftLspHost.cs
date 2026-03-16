@@ -1,5 +1,6 @@
 ﻿using EFQueryLens.Core;
 using EFQueryLens.DaemonClient;
+using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Handlers;
 using EFQueryLens.Lsp.Services;
 using StreamJsonRpc;
@@ -10,12 +11,12 @@ internal static class MicrosoftLspHost
 {
     public static async Task RunAsync(IQueryLensEngine engine)
     {
-        var debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+        var debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
         if (debugEnabled)
             Console.Error.WriteLine("[QL-LSP] host-run debug=true");
 
         var documentManager = new DocumentManager();
-        var hoverHandler = new HoverHandler(documentManager, new HoverPreviewService(engine));
+        var hoverHandler = new HoverHandler(documentManager, new HoverPreviewService(engine, debugEnabled));
         var lspHandler = new LanguageServerHandler(
             hover: hoverHandler,
             warmup: new WarmupHandler(documentManager, engine),
@@ -81,15 +82,5 @@ internal static class MicrosoftLspHost
                 daemonEventCts.Dispose();
             }
         }
-    }
-
-    private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (string.IsNullOrWhiteSpace(raw)) return fallback;
-        if (bool.TryParse(raw, out var parsed)) return parsed;
-        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 }

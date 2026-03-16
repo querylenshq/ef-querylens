@@ -43,25 +43,4 @@ public static partial class AssemblyResolver
         var expires = DateTime.UtcNow.AddMilliseconds(TargetAssemblyCacheTtlMs).Ticks;
         TargetAssemblyCache[sourceFilePath] = new CachedAssemblySelection(resolvedAssemblyPath, expires);
     }
-
-    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (!int.TryParse(raw, out var value))
-        {
-            return fallback;
-        }
-
-        if (value < min)
-        {
-            return min;
-        }
-
-        if (value > max)
-        {
-            return max;
-        }
-
-        return value;
-    }
 }

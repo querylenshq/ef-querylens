@@ -19,11 +19,17 @@ public sealed partial class QueryEvaluator
             && entry.AssemblyTimestamp == alcCtx.AssemblyTimestamp
             && entry.AssemblySetHash == setHash)
         {
+            TouchMetadataRefCacheEntry(cacheKey, entry);
             return entry.Refs;
         }
 
         var refs = CollectMetadataReferences(compilationAssemblies).ToArray();
-        _refCache[cacheKey] = new MetadataRefEntry(alcCtx.AssemblyTimestamp, setHash, refs);
+        _refCache[cacheKey] = new MetadataRefEntry(
+            alcCtx.AssemblyTimestamp,
+            setHash,
+            refs,
+            GetUtcNowTicks());
+        TrimCacheByLastAccess(_refCache, MaxMetadataRefCacheEntries, static e => e.LastAccessTicks);
         return refs;
     }
 

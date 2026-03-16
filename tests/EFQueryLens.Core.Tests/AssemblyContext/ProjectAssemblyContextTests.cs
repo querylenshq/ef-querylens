@@ -132,36 +132,6 @@ public class ProjectAssemblyContextTests
     }
 
     [Fact]
-    public void TryResolveRuntimeAssemblyPathFromReferencePath_MapsRefToLibWhenAvailable()
-    {
-        var tempRoot = Path.Combine(Path.GetTempPath(), "querylens-ref-map-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var packageRoot = Path.Combine(tempRoot, "microsoft.data.sqlclient", "5.2.0");
-            var refDir = Path.Combine(packageRoot, "ref", "net8.0");
-            var libDir = Path.Combine(packageRoot, "lib", "net8.0");
-            Directory.CreateDirectory(refDir);
-            Directory.CreateDirectory(libDir);
-
-            var refPath = Path.Combine(refDir, "Microsoft.Data.SqlClient.dll");
-            var libPath = Path.Combine(libDir, "Microsoft.Data.SqlClient.dll");
-            File.WriteAllText(refPath, "ref");
-            File.WriteAllText(libPath, "runtime");
-
-            var resolved = ProjectAssemblyContext.TryResolveRuntimeAssemblyPathFromReferencePath(
-                refPath,
-                "Microsoft.Data.SqlClient");
-
-            Assert.Equal(libPath, resolved);
-        }
-        finally
-        {
-            if (Directory.Exists(tempRoot))
-                Directory.Delete(tempRoot, recursive: true);
-        }
-    }
-
-    [Fact]
     public void SqlServerSample_LoadsSqlClientFromRuntimeRidFolder()
     {
         using var ctx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
@@ -224,8 +194,9 @@ public class ProjectAssemblyContextTests
         var dll = GetSampleMySqlAppDll();
         using var ctx = new ProjectAssemblyContext(dll);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => ctx.FindDbContextType(null));
+        var ex = Assert.Throws<DbContextDiscoveryException>(() => ctx.FindDbContextType(null));
 
+        Assert.Equal(DbContextDiscoveryFailureKind.MultipleDbContextsFound, ex.FailureKind);
         Assert.Contains("Multiple DbContext types found", ex.Message, StringComparison.Ordinal);
         Assert.Contains("MySqlAppDbContext", ex.Message, StringComparison.Ordinal);
         Assert.Contains("MySqlReportingDbContext", ex.Message, StringComparison.Ordinal);

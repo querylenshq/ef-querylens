@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Text;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -61,55 +60,6 @@ public static partial class LspSyntaxHelper
             a is SimpleLambdaExpressionSyntax
                 or ParenthesizedLambdaExpressionSyntax
                 or AnonymousMethodExpressionSyntax);
-    }
-
-    private static bool TryGetStatementAnchorSpan(
-        SyntaxTree tree,
-        SyntaxNode expression,
-        out LinePosition start,
-        out LinePosition end)
-    {
-        start = default;
-        end = default;
-        var anchorToken = TryGetValueIntroducerToken(expression);
-        if (anchorToken.RawKind == 0)
-        {
-            return false;
-        }
-
-        var anchorLineSpan = tree.GetLineSpan(anchorToken.Span);
-        start = anchorLineSpan.StartLinePosition;
-        end = anchorLineSpan.EndLinePosition;
-        return true;
-    }
-
-    private static SyntaxToken TryGetValueIntroducerToken(SyntaxNode expression)
-    {
-        foreach (var ancestor in expression.Ancestors())
-        {
-            if (ancestor is ReturnStatementSyntax returnStmt && returnStmt.Expression?.FullSpan.Contains(expression.Span.Start) == true)
-            {
-                return returnStmt.ReturnKeyword;
-            }
-
-            if (ancestor is EqualsValueClauseSyntax equalsValue && equalsValue.Value.FullSpan.Contains(expression.Span.Start))
-            {
-                return equalsValue.EqualsToken;
-            }
-
-            if (ancestor is AssignmentExpressionSyntax assign && assign.Right.FullSpan.Contains(expression.Span.Start))
-            {
-                return assign.OperatorToken;
-            }
-
-            if (ancestor is StatementSyntax)
-            {
-                break;
-            }
-        }
-
-        var statement = expression.Ancestors().FirstOrDefault(a => a is StatementSyntax) as StatementSyntax;
-        return statement?.GetFirstToken() ?? default;
     }
 
     private static InvocationExpressionSyntax GetOutermostInvocationChain(InvocationExpressionSyntax invocation)

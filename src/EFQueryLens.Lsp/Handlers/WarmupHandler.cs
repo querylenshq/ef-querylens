@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using EFQueryLens.Core;
+using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Parsing;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 
@@ -12,10 +13,12 @@ internal sealed partial class WarmupHandler
 {
     private readonly DocumentManager _documentManager;
     private readonly IQueryLensEngine _engine;
-    private readonly bool _debugEnabled;
-    private readonly int _successTtlMs;
-    private readonly int _failureCooldownMs;
+    private bool _debugEnabled;
+    private int _successTtlMs;
+    private int _failureCooldownMs;
     private readonly ConcurrentDictionary<string, CachedWarmup> _warmCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<Task<WarmupResponse>>> _inflightWarmups =
         new(StringComparer.OrdinalIgnoreCase);
 
     private sealed record CachedWarmup(long ExpiresAtUtcTicks, bool Success, string Message);
@@ -24,17 +27,35 @@ internal sealed partial class WarmupHandler
     {
         _documentManager = documentManager;
         _engine = engine;
-        _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
-        _successTtlMs = ReadIntEnvironmentVariable(
+        _debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
+        _successTtlMs = LspEnvironment.ReadInt(
             "QUERYLENS_WARMUP_SUCCESS_TTL_MS",
             fallback: 60_000,
             min: 0,
             max: 600_000);
-        _failureCooldownMs = ReadIntEnvironmentVariable(
+        _failureCooldownMs = LspEnvironment.ReadInt(
             "QUERYLENS_WARMUP_FAILURE_COOLDOWN_MS",
             fallback: 5_000,
             min: 0,
             max: 120_000);
+    }
+
+    public void ApplyClientConfiguration(LspClientConfiguration configuration)
+    {
+        if (configuration.DebugEnabled.HasValue)
+        {
+            _debugEnabled = configuration.DebugEnabled.Value;
+        }
+
+        if (configuration.WarmupSuccessTtlMs.HasValue)
+        {
+            _successTtlMs = configuration.WarmupSuccessTtlMs.Value;
+        }
+
+        if (configuration.WarmupFailureCooldownMs.HasValue)
+        {
+            _failureCooldownMs = configuration.WarmupFailureCooldownMs.Value;
+        }
     }
 
     public async Task<WarmupResponse> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
@@ -72,14 +93,39 @@ internal sealed partial class WarmupHandler
             request.Position.Line,
             request.Position.Character);
 
+        var created = new Lazy<Task<WarmupResponse>>(
+            () => ExecuteWarmupAsync(targetAssembly, dbContextTypeName),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        var inflight = _inflightWarmups.GetOrAdd(targetAssembly, created);
+        var isOwner = ReferenceEquals(inflight, created);
+
+        if (isOwner)
+        {
+            _ = inflight.Value.ContinueWith(
+                completedTask => _inflightWarmups.TryRemove(targetAssembly, out _),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+        else
+        {
+            LogDebug($"warmup-inflight-join assembly={targetAssembly} context={dbContextTypeName ?? "<auto>"}");
+        }
+
+        return await inflight.Value.WaitAsync(cancellationToken);
+    }
+
+    private async Task<WarmupResponse> ExecuteWarmupAsync(string targetAssembly, string? dbContextTypeName)
+    {
         var sw = Stopwatch.StartNew();
+
         try
         {
             await _engine.InspectModelAsync(new ModelInspectionRequest
             {
                 AssemblyPath = targetAssembly,
                 DbContextTypeName = dbContextTypeName,
-            }, cancellationToken);
+            }, CancellationToken.None);
 
             sw.Stop();
             CacheWarmup(targetAssembly, success: true, "ready");

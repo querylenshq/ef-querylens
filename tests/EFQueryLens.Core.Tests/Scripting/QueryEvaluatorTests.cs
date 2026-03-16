@@ -1,6 +1,8 @@
 using System.Reflection;
 using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Scripting;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace EFQueryLens.Core.Tests.Scripting;
 
@@ -370,6 +372,39 @@ public class QueryEvaluatorTests : IDisposable
         Assert.Equal(
             "global::Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
             stub);
+    }
+
+    [Fact]
+    public async Task Evaluate_GridifyShape_WithoutGridifyAssembly_UsesFallbackPath()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.ApplyFilteringAndOrdering(query, gm).ApplyPaging(query.Page, query.PageSize)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.Contains("Orders", result.Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("The type or namespace name 'Gridify'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HasMissingGridifyTypeErrors_NonGridifyMissingType_ReturnsFalse()
+    {
+        var errors = CreateCompilationErrors(
+            "public sealed class C { private MissingType _x = default!; }");
+
+        Assert.Contains(errors, d => d.Id == "CS0246");
+        Assert.False(InvokeHasMissingGridifyTypeErrors(errors));
+    }
+
+    [Fact]
+    public void HasMissingGridifyTypeErrors_GridifyMissingType_ReturnsTrue()
+    {
+        var errors = CreateCompilationErrors(
+            "public sealed class C { private Gridify.GridifyQuery _x = default!; }");
+
+        Assert.Contains(errors, d => d.Id == "CS0246" || d.Id == "CS0234");
+        Assert.True(InvokeHasMissingGridifyTypeErrors(errors));
     }
 
     [Fact]
@@ -838,5 +873,34 @@ public class QueryEvaluatorTests : IDisposable
 
         Assert.False(string.IsNullOrWhiteSpace(stub));
         return stub!;
+    }
+
+    private static IReadOnlyList<Diagnostic> CreateCompilationErrors(string source)
+    {
+        var tree = CSharpSyntaxTree.ParseText(source);
+        var compilation = CSharpCompilation.Create(
+            assemblyName: "GridifyPredicateTests",
+            syntaxTrees: [tree],
+            references:
+            [
+                MetadataReference.CreateFromFile(typeof(object).Assembly.Location)
+            ],
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        return compilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+    }
+
+    private static bool InvokeHasMissingGridifyTypeErrors(IReadOnlyList<Diagnostic> errors)
+    {
+        var method = typeof(QueryEvaluator).GetMethod(
+            "HasMissingGridifyTypeErrors",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+
+        var value = method!.Invoke(null, [errors]);
+        return Assert.IsType<bool>(value);
     }
 }

@@ -1,3 +1,5 @@
+using EFQueryLens.Core.Common;
+
 namespace EFQueryLens.Core.AssemblyContext;
 
 internal sealed partial class ShadowAssemblyCache
@@ -11,19 +13,19 @@ internal sealed partial class ShadowAssemblyCache
                 return;
             }
 
-            var maxAgeHours = ReadIntEnvironmentVariable(
+            var maxAgeHours = EnvironmentVariableParser.ReadInt(
                 "QUERYLENS_SHADOW_CACHE_MAX_AGE_HOURS",
                 DefaultShadowCacheMaxAgeHours,
                 min: 1,
                 max: 720);
 
-            var softLimitMb = ReadIntEnvironmentVariable(
+            var softLimitMb = EnvironmentVariableParser.ReadInt(
                 "QUERYLENS_SHADOW_CACHE_SOFT_LIMIT_MB",
                 (int)(DefaultShadowCacheSoftLimitBytes / (1024L * 1024L)),
                 min: 256,
                 max: 1024 * 1024);
 
-            var targetMb = ReadIntEnvironmentVariable(
+            var targetMb = EnvironmentVariableParser.ReadInt(
                 "QUERYLENS_SHADOW_CACHE_TARGET_MB",
                 (int)(DefaultShadowCacheTargetBytes / (1024L * 1024L)),
                 min: 128,
@@ -161,21 +163,5 @@ internal sealed partial class ShadowAssemblyCache
         }
 
         return total;
-    }
-
-    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (!int.TryParse(raw, out var value))
-        {
-            return fallback;
-        }
-
-        if (value < min)
-        {
-            return min;
-        }
-
-        return value > max ? max : value;
     }
 }

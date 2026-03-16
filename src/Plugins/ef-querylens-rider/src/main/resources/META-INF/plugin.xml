@@ -8,6 +8,7 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <platform.lsp.serverSupportProvider implementation="efquerylens.EFQueryLensLspServerSupportProvider" />
+        <postStartupActivity implementation="efquerylens.EFQueryLensProjectStartupWarmupActivity" />
         <browserUrlOpener implementation="efquerylens.EFQueryLensUrlOpener" />
         <toolWindow
                 id="EF QueryLens"

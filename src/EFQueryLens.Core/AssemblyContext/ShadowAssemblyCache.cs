@@ -37,55 +37,70 @@ internal sealed partial class ShadowAssemblyCache
             throw new DirectoryNotFoundException($"Source output directory not found: {sourceDir}");
         }
 
+        string bundleAssemblyPath;
+        var shouldScheduleCleanup = false;
+        var forceCleanup = false;
+
         lock (_gate)
         {
-            CleanupIfDue(force: false);
+            shouldScheduleCleanup = IsCleanupDue(DateTime.UtcNow, force: false);
 
             var manifest = BuildManifest(sourceDir);
             var bundleKey = ComputeBundleKey(sourceDir, manifest);
             var bundlePath = Path.Combine(_bundleRoot, bundleKey);
-            var bundleAssemblyPath = Path.Combine(bundlePath, Path.GetFileName(fullSourcePath));
+            bundleAssemblyPath = Path.Combine(bundlePath, Path.GetFileName(fullSourcePath));
 
             if (File.Exists(bundleAssemblyPath))
             {
                 TouchDirectory(bundlePath);
-                return bundleAssemblyPath;
             }
-
-            var stagingPath = Path.Combine(_stagingRoot, $"{bundleKey}-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(stagingPath);
-
-            try
+            else
             {
-                foreach (var entry in manifest)
+                var stagingPath = Path.Combine(_stagingRoot, $"{bundleKey}-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(stagingPath);
+
+                try
                 {
-                    var targetPath = Path.Combine(stagingPath, entry.RelativePath);
-                    var targetDir = Path.GetDirectoryName(targetPath);
-                    if (!string.IsNullOrWhiteSpace(targetDir))
+                    foreach (var entry in manifest)
                     {
-                        Directory.CreateDirectory(targetDir);
+                        var targetPath = Path.Combine(stagingPath, entry.RelativePath);
+                        var targetDir = Path.GetDirectoryName(targetPath);
+                        if (!string.IsNullOrWhiteSpace(targetDir))
+                        {
+                            Directory.CreateDirectory(targetDir);
+                        }
+
+                        File.Copy(entry.FullPath, targetPath, overwrite: true);
                     }
 
-                    File.Copy(entry.FullPath, targetPath, overwrite: true);
+                    TryAtomicPromote(stagingPath, bundlePath);
+                    TouchDirectory(bundlePath);
+                    forceCleanup = true;
                 }
-
-                TryAtomicPromote(stagingPath, bundlePath);
-                TouchDirectory(bundlePath);
-                CleanupIfDue(force: true);
-                return Path.Combine(bundlePath, Path.GetFileName(fullSourcePath));
-            }
-            finally
-            {
-                TryDeleteDirectory(stagingPath);
+                finally
+                {
+                    TryDeleteDirectory(stagingPath);
+                }
             }
         }
+
+        if (forceCleanup)
+        {
+            ScheduleCleanupIfDue(force: true);
+        }
+        else if (shouldScheduleCleanup)
+        {
+            ScheduleCleanupIfDue(force: false);
+        }
+
+        return bundleAssemblyPath;
     }
 
     public void CleanupIfDue(bool force)
     {
         lock (_gate)
         {
-            if (!force && DateTime.UtcNow - _lastCleanupUtc < CleanupInterval)
+            if (!IsCleanupDue(DateTime.UtcNow, force))
             {
                 return;
             }
@@ -113,5 +128,15 @@ internal sealed partial class ShadowAssemblyCache
                 Volatile.Write(ref _backgroundCleanupScheduled, 0);
             }
         });
+    }
+
+    private bool IsCleanupDue(DateTime utcNow, bool force)
+    {
+        if (force)
+        {
+            return true;
+        }
+
+        return utcNow - _lastCleanupUtc >= CleanupInterval;
     }
 }

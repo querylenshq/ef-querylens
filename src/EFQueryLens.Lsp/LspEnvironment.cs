@@ -1,6 +1,6 @@
-namespace EFQueryLens.Core.Common;
+namespace EFQueryLens.Lsp;
 
-internal static class EnvironmentVariableParser
+internal static class LspEnvironment
 {
     internal static bool ReadBool(string variableName, bool fallback)
     {
@@ -33,6 +33,27 @@ internal static class EnvironmentVariableParser
             return min;
         }
 
-        return value > max ? max : value;
+        if (value > max)
+        {
+            return max;
+        }
+
+        return value;
+    }
+
+    internal static int? TryReadOptionalInt(string variableName, int min, int max)
+    {
+        var raw = Environment.GetEnvironmentVariable(variableName);
+        if (!int.TryParse(raw, out var value))
+        {
+            return null;
+        }
+
+        if (value < min || value > max)
+        {
+            return null;
+        }
+
+        return value;
     }
 }

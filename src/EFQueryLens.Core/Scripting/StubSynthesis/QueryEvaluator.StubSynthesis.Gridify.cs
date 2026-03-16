@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -5,6 +7,14 @@ namespace EFQueryLens.Core.Scripting;
 
 public sealed partial class QueryEvaluator
 {
+    private static readonly Regex SGridifyQueryStubRegex = new(
+        "^global::Gridify\\.IGridifyQuery\\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*new\\s+global::Gridify\\.GridifyQuery\\(\\);\\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex SGridifyMapperStubRegex = new(
+        "^global::Gridify\\.IGridifyMapper<.+>\\?\\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*null;\\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static bool TryBuildGridifyStubDeclaration(
         string variableName,
         string expression,
@@ -176,6 +186,53 @@ public sealed partial class QueryEvaluator
             return queryableType.GetGenericArguments()[0];
 
         return null;
+    }
+
+    private static bool TryApplyGridifyFallbackFromErrors(
+        IReadOnlyList<Diagnostic> errors,
+        IList<string> stubs,
+        ref bool includeGridifyFallbackExtensions)
+    {
+        if (!HasMissingGridifyTypeErrors(errors))
+            return false;
+
+        var changed = false;
+        for (var i = 0; i < stubs.Count; i++)
+        {
+            var current = stubs[i];
+
+            var queryMatch = SGridifyQueryStubRegex.Match(current);
+            if (queryMatch.Success)
+            {
+                var variable = queryMatch.Groups["name"].Value;
+                stubs[i] = $"var {variable} = new {{ Page = 1, PageSize = 10 }};";
+                changed = true;
+                continue;
+            }
+
+            var mapperMatch = SGridifyMapperStubRegex.Match(current);
+            if (mapperMatch.Success)
+            {
+                var variable = mapperMatch.Groups["name"].Value;
+                stubs[i] = $"object {variable} = default!;";
+                changed = true;
+            }
+        }
+
+        if (!includeGridifyFallbackExtensions)
+        {
+            includeGridifyFallbackExtensions = true;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static bool HasMissingGridifyTypeErrors(IReadOnlyList<Diagnostic> errors)
+    {
+        return errors.Any(d =>
+            (d.Id is "CS0246" or "CS0234" or "CS0400")
+            && d.GetMessage().Contains("Gridify", StringComparison.Ordinal));
     }
 
     private enum GridifyArgumentRole

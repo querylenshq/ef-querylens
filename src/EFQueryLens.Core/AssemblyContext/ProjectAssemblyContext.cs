@@ -220,11 +220,4 @@ public sealed partial class ProjectAssemblyContext : IDisposable
         return false;
     }
 
-    internal static string? TryResolveRuntimeAssemblyPathFromReferencePath(
-        string referenceAssemblyPath,
-        string assemblySimpleName) =>
-        IsolatedLoadContext.TryResolveRuntimeAssemblyPathFromReference(
-            referenceAssemblyPath,
-            assemblySimpleName);
-
 }

@@ -1,5 +1,4 @@
 using Microsoft.VisualStudio.LanguageServer.Protocol;
-using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
 
 namespace EFQueryLens.Lsp.Hosting;
@@ -19,6 +18,4 @@ internal sealed partial class LanguageServerHandler
     [JsonRpcMethod("textDocument/didSave", UseSingleObjectParameterDeserialization = true)]
     public void DidSave(DidSaveTextDocumentParams p) => _textSync.DidSave(p);
 
-    [JsonRpcMethod("workspace/didChangeConfiguration", UseSingleObjectParameterDeserialization = true)]
-    public void DidChangeConfiguration(JToken? _ = null) { }
 }

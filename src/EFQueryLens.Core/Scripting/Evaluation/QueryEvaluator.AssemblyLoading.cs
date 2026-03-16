@@ -7,7 +7,7 @@ namespace EFQueryLens.Core.Scripting;
 public sealed partial class QueryEvaluator
 {
     private static bool IsNoDbContextFoundError(InvalidOperationException ex) =>
-        ex.Message.Contains("No DbContext subclass found", StringComparison.OrdinalIgnoreCase);
+        ex is DbContextDiscoveryException { FailureKind: DbContextDiscoveryFailureKind.NoDbContextFound };
 
     private static void TryLoadSiblingAssemblies(ProjectAssemblyContext alcCtx)
     {

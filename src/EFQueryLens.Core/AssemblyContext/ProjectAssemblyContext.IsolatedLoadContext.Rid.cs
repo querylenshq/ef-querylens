@@ -78,8 +78,16 @@ public sealed partial class ProjectAssemblyContext
                 var versionText = tfm[3..];
                 if (Version.TryParse(versionText, out var parsed))
                     return 2000 + (parsed.Major * 10) + parsed.Minor;
+
                 if (int.TryParse(versionText, out var majorOnly))
-                    return 2000 + (majorOnly * 10);
+                {
+                    // net5+ is usually represented as netX.Y. Plain integer TFMs are
+                    // generally legacy .NET Framework monikers (e.g. net48, net472).
+                    return majorOnly <= 10
+                        ? 2000 + (majorOnly * 10)
+                        : 500 + majorOnly;
+                }
+
                 return 2000;
             }
 

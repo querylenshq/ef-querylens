@@ -9,7 +9,8 @@ export type WarmupManagerOptions = {
 };
 
 export type WarmupManager = {
-    scheduleWarmup: (editor: TextEditor | undefined) => void;
+    scheduleWarmup: (editor: TextEditor | undefined) => boolean;
+    scheduleWarmupForUri: (uri: string, version?: number) => boolean;
     requestDaemonRestartOnActivate: () => Promise<void>;
 };
 
@@ -19,14 +20,15 @@ export function createWarmupManager(options: WarmupManagerOptions): WarmupManage
     const warmupInFlightUris = new Set<string>();
     const latestRequestedWarmups = new Map<string, { version: number; line: number; character: number }>();
 
-    const queueWarmupRequest = (uri: string, version: number, line: number, character: number): void => {
+    const queueWarmupRequest = (
+        client: LanguageClient,
+        uri: string,
+        version: number,
+        line: number,
+        character: number,
+    ): void => {
         latestRequestedWarmups.set(uri, { version, line, character });
         if (warmupInFlightUris.has(uri)) {
-            return;
-        }
-
-        const client = getClient();
-        if (!client) {
             return;
         }
 
@@ -71,29 +73,49 @@ export function createWarmupManager(options: WarmupManagerOptions): WarmupManage
         }
     };
 
-    const scheduleWarmup = (editor: TextEditor | undefined): void => {
+    const scheduleWarmupForUri = (uri: string, version = 0): boolean => {
         const client = getClient();
         if (!client) {
-            return;
+            return false;
+        }
+
+        const normalizedVersion = Math.max(0, Math.floor(version));
+        const lastWarmedVersion = warmedDocumentVersions.get(uri);
+        if (typeof lastWarmedVersion === 'number' && lastWarmedVersion >= normalizedVersion) {
+            return false;
+        }
+
+        if (warmupInFlightUris.has(uri)) {
+            return false;
+        }
+
+        queueWarmupRequest(client, uri, normalizedVersion, 0, 0);
+        return true;
+    };
+
+    const scheduleWarmup = (editor: TextEditor | undefined): boolean => {
+        const client = getClient();
+        if (!client) {
+            return false;
         }
 
         const document = editor?.document;
         if (!document) {
-            return;
+            return false;
         }
 
         if (document.uri.scheme !== 'file' || document.languageId !== 'csharp') {
-            return;
+            return false;
         }
 
         const uri = document.uri.toString();
         const lastWarmedVersion = warmedDocumentVersions.get(uri);
         if (typeof lastWarmedVersion === 'number' && lastWarmedVersion >= document.version) {
-            return;
+            return false;
         }
 
         if (warmupInFlightUris.has(uri)) {
-            return;
+            return false;
         }
 
         const requestedLine = typeof editor?.selection?.active?.line === 'number'
@@ -105,7 +127,8 @@ export function createWarmupManager(options: WarmupManagerOptions): WarmupManage
         const line = Math.max(0, Math.floor(requestedLine));
         const character = Math.max(0, Math.floor(requestedCharacter));
 
-        queueWarmupRequest(uri, document.version, line, character);
+        queueWarmupRequest(client, uri, document.version, line, character);
+        return true;
     };
 
     const requestDaemonRestartOnActivate = async (): Promise<void> => {
@@ -136,6 +159,7 @@ export function createWarmupManager(options: WarmupManagerOptions): WarmupManage
 
     return {
         scheduleWarmup,
+        scheduleWarmupForUri,
         requestDaemonRestartOnActivate,
     };
 }

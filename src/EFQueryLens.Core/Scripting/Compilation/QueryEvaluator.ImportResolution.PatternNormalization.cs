@@ -13,12 +13,9 @@ public sealed partial class QueryEvaluator
     {
         normalizedExpression = expression;
 
-        var hasBoolComparisonError = errors.Any(d =>
-            d.Id == "CS0019"
-            && d.GetMessage().Contains("Operator '==' cannot be applied", StringComparison.Ordinal)
-            && d.GetMessage().Contains("and 'bool'", StringComparison.Ordinal));
-
-        if (!hasBoolComparisonError || !expression.Contains('?') || !expression.Contains(':'))
+        // Guard on diagnostic ID and expression shape only. We intentionally avoid
+        // compiler message text parsing so behavior is stable across localization/SDK wording.
+        if (!HasDiagnosticId(errors, "CS0019") || !expression.Contains('?') || !expression.Contains(':'))
             return false;
 
         ExpressionSyntax parsed;
@@ -94,13 +91,7 @@ public sealed partial class QueryEvaluator
     {
         normalizedExpression = expression;
 
-        var hasPatternExpressionTreeError = errors.Any(d =>
-            d.Id == "CS8122"
-            || d.GetMessage().Contains(
-                "expression tree may not contain an 'is' pattern-matching operator",
-                StringComparison.OrdinalIgnoreCase));
-
-        if (!hasPatternExpressionTreeError || !expression.Contains(" is ", StringComparison.Ordinal))
+        if (!HasDiagnosticId(errors, "CS8122") || !expression.Contains(" is ", StringComparison.Ordinal))
             return false;
 
         ExpressionSyntax parsed;
@@ -191,4 +182,7 @@ public sealed partial class QueryEvaluator
             return SyntaxFactory.ParenthesizedExpression(expression);
         }
     }
+
+    private static bool HasDiagnosticId(IEnumerable<Diagnostic> diagnostics, string id) =>
+        diagnostics.Any(d => string.Equals(d.Id, id, StringComparison.Ordinal));
 }

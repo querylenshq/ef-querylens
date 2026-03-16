@@ -1,4 +1,5 @@
 ﻿using EFQueryLens.Core;
+using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Hosting;
 
 var lspLogWriter = LspProgramHelpers.ConfigureLspLogWriter();
@@ -20,7 +21,7 @@ try
         return;
     }
 
-    var debugEnabled = LspProgramHelpers.ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+    var debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
     if (debugEnabled)
     {
         Console.Error.WriteLine("[QL-LSP] startup");

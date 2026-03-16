@@ -20,7 +20,7 @@ internal sealed partial class HoverPreviewService
             new(false, msg, [], 0, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs);
 
         var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName);
-        Console.Error.WriteLine($"[QL-Hover] structured extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName}");
+        LogDebug($"structured extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName}");
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
@@ -40,7 +40,7 @@ internal sealed partial class HoverPreviewService
         try
         {
             var sw = Stopwatch.StartNew();
-            Console.Error.WriteLine($"[QL-Hover] structured translate-start line={line} char={character} assembly={targetAssembly}");
+            LogDebug($"structured translate-start line={line} char={character} assembly={targetAssembly}");
 
             var queued = await _engine.TranslateQueuedAsync(new TranslationRequest
             {
@@ -63,8 +63,8 @@ internal sealed partial class HoverPreviewService
                     _ => "EF QueryLens is processing this query.",
                 };
 
-                Console.Error.WriteLine(
-                    $"[QL-Hover] structured queued-status line={line} char={character} " +
+                LogDebug(
+                    $"structured queued-status line={line} char={character} " +
                     $"status={queued.Status} avgMs={queued.AverageTranslationMs:0.##}");
 
                 return new QueryLensStructuredHoverResult(
@@ -89,16 +89,16 @@ internal sealed partial class HoverPreviewService
             if (translation is null)
             {
                 sw.Stop();
-                Console.Error.WriteLine($"[QL-Hover] structured translate-missing-result line={line} char={character}");
+                LogDebug($"structured translate-missing-result line={line} char={character}");
                 return Fail("Queued translation completed without a result payload.");
             }
 
             sw.Stop();
-            Console.Error.WriteLine($"[QL-Hover] structured translate-finished line={line} char={character} success={translation.Success} elapsedMs={sw.ElapsedMilliseconds} commands={translation.Commands.Count}");
+            LogDebug($"structured translate-finished line={line} char={character} success={translation.Success} elapsedMs={sw.ElapsedMilliseconds} commands={translation.Commands.Count}");
 
             if (!translation.Success)
             {
-                Console.Error.WriteLine($"[QL-Hover] structured translate-error line={line} char={character} message={translation.ErrorMessage}");
+                LogDebug($"structured translate-error line={line} char={character} message={translation.ErrorMessage}");
                 return Fail(translation.ErrorMessage ?? "Translation failed.");
             }
 
@@ -110,7 +110,7 @@ internal sealed partial class HoverPreviewService
 
             if (commands.Count == 0)
             {
-                Console.Error.WriteLine($"[QL-Hover] structured translate-empty-commands line={line} char={character}");
+                LogDebug($"structured translate-empty-commands line={line} char={character}");
                 return Fail("No SQL was produced for this expression.");
             }
 
@@ -135,7 +135,7 @@ internal sealed partial class HoverPreviewService
                 dbContextType: translation.Metadata?.DbContextType,
                 providerName: translation.Metadata?.ProviderName);
 
-            Console.Error.WriteLine($"[QL-Hover] structured hover-ready line={line} char={character} commands={commands.Count}");
+            LogDebug($"structured hover-ready line={line} char={character} commands={commands.Count}");
             return new QueryLensStructuredHoverResult(
                 Success: true,
                 ErrorMessage: null,
@@ -155,7 +155,7 @@ internal sealed partial class HoverPreviewService
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[QL-Hover] structured translate-exception line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
+            LogDebug($"structured translate-exception line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
             return Fail($"{ex.GetType().Name}: {ex.Message}", QueryTranslationStatus.Unreachable);
         }
     }

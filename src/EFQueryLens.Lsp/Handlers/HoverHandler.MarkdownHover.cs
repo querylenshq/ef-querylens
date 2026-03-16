@@ -8,38 +8,23 @@ internal sealed partial class HoverHandler
 {
     public async Task<Hover?> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
     {
-        var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
-        var documentUri = request.TextDocument.Uri.ToString();
-        var sourceText = await GetSourceTextAsync(documentUri, filePath, cancellationToken);
-        if (string.IsNullOrWhiteSpace(sourceText))
+        var context = await TryCreateRequestContextAsync(
+            request,
+            cancellationToken,
+            requestLogPrefix: "hover-request",
+            logNormalization: true);
+        if (context is null)
         {
             return null;
         }
 
-        LogHoverDebug($"hover-request path={filePath} line={request.Position.Line} char={request.Position.Character}");
-        var hasSemanticContext = TryResolveSemanticHoverContext(
-            filePath,
-            sourceText,
-            request.Position.Line,
-            request.Position.Character,
-            out var semanticContext);
+        var filePath = context.FilePath;
+        var sourceText = context.SourceText;
+        var semanticContext = context.SemanticContext;
+        var effectiveLine = context.EffectiveLine;
+        var effectiveCharacter = context.EffectiveCharacter;
+        var cacheKey = context.CacheKey;
 
-        var effectiveLine = hasSemanticContext ? semanticContext!.EffectiveLine : request.Position.Line;
-        var effectiveCharacter = hasSemanticContext ? semanticContext!.EffectiveCharacter : request.Position.Character;
-
-        if (effectiveLine != request.Position.Line || effectiveCharacter != request.Position.Character)
-        {
-            LogHoverDebug(
-                $"hover-normalized from line={request.Position.Line} char={request.Position.Character} " +
-                $"to line={effectiveLine} char={effectiveCharacter}");
-        }
-
-        var cacheKey = BuildHoverCacheKey(
-            filePath,
-            sourceText,
-            request.Position.Line,
-            request.Position.Character,
-            semanticContext);
         if (TryGetCachedHover(cacheKey, out var cachedHover))
         {
             LogHoverDebug($"hover-cache-hit line={effectiveLine} char={effectiveCharacter}");
@@ -128,33 +113,6 @@ internal sealed partial class HoverHandler
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             LogHoverDebug($"hover-canceled line={effectiveLine} char={effectiveCharacter}");
-
-            // Rider may cancel fast hover requests before translation completes.
-            // Warm cache asynchronously so the next hover at the same semantic query can return immediately.
-            if (semanticContext is not null)
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var warmed = await ComputeHoverAsync(
-                            filePath,
-                            sourceText,
-                            semanticContext.EffectiveLine,
-                            semanticContext.EffectiveCharacter,
-                            CancellationToken.None);
-                        if (warmed.Status is QueryTranslationStatus.Ready)
-                        {
-                            CacheHover(cacheKey, warmed.Hover, semanticContext);
-                            LogHoverDebug($"hover-warm-cache-ready line={semanticContext.EffectiveLine} char={semanticContext.EffectiveCharacter}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        LogHoverDebug($"hover-warm-cache-failed type={ex.GetType().Name} message={ex.Message}");
-                    }
-                });
-            }
 
             return null;
         }

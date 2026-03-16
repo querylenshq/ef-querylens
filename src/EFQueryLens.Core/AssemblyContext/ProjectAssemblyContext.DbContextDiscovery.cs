@@ -78,7 +78,8 @@ public sealed partial class ProjectAssemblyContext
         var all = FindDbContextTypes();
 
         if (all.Count == 0)
-            throw new InvalidOperationException(
+            throw new DbContextDiscoveryException(
+                DbContextDiscoveryFailureKind.NoDbContextFound,
                 $"No DbContext subclass found in '{Path.GetFileName(AssemblyPath)}'.");
 
         if (typeName is null)
@@ -116,7 +117,8 @@ public sealed partial class ProjectAssemblyContext
                 return filtered[0];
 
             var candidates = filtered.Count > 1 ? filtered : all;
-            throw new InvalidOperationException(
+            throw new DbContextDiscoveryException(
+                DbContextDiscoveryFailureKind.MultipleDbContextsFound,
                 $"Multiple DbContext types found in '{Path.GetFileName(AssemblyPath)}': " +
                 $"{string.Join(", ", candidates.Select(t => t.FullName))}. " +
                 "Specify --context to disambiguate.");

@@ -30,9 +30,26 @@ internal sealed record QueryLensStructuredHoverResult(
 internal sealed partial class HoverPreviewService
 {
     private readonly IQueryLensEngine _engine;
+    private bool _debugEnabled;
 
-    public HoverPreviewService(IQueryLensEngine engine)
+    public HoverPreviewService(IQueryLensEngine engine, bool debugEnabled = false)
     {
         _engine = engine;
+        _debugEnabled = debugEnabled;
+    }
+
+    internal void SetDebugEnabled(bool enabled)
+    {
+        _debugEnabled = enabled;
+    }
+
+    private void LogDebug(string message)
+    {
+        if (!_debugEnabled)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[QL-Hover] {message}");
     }
 }

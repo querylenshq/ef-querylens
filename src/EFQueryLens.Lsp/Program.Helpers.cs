@@ -1,6 +1,7 @@
 using System.Text;
 using EFQueryLens.Core;
 using EFQueryLens.DaemonClient;
+using EFQueryLens.Lsp;
 
 internal static class LspProgramHelpers
 {
@@ -39,27 +40,9 @@ internal static class LspProgramHelpers
         }
     }
 
-    internal static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return fallback;
-        }
-
-        if (bool.TryParse(raw, out var parsed))
-        {
-            return parsed;
-        }
-
-        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
-    }
-
     internal static async Task<IQueryLensEngine> CreateEngineAsync(bool debugEnabled)
     {
-        var daemonPort = TryReadOptionalIntEnvironmentVariable("QUERYLENS_DAEMON_PORT", min: 1, max: 65535);
+        var daemonPort = LspEnvironment.TryReadOptionalInt("QUERYLENS_DAEMON_PORT", min: 1, max: 65535);
         var workspacePath = DaemonLocator.ResolveWorkspacePath();
         var daemonOwnedByCurrentLsp = false;
         var daemonExecutablePath = DaemonLocator.ResolveDaemonExecutablePath();
@@ -79,7 +62,7 @@ internal static class LspProgramHelpers
             }
         }
 
-        var daemonStartTimeoutMs = ReadIntEnvironmentVariable(
+        var daemonStartTimeoutMs = LspEnvironment.ReadInt(
             variableName: "QUERYLENS_DAEMON_START_TIMEOUT_MS",
             fallback: 5000,
             min: 250,
@@ -87,7 +70,7 @@ internal static class LspProgramHelpers
 
         if (daemonPort is null
             && !string.IsNullOrWhiteSpace(workspacePath)
-            && ReadBoolEnvironmentVariable("QUERYLENS_DAEMON_AUTOSTART", fallback: true))
+            && LspEnvironment.ReadBool("QUERYLENS_DAEMON_AUTOSTART", fallback: true))
         {
             var hadRunningDaemon = DaemonLocator.TryGetPort(
                 workspacePath,
@@ -128,12 +111,12 @@ internal static class LspProgramHelpers
             contextName = $"{normalizedClient}-{Environment.ProcessId}";
         }
 
-        var connectTimeoutMs = ReadIntEnvironmentVariable(
+        var connectTimeoutMs = LspEnvironment.ReadInt(
             variableName: "QUERYLENS_DAEMON_CONNECT_TIMEOUT_MS",
             fallback: 2500,
             min: 100,
             max: 120000);
-        var shutdownDaemonOnDispose = ReadBoolEnvironmentVariable(
+        var shutdownDaemonOnDispose = LspEnvironment.ReadBool(
             "QUERYLENS_DAEMON_SHUTDOWN_ON_DISPOSE",
             fallback: false);
 
@@ -174,43 +157,6 @@ internal static class LspProgramHelpers
         }
     }
 
-    private static int? TryReadOptionalIntEnvironmentVariable(string variableName, int min, int max)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (!int.TryParse(raw, out var value))
-        {
-            return null;
-        }
-
-        if (value < min || value > max)
-        {
-            return null;
-        }
-
-        return value;
-    }
-
-    private static int ReadIntEnvironmentVariable(string variableName, int fallback, int min, int max)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (!int.TryParse(raw, out var value))
-        {
-            return fallback;
-        }
-
-        if (value < min)
-        {
-            return min;
-        }
-
-        if (value > max)
-        {
-            return max;
-        }
-
-        return value;
-    }
-
     internal static bool TryRunCacheStatusCommand(string[] args)
     {
         if (!args.Contains("--cache-status", StringComparer.OrdinalIgnoreCase))
@@ -243,7 +189,7 @@ internal static class LspProgramHelpers
             }
 
             var totalMb = bundleSize / 1024d / 1024d;
-            var maxMb = ReadIntEnvironmentVariable("QUERYLENS_SHADOW_CACHE_MAX_MB", 500, 10, 10_000);
+            var maxMb = LspEnvironment.ReadInt("QUERYLENS_SHADOW_CACHE_MAX_MB", 500, 10, 10_000);
 
             Console.WriteLine($"cache-root: {rootDir}");
             Console.WriteLine($"bundle-count: {bundleCount}");
