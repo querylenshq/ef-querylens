@@ -136,7 +136,7 @@ public sealed partial class QueryLensEngine
         _dbContextCreateGates.Clear();
     }
 
-    private void EvictPooledDbContextsForAssembly(string sourceAssemblyPath)
+    private async ValueTask EvictPooledDbContextsForAssemblyAsync(string sourceAssemblyPath)
     {
         var fullPath = Path.GetFullPath(sourceAssemblyPath);
         var prefix = fullPath + "|";
@@ -154,7 +154,7 @@ public sealed partial class QueryLensEngine
 
                     if (pooled.Instance is IAsyncDisposable asyncDisposable)
                     {
-                        asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                        await asyncDisposable.DisposeAsync();
                     }
                     else if (pooled.Instance is IDisposable disposable)
                     {

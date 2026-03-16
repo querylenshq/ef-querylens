@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Common;
 using EFQueryLens.Core.Scripting;
 
 namespace EFQueryLens.Core;
@@ -75,7 +76,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
 
     public QueryLensEngine()
     {
-        _debugEnabled = ReadBoolEnvironmentVariable("QUERYLENS_DEBUG", fallback: false);
+        _debugEnabled = EnvironmentVariableParser.ReadBool("QUERYLENS_DEBUG", fallback: false);
         _shadowCache = new ShadowAssemblyCache(_debugEnabled);
         _shadowCache.ScheduleCleanupIfDue(force: true);
     }
@@ -100,7 +101,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         // This recovers from contexts created before dependency outputs existed or from
         // transient assembly-load failures during initial discovery.
         if (_alcCache.TryRemove(fullPath, out var stale))
-            ReleaseCachedContext(stale, reason: "retry");
+            await ReleaseCachedContextAsync(stale, reason: "retry");
 
         var freshCtx = GetOrRefreshContext(fullPath);
         var retryResult = await _evaluator.EvaluateAsync(freshCtx, request, ct, this, fullPath);
@@ -156,7 +157,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         if (_disposed) return;
         _disposed = true;
         foreach (var entry in _alcCache.Values)
-            ReleaseCachedContext(entry, reason: "dispose");
+            await ReleaseCachedContextAsync(entry, reason: "dispose");
         _alcCache.Clear();
         _alcContextGates.Clear();
         await DisposeDbContextPoolAsync();

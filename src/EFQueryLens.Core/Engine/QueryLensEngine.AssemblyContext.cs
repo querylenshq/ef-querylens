@@ -24,7 +24,7 @@ public sealed partial class QueryLensEngine
                 }
 
                 _alcCache.TryRemove(sourceAssemblyPath, out _);
-                ReleaseCachedContext(existing, reason: "stale");
+                QueueReleaseCachedContext(existing, reason: "stale");
             }
 
             var freshContext = ProjectAssemblyContextFactory.Create(shadowAssemblyPath);
@@ -45,10 +45,25 @@ public sealed partial class QueryLensEngine
         return $"{Path.GetFullPath(sourceAssemblyPath)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
     }
 
-    private void ReleaseCachedContext(CachedAssemblyContext entry, string reason)
+    private void QueueReleaseCachedContext(CachedAssemblyContext entry, string reason)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ReleaseCachedContextAsync(entry, reason);
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"alc-release-failure reason={reason} source={entry.SourceAssemblyPath} error={ex.GetType().Name} message={ex.Message}");
+            }
+        });
+    }
+
+    private async ValueTask ReleaseCachedContextAsync(CachedAssemblyContext entry, string reason)
     {
         _evaluator.InvalidateMetadataRefCache(entry.ShadowAssemblyPath);
-        EvictPooledDbContextsForAssembly(entry.SourceAssemblyPath);
+        await EvictPooledDbContextsForAssemblyAsync(entry.SourceAssemblyPath);
         entry.Context.Dispose();
         ForceUnloadCollection();
 
@@ -88,24 +103,6 @@ public sealed partial class QueryLensEngine
         !result.Success &&
         !string.IsNullOrWhiteSpace(result.ErrorMessage) &&
         result.ErrorMessage.Contains("No DbContext subclass found", StringComparison.OrdinalIgnoreCase);
-
-    private static bool ReadBoolEnvironmentVariable(string variableName, bool fallback)
-    {
-        var raw = Environment.GetEnvironmentVariable(variableName);
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return fallback;
-        }
-
-        if (bool.TryParse(raw, out var parsed))
-        {
-            return parsed;
-        }
-
-        return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
-    }
 
     private void LogDebug(string message)
     {
