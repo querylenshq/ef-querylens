@@ -7,15 +7,17 @@ The format is based on Keep a Changelog.
 ## [Unreleased]
 
 ### Added
-- EF QueryLens rebrand groundwork (`EFQueryLens.*` projects and namespaces)
-- OSS baseline docs and community files
+- Active plugin support across VS Code, Rider, and Visual Studio
+- Marketplace-oriented plugin README pages for VS Code and Visual Studio
+- Public docs page for factory placement and multi-DbContext setup (`docs/factory-setup.md`)
 
 ### Changed
-- VS Code command/config namespace to `efquerylens.*`
-- Solution renamed to `EFQueryLens.slnx`
-- LSP now exposes hover-based SQL preview without inline inlay/code-lens preview surfaces
-- Rider plugin launches LSP directly from packaged runtime paths (shadow cache removed)
-- VS Code package metadata now includes bundled `server/` and `daemon/` runtime payloads
+- Root README rewritten for OSS branding, screenshots, and 3-IDE support
+- VS Code plugin metadata updated for publisher/repository/license identity
+- Rider plugin vendor metadata aligned with OSS publisher identity
+- Visual Studio VSIX metadata updated (publisher, display name, description, tags)
+- IDE support, getting started, architecture, provider, CLI, and MCP docs refreshed
+- GitHub issue template discussions link updated to repository URL
 
 ### Removed
 - Stub provider projects (`QueryLens.MySql`, `QueryLens.Postgres`, `QueryLens.SqlServer`)

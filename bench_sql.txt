@@ -1,4 +1,0 @@
-OK
-SELECT 1
-FROM `Customers` AS `c`
-WHERE NOT (`c`.`IsDeleted`) AND (`c`.`CustomerId` = @__customerId_0)

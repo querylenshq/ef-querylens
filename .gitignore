@@ -43,6 +43,20 @@ coverage/
 
 # Logs
 *.log
+*.binlog
+
+# One-off local helper artifacts
+gen_svg.py
+svgs.txt
+
+# Local benchmark and scratch outputs
+bench_*.txt
+test_*.txt
+test-*.cs
+test_*.csx
+
+# Internal planning/context files not intended for OSS release
+CLAUDE.md
 
 # OS
 .DS_Store

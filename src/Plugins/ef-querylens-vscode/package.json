@@ -1,15 +1,32 @@
 {
   "name": "ef-querylens-vscode",
   "displayName": "EF QueryLens",
-  "description": "SQL Analyzer and Preview for EF Core",
+  "description": "Preview your EF Core SQL in real time, without leaving your IDE.",
   "version": "1.0.0",
-  "publisher": "efquerylens",
+  "publisher": "nemina47",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nemina47/ef-querylens.git"
+  },
+  "homepage": "https://github.com/nemina47/ef-querylens",
+  "bugs": {
+    "url": "https://github.com/nemina47/ef-querylens/issues"
+  },
+  "keywords": [
+    "ef-core",
+    "entity-framework",
+    "sql",
+    "linq",
+    "csharp"
+  ],
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
     "Formatters",
-    "Programming Languages"
+    "Programming Languages",
+    "Other"
   ],
   "main": "./out/extension.js",
   "files": [

@@ -1,80 +1,81 @@
 # EF QueryLens
 
-Hover-first SQL translation and analysis toolkit for Entity Framework Core.
+<!-- logo: add official brand mark here -->
 
-EF QueryLens helps you inspect generated SQL from LINQ during development through IDE integrations and language tooling.
+[![CI](https://github.com/nemina47/ef-querylens/actions/workflows/ci.yml/badge.svg)](https://github.com/nemina47/ef-querylens/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## Current Status
+Preview your EF Core SQL in real time, without leaving your IDE.
 
-- LSP backend: active
-- VS Code client: active
-- CLI host: scaffolded (in progress)
-- MCP host: scaffolded (in progress)
-- Providers: MySQL/Postgres/SQL Server projects removed for lean core; provider packages will be reintroduced as implemented
+EF QueryLens is a hover-first SQL preview and analysis toolkit for Entity Framework Core. It runs a shared LSP backend and ships IDE plugins for VS Code, Rider, and Visual Studio so you can inspect generated SQL where you already work.
 
-## Repository Layout
+## Screenshots
 
-```text
-src/
-  EFQueryLens.Core/
-  EFQueryLens.Lsp/
-  EFQueryLens.Cli/
-  EFQueryLens.Mcp/
-  EFQueryLens.Analyzer/
-  Plugins/
-    ef-querylens-vscode/
-    ef-querylens-visualstudio/
-    ef-querylens-rider/
-tests/
-  EFQueryLens.Core.Tests/
-  EFQueryLens.Integration.Tests/
-```
+![VS Code Single Query](docs/assets/vs_code_plugin_single_query.png)
+![Rider Single Query](docs/assets/rider_plugin_single_query.png)
+![Visual Studio Single Query](docs/assets/vs_extension_single_query.png)
+![Visual Studio Multi Query](docs/assets/vs_extension_multi_query.png)
 
-## Build
+## Highlights
+
+- Hover SQL preview for EF Core LINQ expressions
+- Copy SQL action from hover
+- Open SQL action in dedicated preview dialog
+- Split-query rendering with per-split labels
+- Shared backend across all IDE clients for parity and predictable behavior
+- Provider-aware SQL formatting controls
+
+## Supported IDEs
+
+| IDE | Status | Install |
+|---|---|---|
+| VS Code | Active | Local install from `src/Plugins/ef-querylens-vscode` |
+| JetBrains Rider | Active | Local install from `src/Plugins/ef-querylens-rider` |
+| Visual Studio 2022 | Active | Local install from `src/Plugins/ef-querylens-visualstudio` |
+
+## Quick Start
+
+1. Build the repo.
+2. Install one of the IDE plugins.
+3. Open a C# project with EF Core queries.
+4. Hover a LINQ query to inspect generated SQL.
+5. Use copy sql, open sql, or refresh directly from the hover UI.
+
+## Build From Source
+
+<details>
+<summary>Commands</summary>
 
 ```bash
 dotnet build EFQueryLens.slnx
+dotnet test EFQueryLens.slnx
+
+npm ci --prefix src/Plugins/ef-querylens-vscode
+npm run compile --prefix src/Plugins/ef-querylens-vscode
+
+cd src/Plugins/ef-querylens-rider
+./gradlew build
 ```
 
-## VS Code Client
+</details>
 
-```bash
-cd src/Plugins/ef-querylens-vscode
-npm install
-npm run compile
-```
+## Documentation
 
-## Naming Conventions
+- [Getting Started](docs/getting-started.md)
+- [IDE Support](docs/ide-support.md)
+- [Architecture](docs/architecture.md)
+- [Providers](docs/providers.md)
+- [CLI Reference](docs/cli-reference.md)
+- [MCP Server](docs/mcp-server.md)
 
-- .NET namespaces/projects: `EFQueryLens.*`
-- VS Code command/config prefix: `efquerylens.*`
-- npm package: `ef-querylens-vscode`
-- Repository name: `ef-querylens`
+## Contributing
 
-## Factory Placement Rule
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-When implementing `IQueryLensDbContextFactory<TContext>`, place the factory in an executable startup project (`API`, `WorkerService`, `Console`, etc.), not in a class library.
+## Security
 
-QueryLens resolves dependencies from the selected executable assembly output and only accepts QueryLens/design-time factories declared in that executable assembly.
-
-## Multiple DbContexts
-
-QueryLens supports multiple DbContexts in the same executable project.
-
-Use one of these patterns:
-
-- Add one `IQueryLensDbContextFactory<TContext>` implementation class per DbContext.
-- Or use a single class that implements `IQueryLensDbContextFactory<TContext>` for multiple context types (explicit interface implementation is supported).
-
-When more than one DbContext type exists, QueryLens picks the best match from the query expression; if it cannot disambiguate, specify the context type explicitly (for CLI via `--context`).
-
-## Roadmap
-
-- Complete CLI command surface
-- Complete MCP tool surface
-- Add Visual Studio and Rider plugin wrappers over LSP
-- Reintroduce provider packages as production-ready modules
+See [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).

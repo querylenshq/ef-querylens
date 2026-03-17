@@ -1,11 +1,16 @@
 # CLI Reference
 
-The CLI host currently exists as `EFQueryLens.Cli` and is under active development.
+The CLI host is `EFQueryLens.Cli`.
 
-Planned command surface:
+Current state:
+
+- Command surface is being stabilized
+- IDE integrations are currently the primary production path
+
+Planned command set:
 
 - `translate`
 - `explain`
 - `diff`
 
-Current command wiring is not final yet.
+As command contracts become stable, this page will include complete argument and output schemas.

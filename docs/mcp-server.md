@@ -4,12 +4,14 @@ The MCP host project is `EFQueryLens.Mcp`.
 
 Current state:
 
-- Project scaffold is present
-- Full tool contract implementation is in progress
+- Host project is active
+- Tool contract hardening is in progress
 
-Planned tools:
+Planned tool surface:
 
 - Query translation
 - Model inspection
 - Explain plan parsing
 - Query diff output
+
+This page will be expanded with final tool schemas once MCP contracts are finalized.
