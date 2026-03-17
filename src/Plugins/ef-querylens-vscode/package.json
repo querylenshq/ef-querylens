@@ -35,6 +35,7 @@
     "out/**",
     "server/**",
     "daemon/**",
+    "node_modules/**",
     "icon.png",
     "LICENSE",
     "package.json",
