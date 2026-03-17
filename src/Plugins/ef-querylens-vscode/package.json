@@ -31,11 +31,11 @@
       },
       {
         "command": "efquerylens.openSqlEditor",
-        "title": "EF QueryLens: Open SQL Editor"
+        "title": "EF QueryLens: Open SQL"
       },
       {
         "command": "efquerylens.recalculate",
-        "title": "EF QueryLens: Recalculate SQL Preview"
+        "title": "EF QueryLens: Refresh"
       },
       {
         "command": "efquerylens.restart",

@@ -51,8 +51,6 @@ internal static partial class LinqHoverMarkdownRenderer
             return;
         }
 
-        text = text.Replace(" | ", "  •  ");
-
         var i = 0;
         while (i < text.Length)
         {
@@ -205,8 +203,8 @@ internal static partial class LinqHoverMarkdownRenderer
         ThreadHelper.ThrowIfNotOnUIThread();
         var tempDir = Path.Combine(Path.GetTempPath(), "EFQueryLens");
         Directory.CreateDirectory(tempDir);
-        var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-        var tempPath = Path.Combine(tempDir, $"preview_{stamp}.sql");
+        var stamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        var tempPath = Path.Combine(tempDir, $"efquery_{stamp}.sql");
         File.WriteAllText(tempPath, content, Encoding.UTF8);
 
         try

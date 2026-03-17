@@ -48,6 +48,15 @@ internal static class LspProgramHelpers
         var daemonExecutablePath = DaemonLocator.ResolveDaemonExecutablePath();
         var daemonAssemblyPath = DaemonLocator.ResolveDaemonAssemblyPath();
 
+        if (debugEnabled)
+        {
+            var exeEnv = Environment.GetEnvironmentVariable("QUERYLENS_DAEMON_EXE");
+            var dllEnv = Environment.GetEnvironmentVariable("QUERYLENS_DAEMON_DLL");
+            Console.Error.WriteLine("[QL-LSP] daemon env QUERYLENS_DAEMON_EXE=" + (string.IsNullOrWhiteSpace(exeEnv) ? "(not set)" : exeEnv));
+            Console.Error.WriteLine("[QL-LSP] daemon env QUERYLENS_DAEMON_DLL=" + (string.IsNullOrWhiteSpace(dllEnv) ? "(not set)" : dllEnv));
+            Console.Error.WriteLine("[QL-LSP] daemon resolved exe=" + (daemonExecutablePath ?? "(null)") + " dll=" + (daemonAssemblyPath ?? "(null)"));
+        }
+
         if (daemonPort is null
             && !string.IsNullOrWhiteSpace(workspacePath))
         {

@@ -13,17 +13,19 @@ export function enableTrustedHoverCommands(
     const trusted = { enabledCommands: [...enabledCommands] };
     const contents = hover.contents.map(item => {
         if (item instanceof MarkdownString) {
-            const markdown = new MarkdownString(rewriteQueryLensActionLinks(item.value), item.supportThemeIcons);
+            const markdown = new MarkdownString(rewriteQueryLensActionLinks(item.value));
             markdown.baseUri = item.baseUri;
             markdown.isTrusted = trusted;
-            markdown.supportHtml = item.supportHtml;
-            markdown.supportThemeIcons = item.supportThemeIcons;
+            markdown.supportHtml = true;
+            markdown.supportThemeIcons = true;
             return markdown;
         }
 
         if (typeof item === 'string') {
             const markdown = new MarkdownString(rewriteQueryLensActionLinks(item));
             markdown.isTrusted = trusted;
+            markdown.supportHtml = true;
+            markdown.supportThemeIcons = true;
             return markdown;
         }
 
@@ -32,6 +34,8 @@ export function enableTrustedHoverCommands(
             if (typeof value === 'string') {
                 const markdown = new MarkdownString(rewriteQueryLensActionLinks(value));
                 markdown.isTrusted = trusted;
+                markdown.supportHtml = true;
+                markdown.supportThemeIcons = true;
                 return markdown;
             }
         }

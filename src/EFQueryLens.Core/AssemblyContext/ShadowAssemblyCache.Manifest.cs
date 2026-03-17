@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 namespace EFQueryLens.Core.AssemblyContext;
 
@@ -37,19 +38,27 @@ internal sealed partial class ShadowAssemblyCache
 
     private static void TryAtomicPromote(string stagingPath, string finalPath)
     {
-        try
+        for (var i = 0; i < 5; i++)
         {
-            Directory.Move(stagingPath, finalPath);
-            return;
-        }
-        catch (IOException)
-        {
-            if (Directory.Exists(finalPath))
+            try
             {
+                Directory.Move(stagingPath, finalPath);
                 return;
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (Directory.Exists(finalPath))
+                {
+                    return;
+                }
 
-            throw;
+                if (i == 4)
+                {
+                    throw;
+                }
+
+                Thread.Sleep(50 * (i + 1));
+            }
         }
     }
 

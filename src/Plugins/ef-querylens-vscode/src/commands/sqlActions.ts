@@ -5,10 +5,12 @@ import {
     Range,
     Selection,
     TextEditorRevealType,
+    Uri,
     ViewColumn,
     WebviewPanel,
     window,
     workspace,
+    WorkspaceEdit,
 } from 'vscode';
 import { LanguageClient } from 'vscode-languageclient/node';
 
@@ -141,18 +143,30 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         formatSqlOnShow: boolean,
         sqlDialect: QueryLensSqlDialect
     ): Promise<void> {
-        const preview = await getSqlPreviewForLens(
+        const enrichedSql = await getSqlForLens(
             uriInput,
             lineInput,
             characterInput,
             formatSqlOnShow,
-            sqlDialect
+            sqlDialect,
+            true
         );
-        if (!preview) {
+        if (!enrichedSql) {
             return;
         }
 
-        openSqlPreviewPanelForLens(preview);
+        const now = new Date();
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+        const timeStr = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        const name = `efquery_${dateStr}_${timeStr}.sql`;
+        const uri = Uri.parse(`untitled:${name}`);
+
+        const doc = await workspace.openTextDocument(uri);
+        const edit = new WorkspaceEdit();
+        edit.insert(uri, new Position(0, 0), enrichedSql);
+        await workspace.applyEdit(edit);
+        await window.showTextDocument(doc, { viewColumn: ViewColumn.Beside });
     }
 
     function openSqlPreviewPanelForLens(preview: {

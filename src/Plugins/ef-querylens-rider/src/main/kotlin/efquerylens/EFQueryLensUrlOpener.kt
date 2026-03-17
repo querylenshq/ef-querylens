@@ -27,13 +27,20 @@ import javax.swing.JTextArea
 
 class EFQueryLensUrlOpener : UrlOpener() {
 
+    private data class StructuredStatement(
+        val sql: String,
+        val splitLabel: String?,
+    )
+
     private data class StructuredSqlPreview(
         val title: String,
         val subtitle: String,
         val statusCode: Int,
         val statusText: String,
+        val statusMessage: String?,
         val avgTranslationMs: Double,
         val sqlText: String,
+        val warnings: List<String>,
     )
 
     private data class StatusPalette(
@@ -67,6 +74,14 @@ class EFQueryLensUrlOpener : UrlOpener() {
             try {
                 val preview = buildStructuredPreview(effectiveProject, fileUri, line, character)
                     ?: return@executeOnPooledThread
+
+                if (preview.statusCode != 0 || preview.sqlText.isBlank()) {
+                    val message = preview.statusMessage
+                        ?: if (preview.statusCode != 0) fallbackStatusMessage(preview.statusCode)
+                        else "No SQL preview available at this location."
+                    showStatusMessage(effectiveProject, preview.statusCode, message)
+                    return@executeOnPooledThread
+                }
 
                 when (host) {
                     "copysql" -> CopyPasteManager.getInstance().setContents(StringSelection(preview.sqlText))
@@ -136,17 +151,49 @@ class EFQueryLensUrlOpener : UrlOpener() {
     private fun extractStructuredPreview(response: Any?, fallbackFileUri: String, fallbackLine: Int): StructuredSqlPreview? {
         val root = response as? Map<String, Any?> ?: return null
         val hover = root["hover"] as? Map<String, Any?> ?: return null
+
         val status = (hover["Status"] as? Number)?.toInt() ?: 0
         val success = hover["Success"] as? Boolean ?: false
-        if (status != 0 || !success) {
+
+        val statusMessage = (hover["StatusMessage"] as? String)?.takeIf { it.isNotBlank() }
+            ?: (hover["ErrorMessage"] as? String)?.takeIf { it.isNotBlank() }
+
+        val statements = ((hover["Statements"] as? List<*>) ?: emptyList<Any?>())
+            .mapNotNull { statementRaw ->
+                val statement = statementRaw as? Map<String, Any?> ?: return@mapNotNull null
+                val sql = (statement["Sql"] as? String)?.trim()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val splitLabel = (statement["SplitLabel"] as? String)?.trim()?.takeIf { it.isNotBlank() }
+                StructuredStatement(sql = sql, splitLabel = splitLabel)
+            }
+
+        val renderedStatements = renderStatements(statements)
+        val enrichedSql = (hover["EnrichedSql"] as? String)?.trim()?.takeIf { it.isNotBlank() }
+        val sqlText = renderedStatements.takeIf { it.isNotBlank() } ?: enrichedSql
+
+        val warnings = ((hover["Warnings"] as? List<*>) ?: emptyList<Any?>())
+            .mapNotNull { warning -> (warning as? String)?.trim()?.takeIf { it.isNotBlank() } }
+
+        if (status == 0 && !success) {
+            return StructuredSqlPreview(
+                title = "QueryLens · preview unavailable",
+                subtitle = "$fallbackFileUri:${fallbackLine + 1}",
+                statusCode = status,
+                statusText = toStatusText(status),
+                statusMessage = statusMessage ?: "No SQL preview available at this location.",
+                avgTranslationMs = 0.0,
+                sqlText = "",
+                warnings = warnings,
+            )
+        }
+
+        if (status == 0 && sqlText.isNullOrBlank()) {
             return null
         }
 
-        val sqlText = (hover["EnrichedSql"] as? String)?.takeIf { it.isNotBlank() } ?: return null
-
         val commandCount = (hover["CommandCount"] as? Number)?.toInt()?.coerceAtLeast(1) ?: 1
         val statementWord = if (commandCount == 1) "query" else "queries"
-        val title = "QueryLens · $commandCount $statementWord · ready"
+        val statusText = toStatusText(status)
+        val title = "QueryLens · $commandCount $statementWord · ${statusText.lowercase()}"
 
         val sourceFile = (hover["SourceFile"] as? String)
             ?.takeIf { it.isNotBlank() }
@@ -154,6 +201,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
         val sourceLine = (hover["SourceLine"] as? Number)?.toInt()?.coerceAtLeast(1)
             ?: (fallbackLine + 1)
         val providerName = (hover["ProviderName"] as? String)?.takeIf { it.isNotBlank() }
+        val dbContextType = (hover["DbContextType"] as? String)?.takeIf { it.isNotBlank() }
         val subtitle = buildString {
             append(sourceFile)
             append(':')
@@ -161,6 +209,10 @@ class EFQueryLensUrlOpener : UrlOpener() {
             if (!providerName.isNullOrBlank()) {
                 append(" · ")
                 append(providerName)
+            }
+            if (!dbContextType.isNullOrBlank()) {
+                append(" · ")
+                append(dbContextType)
             }
         }
 
@@ -170,10 +222,50 @@ class EFQueryLensUrlOpener : UrlOpener() {
             title = title,
             subtitle = subtitle,
             statusCode = status,
-            statusText = "READY",
+            statusText = statusText,
+            statusMessage = statusMessage,
             avgTranslationMs = avgTranslationMs,
-            sqlText = sqlText
+            sqlText = sqlText ?: "",
+            warnings = warnings,
         )
+    }
+
+    private fun renderStatements(statements: List<StructuredStatement>): String {
+        if (statements.isEmpty()) {
+            return ""
+        }
+
+        if (statements.size == 1) {
+            return statements[0].sql
+        }
+
+        return statements.mapIndexed { index, statement ->
+            val label = statement.splitLabel ?: "Split Query ${index + 1} of ${statements.size}"
+            "-- $label\n${statement.sql}"
+        }.joinToString("\n\n")
+    }
+
+    private fun toStatusText(statusCode: Int): String = when (statusCode) {
+        1 -> "QUEUED"
+        2 -> "STARTING"
+        3 -> "ERROR"
+        else -> "READY"
+    }
+
+    private fun fallbackStatusMessage(statusCode: Int): String = when (statusCode) {
+        3 -> "EF QueryLens services are unavailable and cannot communicate right now."
+        2 -> "EF QueryLens is starting up and warming translation services."
+        else -> "EF QueryLens queued this query and is still processing it."
+    }
+
+    private fun showStatusMessage(project: Project, statusCode: Int, message: String) {
+        ApplicationManager.getApplication().invokeLater {
+            if (statusCode == 3) {
+                com.intellij.openapi.ui.Messages.showWarningDialog(project, message, "EF QueryLens")
+            } else {
+                com.intellij.openapi.ui.Messages.showInfoMessage(project, message, "EF QueryLens")
+            }
+        }
     }
 
     private fun openInPreviewDialog(project: Project, preview: StructuredSqlPreview) {
@@ -255,6 +347,27 @@ class EFQueryLensUrlOpener : UrlOpener() {
 
             root.add(header, BorderLayout.NORTH)
             root.add(JScrollPane(sqlArea), BorderLayout.CENTER)
+
+            if (preview.warnings.isNotEmpty()) {
+                val notesPanel = JPanel(BorderLayout())
+                notesPanel.border = BorderFactory.createEmptyBorder(8, 12, 10, 12)
+
+                val notesLabel = JLabel("Notes")
+                notesLabel.font = notesLabel.font.deriveFont(Font.BOLD)
+
+                val notesArea = JTextArea(preview.warnings.joinToString("\n") { "- $it" }).apply {
+                    isEditable = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                    border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
+                    background = root.background
+                }
+
+                notesPanel.add(notesLabel, BorderLayout.NORTH)
+                notesPanel.add(notesArea, BorderLayout.CENTER)
+                root.add(notesPanel, BorderLayout.SOUTH)
+            }
+
             root.preferredSize = Dimension(1000, 640)
             return root
         }

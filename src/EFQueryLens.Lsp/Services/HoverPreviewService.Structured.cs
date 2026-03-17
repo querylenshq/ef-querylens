@@ -1,6 +1,4 @@
 using EFQueryLens.Core;
-using EFQueryLens.Lsp.Parsing;
-using System.Diagnostics;
 
 namespace EFQueryLens.Lsp.Services;
 
@@ -19,144 +17,72 @@ internal sealed partial class HoverPreviewService
             double avgTranslationMs = 0) =>
             new(false, msg, [], 0, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs);
 
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName);
-        LogDebug($"structured extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName}");
+        Action<string> log = message => LogDebug($"structured {message}");
+        var canonical = await BuildCanonicalAsync(
+            filePath,
+            sourceText,
+            line,
+            character,
+            cancellationToken,
+            log);
 
-        if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
+        if (canonical.Status is not QueryTranslationStatus.Ready && canonical.Success)
         {
-            return Fail("Could not extract a LINQ query expression at the current caret location.");
-        }
-
-        var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
-        if (string.IsNullOrWhiteSpace(targetAssembly) ||
-            targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal) ||
-            !File.Exists(targetAssembly))
-        {
-            return Fail("Could not locate compiled target assembly for this file. Build the project and try again.");
-        }
-
-        var usingContext = LspSyntaxHelper.ExtractUsingContext(sourceText);
-
-        try
-        {
-            var sw = Stopwatch.StartNew();
-            LogDebug($"structured translate-start line={line} char={character} assembly={targetAssembly}");
-
-            var queued = await _engine.TranslateQueuedAsync(new TranslationRequest
-            {
-                AssemblyPath = targetAssembly,
-                Expression = expression,
-                ContextVariableName = contextVariableName,
-                AdditionalImports = usingContext.Imports.ToArray(),
-                UsingAliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
-                UsingStaticTypes = usingContext.StaticTypes.ToArray(),
-            }, cancellationToken);
-
-            if (queued.Status is not QueryTranslationStatus.Ready)
-            {
-                sw.Stop();
-                var statusMessage = queued.Status switch
-                {
-                    QueryTranslationStatus.Starting => "EF QueryLens is starting up and warming the translation pipeline.",
-                    QueryTranslationStatus.InQueue => "EF QueryLens queued this query and is still processing it.",
-                    QueryTranslationStatus.Unreachable => "EF QueryLens services are unavailable. Could not communicate with daemon.",
-                    _ => "EF QueryLens is processing this query.",
-                };
-
-                LogDebug(
-                    $"structured queued-status line={line} char={character} " +
-                    $"status={queued.Status} avgMs={queued.AverageTranslationMs:0.##}");
-
-                return new QueryLensStructuredHoverResult(
-                    Success: false,
-                    ErrorMessage: statusMessage,
-                    Statements: [],
-                    CommandCount: 0,
-                    SourceExpression: expression,
-                    DbContextType: null,
-                    ProviderName: null,
-                    SourceFile: filePath,
-                    SourceLine: line + 1,
-                    Warnings: [],
-                    EnrichedSql: null,
-                    Mode: "queued",
-                    Status: queued.Status,
-                    StatusMessage: statusMessage,
-                    AvgTranslationMs: queued.AverageTranslationMs);
-            }
-
-            var translation = queued.Result;
-            if (translation is null)
-            {
-                sw.Stop();
-                LogDebug($"structured translate-missing-result line={line} char={character}");
-                return Fail("Queued translation completed without a result payload.");
-            }
-
-            sw.Stop();
-            LogDebug($"structured translate-finished line={line} char={character} success={translation.Success} elapsedMs={sw.ElapsedMilliseconds} commands={translation.Commands.Count}");
-
-            if (!translation.Success)
-            {
-                LogDebug($"structured translate-error line={line} char={character} message={translation.ErrorMessage}");
-                return Fail(translation.ErrorMessage ?? "Translation failed.");
-            }
-
-            var commands = translation.Commands.Count > 0
-                ? translation.Commands
-                : translation.Sql is null
-                    ? []
-                    : [new QuerySqlCommand { Sql = translation.Sql, Parameters = translation.Parameters }];
-
-            if (commands.Count == 0)
-            {
-                LogDebug($"structured translate-empty-commands line={line} char={character}");
-                return Fail("No SQL was produced for this expression.");
-            }
-
-            var providerName = translation.Metadata?.ProviderName;
-            var statements = commands.Select((command, index) =>
-            {
-                var formatted = FormatSqlForDisplay(command.Sql.Trim(), providerName);
-                var splitLabel = commands.Count > 1 ? $"Split Query {index + 1} of {commands.Count}" : null;
-                return new QueryLensSqlStatement(formatted, splitLabel);
-            }).ToList();
-
-            var warnings = translation.Warnings.Select(w => string.IsNullOrWhiteSpace(w.Suggestion)
-                ? $"{w.Code}: {w.Message}"
-                : $"{w.Code}: {w.Message} ({w.Suggestion})").ToArray();
-
-            var firstSql = statements.Count > 0 ? statements[0].Sql : null;
-            var enrichedSql = BuildStructuredEnrichedSql(
-                firstSql,
-                sourceFile: filePath,
-                sourceLine: line + 1,
-                sourceExpression: expression,
-                dbContextType: translation.Metadata?.DbContextType,
-                providerName: translation.Metadata?.ProviderName);
-
-            LogDebug($"structured hover-ready line={line} char={character} commands={commands.Count}");
             return new QueryLensStructuredHoverResult(
-                Success: true,
-                ErrorMessage: null,
-                Statements: statements,
-                CommandCount: commands.Count,
-                SourceExpression: expression,
-                DbContextType: translation.Metadata?.DbContextType,
-                ProviderName: translation.Metadata?.ProviderName,
+                Success: false,
+                ErrorMessage: canonical.Message,
+                Statements: [],
+                CommandCount: 0,
+                SourceExpression: canonical.SourceExpression,
+                DbContextType: null,
+                ProviderName: null,
                 SourceFile: filePath,
-                SourceLine: line + 1,
-                Warnings: warnings,
-                EnrichedSql: enrichedSql,
-                Mode: "direct",
-                Status: QueryTranslationStatus.Ready,
-                StatusMessage: null,
-                AvgTranslationMs: queued.AverageTranslationMs);
+                SourceLine: canonical.SourceLine,
+                Warnings: [],
+                EnrichedSql: null,
+                Mode: "queued",
+                Status: canonical.Status,
+                StatusMessage: canonical.Message,
+                AvgTranslationMs: canonical.AvgTranslationMs);
         }
-        catch (Exception ex)
+
+        if (!canonical.Success)
         {
-            LogDebug($"structured translate-exception line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
-            return Fail($"{ex.GetType().Name}: {ex.Message}", QueryTranslationStatus.Unreachable);
+            return Fail(canonical.Message, canonical.Status, canonical.AvgTranslationMs);
         }
+
+        var providerName = canonical.Metadata?.ProviderName;
+        var statements = BuildFormattedStatements(canonical.Commands, providerName);
+        var warnings = BuildWarningLines(canonical.Warnings);
+
+        var fullSql = statements.Count == 0
+            ? null
+            : BuildStatementsSqlBlock(statements);
+        var enrichedSql = BuildStructuredEnrichedSql(
+            fullSql,
+            sourceFile: filePath,
+            sourceLine: canonical.SourceLine,
+            sourceExpression: canonical.SourceExpression,
+            dbContextType: canonical.Metadata?.DbContextType,
+            providerName: canonical.Metadata?.ProviderName,
+            warnings: canonical.Warnings);
+
+        LogDebug($"structured hover-ready line={line} char={character} commands={canonical.Commands.Count}");
+        return new QueryLensStructuredHoverResult(
+            Success: true,
+            ErrorMessage: null,
+            Statements: statements,
+            CommandCount: canonical.Commands.Count,
+            SourceExpression: canonical.SourceExpression,
+            DbContextType: canonical.Metadata?.DbContextType,
+            ProviderName: canonical.Metadata?.ProviderName,
+            SourceFile: filePath,
+            SourceLine: canonical.SourceLine,
+            Warnings: warnings,
+            EnrichedSql: enrichedSql,
+            Mode: "direct",
+            Status: QueryTranslationStatus.Ready,
+            StatusMessage: null,
+            AvgTranslationMs: canonical.AvgTranslationMs);
     }
 }

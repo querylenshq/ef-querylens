@@ -4,6 +4,13 @@ namespace EFQueryLens.Lsp.Parsing;
 
 public static partial class AssemblyResolver
 {
+    private sealed record CandidateAssembly(
+        string DllPath,
+        DateTime TimestampUtc,
+        bool HasFactory,
+        bool HasRuntimeArtifacts,
+        bool LooksLikeRefOrObj);
+
     /// <summary>
     /// Returns true if the project directory contains a source file with an
     /// IQueryLensDbContextFactory implementation — i.e. the user explicitly set
@@ -174,7 +181,7 @@ public static partial class AssemblyResolver
         // (the user set them up as the QueryLens host) over projects that are merely
         // referencing the library for other purposes (e.g. data-migration workers).
         // Within the same tier, the most recently built DLL wins.
-        var scored = new List<(string HostDll, DateTime Timestamp, bool HasFactory)>();
+        var scored = new List<CandidateAssembly>();
 
         foreach (var (csprojPath, exeAssemblyName) in candidates)
         {
@@ -195,28 +202,47 @@ public static partial class AssemblyResolver
                 continue;
             }
 
-            // Found it — now find the host's own DLL in the same tfm subfolder
-            var libraryDll = libraryDlls.OrderByDescending(File.GetLastWriteTimeUtc).First();
-            var tfmDir = Path.GetDirectoryName(libraryDll)!;
-
-            var hostDll = Path.Combine(tfmDir, $"{exeAssemblyName}.dll");
-            if (!File.Exists(hostDll))
-            {
-                debugLog += $"  -> {exeAssemblyName}: host DLL not found in {tfmDir}\n";
-                continue;
-            }
-
-            var ts = File.GetLastWriteTimeUtc(hostDll);
             var hasFactory = HasQueryLensFactory(projDir);
-            debugLog += $"  -> {exeAssemblyName}: found at {hostDll} (timestamp: {ts:u}, hasFactory: {hasFactory})\n";
 
-            scored.Add((hostDll, ts, hasFactory));
+            foreach (var libraryDll in libraryDlls)
+            {
+                var tfmDir = Path.GetDirectoryName(libraryDll)!;
+                var hostDll = Path.Combine(tfmDir, $"{exeAssemblyName}.dll");
+                if (!File.Exists(hostDll))
+                {
+                    continue;
+                }
+
+                var ts = File.GetLastWriteTimeUtc(hostDll);
+                var hasRuntimeArtifacts = HasExecutableRuntimeArtifacts(hostDll);
+                var looksLikeRefOrObj = LooksLikeRefOrObjPath(hostDll);
+
+                debugLog +=
+                    $"  -> {exeAssemblyName}: found at {hostDll} (timestamp: {ts:u}, hasFactory: {hasFactory}, " +
+                    $"hasRuntimeArtifacts: {hasRuntimeArtifacts}, looksLikeRefOrObj: {looksLikeRefOrObj})\n";
+
+                scored.Add(new CandidateAssembly(
+                    hostDll,
+                    ts,
+                    hasFactory,
+                    hasRuntimeArtifacts,
+                    looksLikeRefOrObj));
+            }
         }
 
         var bestDll = scored
+            .GroupBy(x => x.DllPath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g
+                .OrderByDescending(x => x.HasFactory ? 1 : 0)
+                .ThenByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
+                .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
+                .ThenByDescending(x => x.TimestampUtc)
+                .First())
             .OrderByDescending(x => x.HasFactory ? 1 : 0)
-            .ThenByDescending(x => x.Timestamp)
-            .Select(x => x.HostDll)
+            .ThenByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
+            .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
+            .ThenByDescending(x => x.TimestampUtc)
+            .Select(x => x.DllPath)
             .FirstOrDefault();
 
         if (bestDll is not null)
@@ -248,10 +274,40 @@ public static partial class AssemblyResolver
         var dllFiles = Directory.GetFiles(binDir, $"{assemblyName}.dll", SearchOption.AllDirectories);
         if (dllFiles.Length > 0)
         {
-            return dllFiles.OrderByDescending(File.GetLastWriteTimeUtc).First();
+            var selected = dllFiles
+                .Select(path => new CandidateAssembly(
+                    path,
+                    File.GetLastWriteTimeUtc(path),
+                    HasFactory: false,
+                    HasRuntimeArtifacts: HasExecutableRuntimeArtifacts(path),
+                    LooksLikeRefOrObj: LooksLikeRefOrObjPath(path)))
+                .OrderByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
+                .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
+                .ThenByDescending(x => x.TimestampUtc)
+                .First();
+
+            debugLog +=
+                $"  -> Selected {selected.DllPath} " +
+                $"(hasRuntimeArtifacts: {selected.HasRuntimeArtifacts}, looksLikeRefOrObj: {selected.LooksLikeRefOrObj}, timestamp: {selected.TimestampUtc:u})\n";
+
+            return selected.DllPath;
         }
 
         debugLog += $"  -> EXCEPTION: Searched for {assemblyName}.dll in {binDir} recursively but found 0 files.\n";
         return null;
+    }
+
+    private static bool HasExecutableRuntimeArtifacts(string dllPath)
+    {
+        var runtimeConfigPath = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
+        var depsPath = Path.ChangeExtension(dllPath, ".deps.json");
+        return File.Exists(runtimeConfigPath) && File.Exists(depsPath);
+    }
+
+    private static bool LooksLikeRefOrObjPath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        return normalized.Contains("/ref/", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase);
     }
 }

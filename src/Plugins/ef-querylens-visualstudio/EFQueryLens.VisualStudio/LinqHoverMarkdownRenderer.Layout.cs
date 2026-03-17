@@ -48,13 +48,30 @@ internal static partial class LinqHoverMarkdownRenderer
         return tb;
     }
 
+    private static FrameworkElement RenderSecondaryItalic(string text, string? preferredCopySql)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var tb = new TextBlock
+        {
+            FontSize = 11,
+            FontStyle = FontStyles.Italic,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xb0, 0xb0, 0xb0)),
+            Margin = new Thickness(0, 2, 0, 1),
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = new FontFamily("Segoe UI"),
+        };
+
+        AppendInlineMarkdown(tb.Inlines, text, preferredCopySql);
+        return tb;
+    }
+
     private static FrameworkElement RenderHeaderLine(string text, string? preferredCopySql)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         var tb = new TextBlock
         {
             FontSize = 13,
-            FontWeight = FontWeights.SemiBold,
+            FontWeight = FontWeights.Normal,
             Foreground = new SolidColorBrush(Color.FromRgb(0xea, 0xea, 0xea)),
             Margin = new Thickness(0, 0, 0, 4),
             TextWrapping = TextWrapping.Wrap,

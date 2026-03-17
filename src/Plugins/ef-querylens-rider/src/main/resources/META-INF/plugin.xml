@@ -17,4 +17,14 @@
                 secondary="true"
                 canCloseContents="false" />
     </extensions>
+
+    <actions>
+        <action id="efquerylens.ShowToolWindow"
+                class="efquerylens.EFQueryLensShowToolWindowAction"
+                text="Show EF QueryLens"
+                description="Open the EF QueryLens log tool window">
+            <add-to-group group-id="ViewMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>

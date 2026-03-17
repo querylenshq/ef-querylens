@@ -1,14 +1,14 @@
 package efquerylens
 
 import com.intellij.execution.configurations.GeneralCommandLine
+import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
-import java.nio.charset.StandardCharsets
 import java.nio.file.Path
-import java.security.MessageDigest
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -50,6 +50,7 @@ private class EFQueryLensServerDescriptor(
     private val hostProject: Project
 ) : ProjectWideLspServerDescriptor(hostProject, "EF QueryLens") {
     private companion object {
+        private const val PluginIdValue = "dev.efquerylens.rider"
         private const val LspDllOverrideEnvVar = "QUERYLENS_LSP_DLL"
     }
 
@@ -61,8 +62,15 @@ private class EFQueryLensServerDescriptor(
         val projectBasePath = hostProject.basePath
             ?: error("Cannot start EF QueryLens language server: project has no base path.")
 
+        val logIdentity = WorkspaceLogIdentityResolver.fromProjectBasePath(projectBasePath)
+
         val workspaceRoot = Path.of(projectBasePath).toAbsolutePath().normalize()
-        val lspLogFilePath = buildLspLogFilePath(projectBasePath)
+        val lspLogFilePath = logIdentity.logFilePath
+
+        logInfo(
+            "[EFQueryLens] log identity workspace='${logIdentity.workspacePath.absolutePathString()}' " +
+                "hash='${logIdentity.hash}' file='${logIdentity.logFilePath.absolutePathString()}'"
+        )
 
         val lspDllOverride = resolveLspDllOverride()
         if (lspDllOverride != null) {
@@ -74,9 +82,16 @@ private class EFQueryLensServerDescriptor(
         }
 
         val lspDll = resolvePackagedLspDll()
-            ?: error(
-                "Cannot locate EFQueryLens packaged runtime under '/server'. " +
-                    "Set $LspDllOverrideEnvVar to override.")
+        if (lspDll == null) {
+            logWarn(
+                "[EFQueryLens] Cannot locate packaged runtime (server/EFQueryLens.Lsp.dll). " +
+                    "Check logs above for pluginRoot and candidates. Set $LspDllOverrideEnvVar to override."
+            )
+            error(
+                "Cannot locate EFQueryLens packaged runtime (server/EFQueryLens.Lsp.dll). " +
+                    "Set $LspDllOverrideEnvVar to override."
+            )
+        }
 
         logInfo("[EFQueryLens] Starting EF QueryLens LSP from packaged runtime '${lspDll.pathString}'")
 
@@ -101,27 +116,62 @@ private class EFQueryLensServerDescriptor(
     }
 
     private fun resolvePackagedLspDll(): Path? {
-        val pluginRoot = resolvePluginRoot() ?: return null
-        val candidates = listOf(
-            pluginRoot.resolve("server").resolve("EFQueryLens.Lsp.dll")
-        )
+        val pluginRoot = resolvePluginRoot()
+        if (pluginRoot == null) {
+            logWarn("[EFQueryLens] Cannot resolve plugin root (codeSource unavailable or path not under lib/). LSP will not start from packaged runtime.")
+            return null
+        }
+        // Packaged/distributed plugin: server/ next to lib/ inside plugin root.
+        // runIde sandbox: server/ is a sibling of the plugin dir (plugins/server, plugins/ef-querylens-rider).
+        val serverDirs = listOfNotNull(
+            pluginRoot.resolve("server"),
+            pluginRoot.parent?.resolve("server")
+        ).distinct()
+        val candidates = serverDirs.flatMap { serverDir ->
+            listOf(
+                serverDir.resolve("EFQueryLens.Lsp.dll"),
+                serverDir.resolve("win-x64").resolve("EFQueryLens.Lsp.dll"),
+                serverDir.resolve("win-x64").resolve("publish").resolve("EFQueryLens.Lsp.dll"),
+                serverDir.resolve("publish").resolve("EFQueryLens.Lsp.dll")
+            )
+        }
 
-        return candidates.firstOrNull { it.exists() && it.isRegularFile() }
+        val found = candidates.firstOrNull { it.exists() && it.isRegularFile() }
+        if (found == null) {
+            logWarn(
+                "[EFQueryLens] Packaged runtime not found. pluginRoot=${pluginRoot.absolutePathString()}, " +
+                    "serverDirs=${serverDirs.map { it.absolutePathString() }}, " +
+                    "candidatesChecked=${candidates.map { it.absolutePathString() to (it.exists() to it.isRegularFile()) }}. " +
+                    "Set $LspDllOverrideEnvVar to override."
+            )
+        }
+        return found
     }
 
     private fun resolvePluginRoot(): Path? {
+        val pluginPathFromManager = PluginManagerCore.getPlugin(PluginId.getId(PluginIdValue))?.pluginPath
+        if (pluginPathFromManager != null) {
+            val resolved = pluginPathFromManager.toAbsolutePath().normalize()
+            logInfo("[EFQueryLens] resolvePluginRoot: plugin manager path='${resolved.absolutePathString()}'")
+            return resolved
+        }
+
         return try {
             val location = EFQueryLensLspServerSupportProvider::class.java.protectionDomain.codeSource?.location
-                ?: return null
+                ?: run {
+                    logWarn("[EFQueryLens] resolvePluginRoot: codeSource.location is null")
+                    return null
+                }
             val codeSourcePath = Path.of(location.toURI()).toAbsolutePath().normalize()
 
             if (codeSourcePath.isRegularFile()) {
                 val parent = codeSourcePath.parent ?: return null
-                return if (parent.name.equals("lib", ignoreCase = true) && parent.parent != null) {
+                val root = if (parent.name.equals("lib", ignoreCase = true) && parent.parent != null) {
                     parent.parent
                 } else {
                     parent
                 }
+                return root
             }
 
             var current: Path? = codeSourcePath
@@ -137,21 +187,12 @@ private class EFQueryLensServerDescriptor(
                 current = current.parent
             }
 
+            logWarn("[EFQueryLens] resolvePluginRoot: no server/ or lib/ found walking up from codeSource=${codeSourcePath.absolutePathString()}")
             null
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logWarn("[EFQueryLens] resolvePluginRoot failed", e)
             null
         }
-    }
-
-    private fun buildLspLogFilePath(projectBasePath: String): Path {
-        val workspacePath = Path.of(projectBasePath).toAbsolutePath().normalize()
-        val hash = hashWorkspacePath(workspacePath.absolutePathString())
-        return Path.of(System.getProperty("java.io.tmpdir"), "EFQueryLens", "rider-logs", "lsp-$hash.log")
-    }
-
-    private fun hashWorkspacePath(path: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(path.toByteArray(StandardCharsets.UTF_8))
-        return digest.joinToString("") { "%02x".format(it) }.take(16)
     }
 
     private fun GeneralCommandLine.applyQueryLensEnvironment(
@@ -164,6 +205,9 @@ private class EFQueryLensServerDescriptor(
         // Rider can cancel/re-issue hover requests aggressively; allow a short grace
         // window so canceled requests can still reuse an in-flight hover computation.
         withEnvironment("QUERYLENS_HOVER_CANCEL_GRACE_MS", "1200")
+        // Return queued/starting states immediately in Rider so users see warmup feedback.
+        withEnvironment("QUERYLENS_MARKDOWN_QUEUE_ADAPTIVE_WAIT_MS", "0")
+        withEnvironment("QUERYLENS_STRUCTURED_QUEUE_ADAPTIVE_WAIT_MS", "0")
         // Show a lightweight progress indicator if hover translation is slow.
         withEnvironment("QUERYLENS_HOVER_PROGRESS_NOTIFY", "1")
         withEnvironment("QUERYLENS_HOVER_PROGRESS_DELAY_MS", "350")
@@ -180,12 +224,46 @@ private class EFQueryLensServerDescriptor(
         withEnvironment("QUERYLENS_WORKSPACE", workspacePath)
         withEnvironment("QUERYLENS_DAEMON_WORKSPACE", workspacePath)
 
-        resolveDaemonExecutable()?.let {
-            withEnvironment("QUERYLENS_DAEMON_EXE", it.absolutePathString())
+        // Prefer runIde/env daemon paths (like VS Code explicit env), then fall back to packaged resolution
+        val daemonExeEnv = System.getenv("QUERYLENS_DAEMON_EXE")?.takeIf { it.isNotBlank() }
+        val daemonDllEnv = System.getenv("QUERYLENS_DAEMON_DLL")?.takeIf { it.isNotBlank() }
+
+        val daemonExePath: Pair<String?, String?> = when {
+            daemonExeEnv != null && Path.of(daemonExeEnv).let { p: Path -> p.exists() && p.isRegularFile() } -> {
+                withEnvironment("QUERYLENS_DAEMON_EXE", daemonExeEnv)
+                daemonExeEnv to "runIde env"
+            }
+            daemonExeEnv != null -> {
+                logWarn("[EFQueryLens] QUERYLENS_DAEMON_EXE set but file not found: $daemonExeEnv")
+                Pair(null, null)
+            }
+            else -> resolveDaemonExecutable()?.let { p: Path ->
+                withEnvironment("QUERYLENS_DAEMON_EXE", p.absolutePathString())
+                p.absolutePathString() to "packaged"
+            } ?: Pair(null, null)
         }
 
-        resolveDaemonAssembly()?.let {
-            withEnvironment("QUERYLENS_DAEMON_DLL", it.absolutePathString())
+        val daemonDllPath: Pair<String?, String?> = when {
+            daemonDllEnv != null && Path.of(daemonDllEnv).let { p: Path -> p.exists() && p.isRegularFile() } -> {
+                withEnvironment("QUERYLENS_DAEMON_DLL", daemonDllEnv)
+                daemonDllEnv to "runIde env"
+            }
+            daemonDllEnv != null -> {
+                logWarn("[EFQueryLens] QUERYLENS_DAEMON_DLL set but file not found: $daemonDllEnv")
+                Pair(null, null)
+            }
+            else -> resolveDaemonAssembly()?.let { p: Path ->
+                withEnvironment("QUERYLENS_DAEMON_DLL", p.absolutePathString())
+                p.absolutePathString() to "packaged"
+            } ?: Pair(null, null)
+        }
+
+        val exeLog = daemonExePath.first?.let { "[EFQueryLens] daemon env EXE=$it (${daemonExePath.second})" }
+        val dllLog = daemonDllPath.first?.let { "[EFQueryLens] daemon env DLL=$it (${daemonDllPath.second})" }
+        if (exeLog != null) logInfo(exeLog)
+        if (dllLog != null) logInfo(dllLog)
+        if (daemonExePath.first == null && daemonDllPath.first == null) {
+            logWarn("[EFQueryLens] No daemon EXE or DLL set; LSP may fail with daemon-launch-target-not-found.")
         }
 
         return this
@@ -201,19 +279,33 @@ private class EFQueryLensServerDescriptor(
 
     private fun resolvePackagedDaemonExecutable(): Path? {
         val pluginRoot = resolvePluginRoot() ?: return null
-        val candidates = listOf(
-            pluginRoot.resolve("daemon").resolve("EFQueryLens.Daemon.exe")
-        )
-
+        val daemonDirs = listOfNotNull(
+            pluginRoot.resolve("daemon"),
+            pluginRoot.parent?.resolve("daemon")
+        ).distinct()
+        val candidates = daemonDirs.flatMap { daemonDir ->
+            listOf(
+                daemonDir.resolve("EFQueryLens.Daemon.exe"),
+                daemonDir.resolve("win-x64").resolve("EFQueryLens.Daemon.exe"),
+                daemonDir.resolve("win-x64").resolve("publish").resolve("EFQueryLens.Daemon.exe")
+            )
+        }
         return candidates.firstOrNull { it.exists() && it.isRegularFile() }
     }
 
     private fun resolvePackagedDaemonAssembly(): Path? {
         val pluginRoot = resolvePluginRoot() ?: return null
-        val candidates = listOf(
-            pluginRoot.resolve("daemon").resolve("EFQueryLens.Daemon.dll")
-        )
-
+        val daemonDirs = listOfNotNull(
+            pluginRoot.resolve("daemon"),
+            pluginRoot.parent?.resolve("daemon")
+        ).distinct()
+        val candidates = daemonDirs.flatMap { daemonDir ->
+            listOf(
+                daemonDir.resolve("EFQueryLens.Daemon.dll"),
+                daemonDir.resolve("win-x64").resolve("EFQueryLens.Daemon.dll"),
+                daemonDir.resolve("win-x64").resolve("publish").resolve("EFQueryLens.Daemon.dll")
+            )
+        }
         return candidates.firstOrNull { it.exists() && it.isRegularFile() }
     }
 

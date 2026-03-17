@@ -47,12 +47,12 @@ internal sealed partial class SqlTranslationQueue
         {
             if (_inflightJobs.TryGetValue(semanticKey, out var racingJobId))
             {
-                var raceStatus = _metrics.IsWarming(contextName)
+                var racingJobStatus = _metrics.IsWarming(contextName)
                     ? QueryTranslationStatus.Starting
                     : QueryTranslationStatus.InQueue;
                 return new QueuedTranslationResult
                 {
-                    Status = raceStatus,
+                    Status = racingJobStatus,
                     JobId = racingJobId,
                     AverageTranslationMs = _metrics.GetAverageMs(contextName),
                 };

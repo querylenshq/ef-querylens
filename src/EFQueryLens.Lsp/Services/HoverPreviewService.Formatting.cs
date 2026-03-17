@@ -8,43 +8,66 @@ namespace EFQueryLens.Lsp.Services;
 
 internal sealed partial class HoverPreviewService
 {
+    private static IReadOnlyList<QueryLensSqlStatement> BuildFormattedStatements(
+        IReadOnlyList<QuerySqlCommand> commands,
+        string? providerName)
+    {
+        return commands.Select((command, index) =>
+        {
+            var splitLabel = commands.Count > 1 ? $"Split Query {index + 1} of {commands.Count}" : null;
+            var formatted = FormatSqlForDisplay(command.Sql.Trim(), providerName);
+            return new QueryLensSqlStatement(formatted, splitLabel);
+        }).ToList();
+    }
+
+    private static string BuildStatementsSqlBlock(IReadOnlyList<QueryLensSqlStatement> statements)
+    {
+        return string.Join(
+            "\n\n",
+            statements.Select(statement => string.IsNullOrWhiteSpace(statement.SplitLabel)
+                ? statement.Sql
+                : $"-- {statement.SplitLabel}\n{statement.Sql}"));
+    }
+
+    private static IReadOnlyList<string> BuildWarningLines(IReadOnlyList<QueryWarning> warnings)
+    {
+        return warnings.Select(warning => string.IsNullOrWhiteSpace(warning.Suggestion)
+                ? $"{warning.Code}: {warning.Message}"
+                : $"{warning.Code}: {warning.Message} ({warning.Suggestion})")
+            .ToArray();
+    }
+
     private static string BuildHoverMarkdown(
         IReadOnlyList<QuerySqlCommand> commands,
         IReadOnlyList<QueryWarning> warnings,
         string uri,
         int line,
         int character,
-        TranslationMetadata? metadata)
+        TranslationMetadata? metadata,
+        double avgTranslationMs = 0)
     {
         var providerName = metadata?.ProviderName;
-        var sql = string.Join(
-            "\n\n",
-            commands.Select((command, index) =>
-            {
-                var raw = commands.Count == 1
-                    ? command.Sql.Trim()
-                    : $"-- Split Query {index + 1} of {commands.Count}\n{command.Sql.Trim()}";
-                return FormatSqlForDisplay(raw, providerName);
-            }));
+        var statements = BuildFormattedStatements(commands, providerName);
+        var sql = BuildStatementsSqlBlock(statements);
 
         var statementWord = commands.Count == 1 ? "query" : "queries";
-        var warningLines = warnings
-            .Select(w => string.IsNullOrWhiteSpace(w.Suggestion)
-                ? $"- {w.Code}: {w.Message}"
-                : $"- {w.Code}: {w.Message} ({w.Suggestion})")
-            .ToArray();
+        var warningLines = BuildWarningLines(warnings);
 
         var queryParams = $"uri={Uri.EscapeDataString(uri)}&line={line}&character={character}";
         var copyLink = $"[Copy SQL](efquerylens://copySql?{queryParams})";
-        var openLink = $"[Open SQL Preview](efquerylens://openSqlEditor?{queryParams})";
-        var recalculateLink = $"[Recalculate](efquerylens://recalculate?{queryParams})";
+        var openLink = $"[Open SQL](efquerylens://openSqlEditor?{queryParams})";
+        var recalculateLink = $"[Reanalyze](efquerylens://recalculate?{queryParams})";
 
         // Plain Markdown only (no HTML entities) so VS Code, VS, and Rider all render the same.
-        var header = $"**QueryLens · {commands.Count} {statementWord}** | {copyLink} | {openLink} | {recalculateLink}";
+        var header = $"**EF QueryLens** · {commands.Count} {statementWord}";
+        var actionsRow = $"{copyLink} | {openLink} | {recalculateLink}";
+        var timingLine = avgTranslationMs > 0
+            ? $"\n\n*SQL generation time {avgTranslationMs:0} ms*"
+            : string.Empty;
 
-        var body = warningLines.Length == 0
-            ? $"{header}\n\n```sql\n{sql}\n```"
-            : $"{header}\n\n```sql\n{sql}\n```\n\n**Notes**\n{string.Join("\n", warningLines)}";
+        var body = warningLines.Count == 0
+            ? $"{header}  \n{actionsRow}\n\n```sql\n{sql}\n```{timingLine}"
+            : $"{header}  \n{actionsRow}\n\n```sql\n{sql}\n```\n\n**Notes**\n{string.Join("\n", warningLines.Select(line => $"- {line}"))}{timingLine}";
 
         return body;
     }
@@ -55,7 +78,8 @@ internal sealed partial class HoverPreviewService
         int sourceLine,
         string? sourceExpression,
         string? dbContextType,
-        string? providerName)
+        string? providerName,
+        IReadOnlyList<QueryWarning>? warnings = null)
     {
         if (string.IsNullOrWhiteSpace(rawSql))
         {
@@ -81,6 +105,18 @@ internal sealed partial class HoverPreviewService
         if (!string.IsNullOrWhiteSpace(providerName))
         {
             sb.AppendLine($"-- Provider:  {providerName}");
+        }
+
+        if (warnings is { Count: > 0 })
+        {
+            sb.AppendLine("-- Notes:");
+            foreach (var warning in warnings)
+            {
+                var warningLine = string.IsNullOrWhiteSpace(warning.Suggestion)
+                    ? $"--   - {warning.Code}: {warning.Message}"
+                    : $"--   - {warning.Code}: {warning.Message} ({warning.Suggestion})";
+                sb.AppendLine(warningLine);
+            }
         }
 
         sb.AppendLine();

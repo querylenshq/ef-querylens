@@ -94,6 +94,17 @@ internal sealed partial class HoverHandler
                     return semanticCachedHoverAfterCancel;
                 }
 
+                var fallbackHover = await TryBuildCanceledStatusFallbackHoverAsync(
+                    filePath,
+                    sourceText,
+                    effectiveLine,
+                    effectiveCharacter);
+                if (fallbackHover is not null)
+                {
+                    LogHoverDebug($"hover-cancel-fallback-hit line={effectiveLine} char={effectiveCharacter}");
+                    return fallbackHover;
+                }
+
                 LogHoverDebug($"hover-canceled line={effectiveLine} char={effectiveCharacter} reason=request-cancelled");
                 return null;
             }
@@ -113,6 +124,17 @@ internal sealed partial class HoverHandler
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             LogHoverDebug($"hover-canceled line={effectiveLine} char={effectiveCharacter}");
+
+            var fallbackHover = await TryBuildCanceledStatusFallbackHoverAsync(
+                filePath,
+                sourceText,
+                effectiveLine,
+                effectiveCharacter);
+            if (fallbackHover is not null)
+            {
+                LogHoverDebug($"hover-cancel-fallback-hit line={effectiveLine} char={effectiveCharacter}");
+                return fallbackHover;
+            }
 
             return null;
         }
@@ -213,17 +235,60 @@ internal sealed partial class HoverHandler
             ? result.Output
             : $"**QueryLens Error**\n```text\n{result.Output}\n```";
 
+        return new ComputedHover(CreateMarkdownHover(markdown), result.Status);
+    }
+
+    private async Task<Hover?> TryBuildCanceledStatusFallbackHoverAsync(
+        string filePath,
+        string sourceText,
+        int line,
+        int character)
+    {
+        using var fallbackCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        try
+        {
+            var fallback = await _hoverPreviewService.BuildMarkdownAsync(
+                filePath,
+                sourceText,
+                line,
+                character,
+                fallbackCts.Token);
+
+            if (!fallback.Success)
+            {
+                return null;
+            }
+
+            if (fallback.Status is QueryTranslationStatus.Starting
+                or QueryTranslationStatus.InQueue
+                or QueryTranslationStatus.Unreachable)
+            {
+                return CreateMarkdownHover(fallback.Output);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignore fallback timeout and keep the primary cancellation behavior.
+        }
+        catch (Exception ex)
+        {
+            LogHoverDebug($"hover-cancel-fallback-failed line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
+        }
+
+        return null;
+    }
+
+    private static Hover CreateMarkdownHover(string markdown)
+    {
         var content = new MarkupContent
         {
             Kind = MarkupKind.Markdown,
             Value = markdown,
         };
 
-        var hover = new Hover
+        return new Hover
         {
             Contents = new SumType<SumType<string, MarkedString>, SumType<string, MarkedString>[], MarkupContent>(content),
         };
-
-        return new ComputedHover(hover, result.Status);
     }
 }

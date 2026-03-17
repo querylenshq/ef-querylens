@@ -1,7 +1,10 @@
-﻿using EFQueryLens.Core;
+using System;
+using EFQueryLens.Core;
+using EFQueryLens.Core.Common;
 using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Hosting;
 
+Console.SetError(new TimestampedTextWriter(Console.Error));
 var lspLogWriter = LspProgramHelpers.ConfigureLspLogWriter();
 
 try
