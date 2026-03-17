@@ -1,0 +1,9 @@
+Reusing configuration cache.
+> Task :checkKotlinGradlePluginConfigurationErrors SKIPPED
+
+> Task :compileKotlin
+w: file:///C:/nemina/QueryLens/src/Plugins/ef-querylens-rider/src/main/kotlin/efquerylens/EFQueryLensCodeVisionProvider.kt:76:60 'class DocumentationManager : DockablePopupManager<DocumentationComponent!>' is deprecated. Deprecated in Java.
+
+BUILD SUCCESSFUL in 5s
+1 actionable task: 1 executed
+Configuration cache entry reused.
