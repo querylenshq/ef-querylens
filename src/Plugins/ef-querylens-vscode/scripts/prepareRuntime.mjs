@@ -10,7 +10,8 @@ const pluginRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(pluginRoot, '..', '..', '..');
 const lspOutputRoot = path.join(pluginRoot, 'server');
 const daemonOutputRoot = path.join(pluginRoot, 'daemon');
-const runtimeIdentifier = process.env.QUERYLENS_RUNTIME_IDENTIFIER ?? getDefaultRuntimeIdentifier();
+const runtimeIdentifier = normalizeRuntimeIdentifier(process.env.QUERYLENS_RUNTIME_IDENTIFIER);
+const runtimeMode = runtimeIdentifier ? `rid:${runtimeIdentifier}` : 'portable';
 const buildConfiguration = 'Release';
 const targetFramework = 'net10.0';
 
@@ -40,7 +41,7 @@ copyDirectory(daemonSource, daemonDestination);
 console.log(`[EFQueryLens] bundled runtime prepared:`);
 console.log(`  lsp:    ${lspSource} -> ${lspDestination}`);
 console.log(`  daemon: ${daemonSource} -> ${daemonDestination}`);
-console.log(`  rid:    ${runtimeIdentifier}`);
+console.log(`  mode:   ${runtimeMode}`);
 
 function resolveRuntimeDirectory(
   projectName,
@@ -51,16 +52,7 @@ function resolveRuntimeDirectory(
   framework
 ) {
   const projectPath = path.join(repositoryRoot, 'src', projectName, `${projectName}.csproj`);
-  const publishDir = path.join(
-    repositoryRoot,
-    'src',
-    projectName,
-    'bin',
-    configuration,
-    framework,
-    runtime,
-    'publish'
-  );
+  const publishDir = getPublishDirectory(repositoryRoot, projectName, configuration, framework, runtime);
 
   publishProject(projectPath, runtime, configuration, framework);
 
@@ -74,21 +66,26 @@ function resolveRuntimeDirectory(
 }
 
 function publishProject(projectPath, runtime, configuration, framework) {
+  const useAppHost = runtime ? 'true' : 'false';
+  const args = [
+    'publish',
+    projectPath,
+    '-c',
+    configuration,
+    '-f',
+    framework,
+    '--self-contained',
+    'false',
+    `/p:UseAppHost=${useAppHost}`,
+  ];
+
+  if (runtime) {
+    args.push('-r', runtime);
+  }
+
   const result = spawnSync(
     'dotnet',
-    [
-      'publish',
-      projectPath,
-      '-c',
-      configuration,
-      '-f',
-      framework,
-      '-r',
-      runtime,
-      '--self-contained',
-      'false',
-      '/p:UseAppHost=true',
-    ],
+    args,
     {
       stdio: 'inherit',
       cwd: repoRoot,
@@ -100,20 +97,30 @@ function publishProject(projectPath, runtime, configuration, framework) {
   }
 }
 
-function getDefaultRuntimeIdentifier() {
-  if (process.platform === 'win32') {
-    return process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
+function getPublishDirectory(repositoryRoot, projectName, configuration, framework, runtime) {
+  const base = path.join(
+    repositoryRoot,
+    'src',
+    projectName,
+    'bin',
+    configuration,
+    framework
+  );
+
+  if (runtime) {
+    return path.join(base, runtime, 'publish');
   }
 
-  if (process.platform === 'darwin') {
-    return process.arch === 'arm64' ? 'osx-arm64' : 'osx-x64';
+  return path.join(base, 'publish');
+}
+
+function normalizeRuntimeIdentifier(value) {
+  if (typeof value !== 'string') {
+    return null;
   }
 
-  if (process.platform === 'linux') {
-    return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
-  }
-
-  throw new Error(`[EFQueryLens] Unsupported platform '${process.platform}'. Set QUERYLENS_RUNTIME_IDENTIFIER explicitly.`);
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function copyDirectory(sourceDir, destinationDir) {

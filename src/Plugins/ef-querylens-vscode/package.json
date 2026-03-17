@@ -2,8 +2,10 @@
   "name": "ef-querylens-vscode",
   "displayName": "EF QueryLens",
   "description": "Preview your EF Core SQL in real time, without leaving your IDE.",
-  "version": "1.0.0",
-  "publisher": "nemina47",
+  "icon": "icon.png",
+  "preview": true,
+  "version": "0.0.1",
+  "publisher": "EFQueryLens",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -33,6 +35,8 @@
     "out/**",
     "server/**",
     "daemon/**",
+    "icon.png",
+    "LICENSE",
     "package.json",
     "README.md"
   ],

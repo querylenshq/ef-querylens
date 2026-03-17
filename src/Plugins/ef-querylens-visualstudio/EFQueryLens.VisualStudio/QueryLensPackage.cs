@@ -12,7 +12,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
 
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-[InstalledProductRegistration("EF QueryLens", "Preview EF Core LINQ SQL in Visual Studio", "0.2.0")]
+[InstalledProductRegistration("EF QueryLens", "Preview EF Core LINQ SQL in Visual Studio", "0.0.1")]
 [ProvideMenuResource("Menus.ctmenu", 1)]
 [Guid(QueryLensCommandGuids.PackageString)]
 internal sealed class QueryLensPackage : AsyncPackage

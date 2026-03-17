@@ -50,7 +50,10 @@ export function activate(context: ExtensionContext) {
     const fallbackRepoRoot = path.resolve(context.extensionPath, '..', '..', '..');
     const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath ?? fallbackRepoRoot;
     const daemonDllPath = path.join(packagedDaemonDir, 'EFQueryLens.Daemon.dll');
-    const daemonExePath = path.join(packagedDaemonDir, 'EFQueryLens.Daemon.exe');
+    const daemonExecutablePath = [
+        path.join(packagedDaemonDir, 'EFQueryLens.Daemon.exe'),
+        path.join(packagedDaemonDir, 'EFQueryLens.Daemon'),
+    ].find(candidate => fs.existsSync(candidate));
 
     let currentSettings = readSettings();
     logOutput(`activate workspace=${workspaceRoot}`);
@@ -74,10 +77,10 @@ export function activate(context: ExtensionContext) {
         QUERYLENS_CODELENS_USE_MODEL_FILTER: currentSettings.codeLensUseModelFilter ? '1' : '0',
     };
 
-    if (fs.existsSync(daemonExePath)) {
-        serverEnv.QUERYLENS_DAEMON_EXE = daemonExePath;
+    if (daemonExecutablePath) {
+        serverEnv.QUERYLENS_DAEMON_EXE = daemonExecutablePath;
     } else if (currentSettings.debugLogsEnabled) {
-        logOutput(`[EFQueryLens] daemon exe not found at ${daemonExePath}`);
+        logOutput(`[EFQueryLens] daemon executable not found in ${packagedDaemonDir}`);
     }
 
     if (fs.existsSync(daemonDllPath)) {

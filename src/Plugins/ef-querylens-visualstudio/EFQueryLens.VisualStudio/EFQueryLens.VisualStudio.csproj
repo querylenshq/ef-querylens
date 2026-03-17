@@ -35,6 +35,18 @@
     </VSCTCompile>
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="icon.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="preview.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+    <Content Include="LICENSE.txt">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+
   <!-- Bundle runtime from publish output (Release + runtime identifier). -->
   <PropertyGroup>
     <QueryLensRuntimeIdentifier Condition="'$(QueryLensRuntimeIdentifier)' == ''">win-x64</QueryLensRuntimeIdentifier>

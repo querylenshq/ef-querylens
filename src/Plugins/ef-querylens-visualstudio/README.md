@@ -21,7 +21,8 @@ EF QueryLens for Visual Studio provides hover-based SQL preview and quick SQL ac
 ## Requirements
 
 - Visual Studio 2022 (17.14+)
-- .NET SDK 10+
+- .NET 10 Runtime + ASP.NET Core Runtime (required to run the bundled QueryLens backend)
+- .NET 10 SDK (only for local development/build)
 - EF Core project
 
 ## Local Build

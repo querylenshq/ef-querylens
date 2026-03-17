@@ -11,6 +11,16 @@ permissions:
 jobs:
   build-vscode-extension:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - win32-x64
+          - win32-arm64
+          - linux-x64
+          - linux-arm64
+          - darwin-x64
+          - darwin-arm64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -19,22 +29,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Build runtime dependencies
-        run: |
-          dotnet build src/EFQueryLens.Lsp/EFQueryLens.Lsp.csproj -c Debug
-          dotnet build src/EFQueryLens.Daemon/EFQueryLens.Daemon.csproj -c Debug
       - name: Build and package VS Code extension
         working-directory: src/Plugins/ef-querylens-vscode
         run: |
           npm ci
           npm run compile
           npm run prepare-runtime
-          npx --yes @vscode/vsce package -o ef-querylens-vscode.vsix
+          npx --yes @vscode/vsce package --pre-release --target ${{ matrix.target }} -o ef-querylens-vscode-${{ matrix.target }}.vsix
       - name: Upload VS Code artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ef-querylens-vscode
-          path: src/Plugins/ef-querylens-vscode/ef-querylens-vscode.vsix
+          name: ef-querylens-vscode-${{ matrix.target }}
+          path: src/Plugins/ef-querylens-vscode/ef-querylens-vscode-${{ matrix.target }}.vsix
 
   build-rider-plugin:
     runs-on: ubuntu-latest

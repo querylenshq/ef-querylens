@@ -19,7 +19,8 @@ EF QueryLens for VS Code connects to the QueryLens language server and shows gen
 ## Requirements
 
 - VS Code 1.80+
-- .NET SDK 10+
+- .NET 10 Runtime + ASP.NET Core Runtime (required to run the bundled QueryLens backend)
+- .NET 10 SDK (only for local development/build)
 - An EF Core project
 
 ## Commands
