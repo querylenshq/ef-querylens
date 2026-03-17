@@ -6,7 +6,8 @@ internal sealed record HoverPreviewComputationResult(
     bool Success,
     string Output,
     QueryTranslationStatus Status = QueryTranslationStatus.Ready,
-    double AvgTranslationMs = 0);
+    double AvgTranslationMs = 0,
+    double LastTranslationMs = 0);
 
 internal sealed record QueryLensSqlStatement(string Sql, string? SplitLabel);
 
@@ -25,7 +26,8 @@ internal sealed record QueryLensStructuredHoverResult(
     string? Mode,
     QueryTranslationStatus Status = QueryTranslationStatus.Ready,
     string? StatusMessage = null,
-    double AvgTranslationMs = 0);
+    double AvgTranslationMs = 0,
+    double LastTranslationMs = 0);
 
 internal sealed partial class HoverPreviewService
 {

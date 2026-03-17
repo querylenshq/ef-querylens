@@ -83,6 +83,7 @@ public sealed partial class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposa
             Status = response.Status.ToDomain(),
             JobId = response.HasJobId ? response.JobId : null,
             AverageTranslationMs = response.AverageTranslationMs,
+            LastTranslationMs = response.LastTranslationMs,
             Result = response.Result is null ? null : response.Result.ToDomain(),
         };
     }

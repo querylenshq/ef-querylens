@@ -76,6 +76,7 @@ internal sealed partial class QueryLensDaemonService
             {
                 Status = queued.Status.ToProto(),
                 AverageTranslationMs = queued.AverageTranslationMs,
+                LastTranslationMs = queued.LastTranslationMs,
             };
 
             if (!string.IsNullOrWhiteSpace(queued.JobId))
@@ -100,6 +101,7 @@ internal sealed partial class QueryLensDaemonService
             {
                 Status = TranslationStatus.Unreachable,
                 AverageTranslationMs = metrics.GetAverageMs(request.ContextName),
+                LastTranslationMs = metrics.GetLastMs(request.ContextName),
             };
         }
     }

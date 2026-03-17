@@ -11,6 +11,7 @@ internal sealed partial class HoverPreviewService
         string Message,
         QueryTranslationStatus Status,
         double AvgTranslationMs,
+        double LastTranslationMs,
         string? SourceExpression,
         int SourceLine,
         TranslationMetadata? Metadata,
@@ -42,6 +43,7 @@ internal sealed partial class HoverPreviewService
                 Message: message,
                 Status: status,
                 AvgTranslationMs: 0,
+                LastTranslationMs: 0,
                 SourceExpression: null,
                 SourceLine: sourceLine,
                 Metadata: null,
@@ -89,13 +91,14 @@ internal sealed partial class HoverPreviewService
                 var statusMessage = BuildStatusText(queued.Status);
                 log(
                     $"queued-status line={line} char={character} " +
-                    $"status={queued.Status} avgMs={queued.AverageTranslationMs:0.##}");
+                    $"status={queued.Status} avgMs={queued.AverageTranslationMs:0.##} lastMs={queued.LastTranslationMs:0.##}");
 
                 return new HoverCanonicalComputationResult(
                     Success: true,
                     Message: statusMessage,
                     Status: queued.Status,
                     AvgTranslationMs: queued.AverageTranslationMs,
+                    LastTranslationMs: queued.LastTranslationMs,
                     SourceExpression: expression,
                     SourceLine: sourceLine,
                     Metadata: null,
@@ -140,6 +143,7 @@ internal sealed partial class HoverPreviewService
                 Message: string.Empty,
                 Status: QueryTranslationStatus.Ready,
                 AvgTranslationMs: queued.AverageTranslationMs,
+                LastTranslationMs: queued.LastTranslationMs,
                 SourceExpression: expression,
                 SourceLine: sourceLine,
                 Metadata: translation.Metadata,

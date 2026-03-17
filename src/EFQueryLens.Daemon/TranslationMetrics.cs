@@ -11,6 +11,7 @@ internal sealed class TranslationMetrics
         public readonly Queue<long> Samples = new();
         public double SumMs;
         public int TotalSampleCount;
+        public long LastSampleMs;
     }
 
     private readonly ConcurrentDictionary<string, RollingMetricState> _state = new(StringComparer.Ordinal);
@@ -50,6 +51,7 @@ internal sealed class TranslationMetrics
         lock (state.SyncRoot)
         {
             state.TotalSampleCount++;
+            state.LastSampleMs = sample;
             state.Samples.Enqueue(sample);
             state.SumMs += sample;
 
@@ -101,6 +103,20 @@ internal sealed class TranslationMetrics
 
             var averageMs = state.SumMs / state.Samples.Count;
             return averageMs > _warmThresholdMs;
+        }
+    }
+
+    public double GetLastMs(string contextName)
+    {
+        var key = NormalizeContext(contextName);
+        if (!_state.TryGetValue(key, out var state))
+        {
+            return 0;
+        }
+
+        lock (state.SyncRoot)
+        {
+            return state.TotalSampleCount <= 0 ? 0 : state.LastSampleMs;
         }
     }
 

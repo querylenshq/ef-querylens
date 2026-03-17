@@ -21,6 +21,7 @@ export type QueryLensStructuredHoverResponse = {
     Status: number;
     StatusMessage: string | null;
     AvgTranslationMs: number;
+    LastTranslationMs: number;
 };
 
 export type QueryLensSettings = {

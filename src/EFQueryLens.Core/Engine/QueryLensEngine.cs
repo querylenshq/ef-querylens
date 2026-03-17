@@ -119,10 +119,14 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         TranslationRequest request, CancellationToken ct = default)
     {
         var result = await TranslateAsync(request, ct);
+        var lastTranslationMs = result.Metadata is null
+            ? 0
+            : Math.Max(0, result.Metadata.TranslationTime.TotalMilliseconds);
         return new QueuedTranslationResult
         {
             Status = QueryTranslationStatus.Ready,
             AverageTranslationMs = 0,
+            LastTranslationMs = lastTranslationMs,
             Result = result,
         };
     }

@@ -24,6 +24,7 @@ internal sealed partial class SqlTranslationQueue
                 Status = QueryTranslationStatus.Ready,
                 JobId = cached!.JobId,
                 AverageTranslationMs = _metrics.GetAverageMs(contextName),
+                LastTranslationMs = _metrics.GetLastMs(contextName),
                 Result = cached.Result,
             };
         }
@@ -39,6 +40,7 @@ internal sealed partial class SqlTranslationQueue
                 Status = existingStatus,
                 JobId = existingJobId,
                 AverageTranslationMs = _metrics.GetAverageMs(contextName),
+                LastTranslationMs = _metrics.GetLastMs(contextName),
             };
         }
 
@@ -55,6 +57,7 @@ internal sealed partial class SqlTranslationQueue
                     Status = racingJobStatus,
                     JobId = racingJobId,
                     AverageTranslationMs = _metrics.GetAverageMs(contextName),
+                    LastTranslationMs = _metrics.GetLastMs(contextName),
                 };
             }
 
@@ -65,6 +68,7 @@ internal sealed partial class SqlTranslationQueue
                     Status = QueryTranslationStatus.Ready,
                     JobId = racedCached!.JobId,
                     AverageTranslationMs = _metrics.GetAverageMs(contextName),
+                    LastTranslationMs = _metrics.GetLastMs(contextName),
                     Result = racedCached.Result,
                 };
             }
@@ -77,6 +81,7 @@ internal sealed partial class SqlTranslationQueue
                 Status = finalRaceStatus,
                 JobId = null,
                 AverageTranslationMs = _metrics.GetAverageMs(contextName),
+                LastTranslationMs = _metrics.GetLastMs(contextName),
             };
         }
 
@@ -100,6 +105,7 @@ internal sealed partial class SqlTranslationQueue
                 Status = status,
                 JobId = jobId,
                 AverageTranslationMs = _metrics.GetAverageMs(contextName),
+                LastTranslationMs = _metrics.GetLastMs(contextName),
             };
         }
         catch

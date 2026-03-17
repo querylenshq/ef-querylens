@@ -26,7 +26,8 @@ internal sealed partial class HoverPreviewService
                 Success: true,
                 Output: BuildQueuedStatusMarkdown(canonical.Status, canonical.Message, canonical.AvgTranslationMs),
                 Status: canonical.Status,
-                AvgTranslationMs: canonical.AvgTranslationMs);
+                AvgTranslationMs: canonical.AvgTranslationMs,
+                LastTranslationMs: canonical.LastTranslationMs);
         }
 
         if (!canonical.Success)
@@ -42,9 +43,14 @@ internal sealed partial class HoverPreviewService
             line,
             character,
             canonical.Metadata,
-            canonical.AvgTranslationMs);
+            canonical.LastTranslationMs > 0 ? canonical.LastTranslationMs : canonical.AvgTranslationMs);
         Console.Error.WriteLine($"[QL-Hover] hover-markdown-ready line={line} char={character} markdownLen={markdown.Length}");
-        return new HoverPreviewComputationResult(true, markdown, QueryTranslationStatus.Ready, canonical.AvgTranslationMs);
+        return new HoverPreviewComputationResult(
+            true,
+            markdown,
+            QueryTranslationStatus.Ready,
+            canonical.AvgTranslationMs,
+            canonical.LastTranslationMs);
     }
 
     private static string BuildQueuedStatusMarkdown(

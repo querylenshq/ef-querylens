@@ -187,4 +187,5 @@ internal sealed class QueryLensStructuredHoverResponse
     public int Status { get; set; }
     public string? StatusMessage { get; set; }
     public double AvgTranslationMs { get; set; }
+    public double LastTranslationMs { get; set; }
 }

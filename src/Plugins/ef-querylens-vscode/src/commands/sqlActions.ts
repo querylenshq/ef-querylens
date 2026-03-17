@@ -174,7 +174,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         subtitle: string;
         statusCode: number;
         statusText: string;
-        avgTranslationMs: number;
+        translationMs: number;
         sqlText: string;
     }): void {
         if (!sqlPreviewPanel) {
@@ -199,7 +199,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
             preview.subtitle,
             preview.statusCode,
             preview.statusText,
-            preview.avgTranslationMs,
+            preview.translationMs,
             preview.sqlText
         );
         sqlPreviewPanel.reveal(ViewColumn.Beside, false);
@@ -211,7 +211,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         characterInput: unknown,
         formatSqlOnShow: boolean,
         sqlDialect: QueryLensSqlDialect
-    ): Promise<{ title: string; subtitle: string; statusCode: number; statusText: string; avgTranslationMs: number; sqlText: string } | null> {
+    ): Promise<{ title: string; subtitle: string; statusCode: number; statusText: string; translationMs: number; sqlText: string } | null> {
         const client = getClient();
         if (!client) {
             return null;
@@ -287,14 +287,16 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
             const provider = structured.ProviderName ? ` · ${structured.ProviderName}` : '';
             const subtitle = `${sourceFile}:${sourceLine}${provider}`;
             const statusText = 'ready';
-            const avgTranslationMs = structured.AvgTranslationMs > 0 ? structured.AvgTranslationMs : 0;
+            const translationMs = structured.LastTranslationMs > 0
+                ? structured.LastTranslationMs
+                : (structured.AvgTranslationMs > 0 ? structured.AvgTranslationMs : 0);
 
             return {
                 title,
                 subtitle,
                 statusCode: structured.Status,
                 statusText,
-                avgTranslationMs,
+                translationMs,
                 sqlText: formattedSql,
             };
         } catch (error) {
@@ -309,15 +311,15 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         subtitle: string,
         statusCode: number,
         statusText: string,
-        avgTranslationMs: number,
+        translationMs: number,
         sqlText: string
     ): string {
         const safeTitle = escapeHtml(title);
         const safeSubtitle = escapeHtml(subtitle);
         const statusClass = toStatusClass(statusCode);
         const safeStatus = escapeHtml(statusText.toUpperCase());
-        const safeAvg = avgTranslationMs > 0
-            ? escapeHtml(`avg ${Math.round(avgTranslationMs)} ms`)
+        const safeTiming = translationMs > 0
+            ? escapeHtml(`SQL generation time ${Math.round(translationMs)} ms`)
             : '';
         const safeSql = escapeHtml(sqlText);
 
@@ -443,7 +445,7 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
     <div class="subtitle">${safeSubtitle}</div>
         <div class="meta">
             <span class="statusChip ${statusClass}">${safeStatus}</span>
-            ${safeAvg ? `<span class="avg">${safeAvg}</span>` : ''}
+            ${safeTiming ? `<span class="avg">${safeTiming}</span>` : ''}
         </div>
   </div>
   <div class="body">

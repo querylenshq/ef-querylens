@@ -14,8 +14,9 @@ internal sealed partial class HoverPreviewService
         static QueryLensStructuredHoverResult Fail(
             string msg,
             QueryTranslationStatus status = QueryTranslationStatus.Ready,
-            double avgTranslationMs = 0) =>
-            new(false, msg, [], 0, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs);
+            double avgTranslationMs = 0,
+            double lastTranslationMs = 0) =>
+            new(false, msg, [], 0, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs, lastTranslationMs);
 
         Action<string> log = message => LogDebug($"structured {message}");
         var canonical = await BuildCanonicalAsync(
@@ -43,12 +44,13 @@ internal sealed partial class HoverPreviewService
                 Mode: "queued",
                 Status: canonical.Status,
                 StatusMessage: canonical.Message,
-                AvgTranslationMs: canonical.AvgTranslationMs);
+                AvgTranslationMs: canonical.AvgTranslationMs,
+                LastTranslationMs: canonical.LastTranslationMs);
         }
 
         if (!canonical.Success)
         {
-            return Fail(canonical.Message, canonical.Status, canonical.AvgTranslationMs);
+            return Fail(canonical.Message, canonical.Status, canonical.AvgTranslationMs, canonical.LastTranslationMs);
         }
 
         var providerName = canonical.Metadata?.ProviderName;
@@ -83,6 +85,7 @@ internal sealed partial class HoverPreviewService
             Mode: "direct",
             Status: QueryTranslationStatus.Ready,
             StatusMessage: null,
-            AvgTranslationMs: canonical.AvgTranslationMs);
+            AvgTranslationMs: canonical.AvgTranslationMs,
+            LastTranslationMs: canonical.LastTranslationMs);
     }
 }

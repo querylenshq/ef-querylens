@@ -113,6 +113,7 @@ message QueuedTranslateResponse {
   optional string job_id = 2;
   double average_translation_ms = 3;
   optional TranslationResult result = 4;
+  double last_translation_ms = 5;
 }
 
 message InspectModelRequest {

@@ -8,5 +8,7 @@ public sealed record QueuedTranslationResult
 
     public double AverageTranslationMs { get; init; }
 
+    public double LastTranslationMs { get; init; }
+
     public QueryTranslationResult? Result { get; init; }
 }

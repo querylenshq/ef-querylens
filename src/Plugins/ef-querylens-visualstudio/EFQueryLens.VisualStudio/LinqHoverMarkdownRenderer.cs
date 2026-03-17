@@ -41,6 +41,7 @@ internal static partial class LinqHoverMarkdownRenderer
                 Status = 3,
                 StatusMessage = errorMessage,
                 AvgTranslationMs = response.AvgTranslationMs,
+                LastTranslationMs = response.LastTranslationMs,
             };
             status = response.Status;
             isServiceUnavailable = true;
@@ -51,6 +52,9 @@ internal static partial class LinqHoverMarkdownRenderer
             ? null
             : response.EnrichedSql;
         var copySql = enrichedSql;
+        var effectiveTranslationMs = response.LastTranslationMs > 0
+            ? response.LastTranslationMs
+            : response.AvgTranslationMs;
 
         var queryParams = $"uri={Uri.EscapeDataString(uri)}&line={line}&character={character}";
         var statementWord = response.CommandCount == 1 ? "query" : "queries";
@@ -130,9 +134,9 @@ internal static partial class LinqHoverMarkdownRenderer
             }
         }
 
-        if (status == 0 && response.AvgTranslationMs > 0)
+        if (status == 0 && effectiveTranslationMs > 0)
         {
-            stack.Children.Add(RenderSecondaryItalic($"SQL generation time {response.AvgTranslationMs:0} ms", copySql));
+            stack.Children.Add(RenderSecondaryItalic($"SQL generation time {effectiveTranslationMs:0} ms", copySql));
         }
 
         scrollViewer.Content = stack;

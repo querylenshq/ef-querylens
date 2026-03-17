@@ -38,7 +38,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
         val statusCode: Int,
         val statusText: String,
         val statusMessage: String?,
-        val avgTranslationMs: Double,
+        val translationMs: Double,
         val sqlText: String,
         val warnings: List<String>,
     )
@@ -253,7 +253,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
                 statusCode = status,
                 statusText = toStatusText(status),
                 statusMessage = statusMessage ?: "No SQL preview available at this location.",
-                avgTranslationMs = 0.0,
+                translationMs = 0.0,
                 sqlText = "",
                 warnings = warnings,
             )
@@ -289,7 +289,9 @@ class EFQueryLensUrlOpener : UrlOpener() {
             }
         }
 
+        val lastTranslationMs = (hover["LastTranslationMs"] as? Number)?.toDouble() ?: 0.0
         val avgTranslationMs = (hover["AvgTranslationMs"] as? Number)?.toDouble() ?: 0.0
+        val effectiveTranslationMs = if (lastTranslationMs > 0) lastTranslationMs else avgTranslationMs
 
         return StructuredSqlPreview(
             title = title,
@@ -297,7 +299,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
             statusCode = status,
             statusText = statusText,
             statusMessage = statusMessage,
-            avgTranslationMs = avgTranslationMs,
+            translationMs = effectiveTranslationMs,
             sqlText = sqlText ?: "",
             warnings = warnings,
         )
@@ -388,8 +390,8 @@ class EFQueryLensUrlOpener : UrlOpener() {
                 background = palette.background
             }
 
-            val avgText = if (preview.avgTranslationMs > 0) {
-                "avg ${preview.avgTranslationMs.toInt()} ms"
+            val avgText = if (preview.translationMs > 0) {
+                "SQL generation time ${preview.translationMs.toInt()} ms"
             } else {
                 ""
             }
