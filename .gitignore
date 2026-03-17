@@ -13,6 +13,7 @@ src/Plugins/ef-querylens-vscode/daemon/
 *.snupkg
 .nuget/
 packages/
+nuget.config
 
 # Visual Studio / Rider
 .vs/
