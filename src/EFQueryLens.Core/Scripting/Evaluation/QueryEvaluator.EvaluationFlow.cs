@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using System.Reflection;
+using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Contracts;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using EFQueryLens.Core.AssemblyContext;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {
@@ -101,7 +102,10 @@ public sealed partial class QueryEvaluator
                 metadataReferenceBuildTime = metadataReferenceWatch.Elapsed;
 
                 // 5. Build known namespace/type index for import filtering (cached by assemblySetHash).
-                var (knownNamespaces, knownTypes) = GetOrBuildNamespaceTypeIndex(asmSetHash, compilationAssemblies);
+                var (knownNamespaces, knownTypes) = GetOrBuildNamespaceTypeIndex(
+                    alcCtx.AssemblyPath,
+                    asmSetHash,
+                    compilationAssemblies);
 
                 // 6. Compile -> emit -> load into user ALC -> invoke Run.
                 // Retry with auto-stub declarations on CS0103 (missing local variables).
@@ -213,7 +217,7 @@ public sealed partial class QueryEvaluator
                         }
                     }
 
-                    if (TryApplyGridifyFallbackFromErrors(
+                        if (TryApplyGridifyFallbackFromErrors(
                             errors,
                             stubs,
                             ref includeGridifyFallbackExtensions))

@@ -1,6 +1,7 @@
 using EFQueryLens.Core;
 using EFQueryLens.Lsp.Parsing;
 using System.Diagnostics;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Lsp.Services;
 
@@ -22,7 +23,7 @@ internal sealed partial class HoverPreviewService
     {
         QueryTranslationStatus.Starting => "EF QueryLens - starting up",
         QueryTranslationStatus.InQueue => "EF QueryLens - in queue",
-        QueryTranslationStatus.Unreachable => "EF QueryLens - error",
+        QueryTranslationStatus.DaemonUnavailable => "EF QueryLens - error",
         _ => "EF QueryLens - in queue",
     };
 
@@ -153,7 +154,7 @@ internal sealed partial class HoverPreviewService
         catch (Exception ex)
         {
             log($"translate-exception line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
-            return Fail($"{ex.GetType().Name}: {ex.Message}", sourceLine, QueryTranslationStatus.Unreachable);
+            return Fail($"{ex.GetType().Name}: {ex.Message}", sourceLine, QueryTranslationStatus.DaemonUnavailable);
         }
     }
 }

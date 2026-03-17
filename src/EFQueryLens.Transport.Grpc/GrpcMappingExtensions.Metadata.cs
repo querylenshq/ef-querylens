@@ -4,7 +4,7 @@ using Domain = EFQueryLens.Core;
 
 public static partial class GrpcMappingExtensions
 {
-    public static TranslationMetadata ToProto(this Domain.TranslationMetadata metadata)
+    public static TranslationMetadata ToProto(this Contracts.TranslationMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
 
@@ -61,11 +61,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.TranslationMetadata ToDomain(this TranslationMetadata metadata)
+    public static Contracts.TranslationMetadata ToDomain(this TranslationMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
 
-        return new Domain.TranslationMetadata
+        return new Contracts.TranslationMetadata
         {
             DbContextType = metadata.DbContextType,
             EfCoreVersion = metadata.EfCoreVersion,

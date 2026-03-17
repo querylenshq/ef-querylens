@@ -1,3 +1,8 @@
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Contracts.Explain;
+using EFQueryLens.Core.Engine;
+using System.Collections;
+
 namespace EFQueryLens.Core.Tests;
 
 /// <summary>
@@ -88,6 +93,47 @@ public class QueryLensEngineTests
 
         return (int)(countProperty.GetValue(value)
             ?? throw new InvalidOperationException($"Field '{fieldName}' Count was null."));
+    }
+
+    private static int GetMaxDbContextPoolCreatedCount(object instance)
+    {
+        var field = instance.GetType().GetField(
+            "_dbContextPool",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Field '_dbContextPool' not found.");
+
+        var poolDictionary = field.GetValue(instance)
+            ?? throw new InvalidOperationException("Field '_dbContextPool' is null.");
+
+        var valuesProperty = poolDictionary.GetType().GetProperty(
+            "Values",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            ?? throw new InvalidOperationException("Field '_dbContextPool' does not expose Values.");
+
+        var values = valuesProperty.GetValue(poolDictionary) as IEnumerable
+            ?? throw new InvalidOperationException("Field '_dbContextPool' Values is not enumerable.");
+
+        var maxCreated = 0;
+        foreach (var pool in values)
+        {
+            if (pool is null)
+                continue;
+
+            var createdCountField = pool.GetType().GetField(
+                "CreatedCount",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                ?? throw new InvalidOperationException("PooledDbContextPool.CreatedCount field not found.");
+
+            var createdCount = (int)(createdCountField.GetValue(pool)
+                ?? throw new InvalidOperationException("PooledDbContextPool.CreatedCount is null."));
+
+            if (createdCount > maxCreated)
+            {
+                maxCreated = createdCount;
+            }
+        }
+
+        return maxCreated;
     }
 
     // ── TranslateAsync ────────────────────────────────────────────────────────
@@ -260,6 +306,93 @@ public class QueryLensEngineTests
     }
 
     [Fact]
+    public async Task TranslateAsync_DbContextPoolSaturation_RespectsConfiguredPoolSize()
+    {
+        const string variableName = "QUERYLENS_DBCONTEXT_POOL_SIZE";
+        var originalPoolSize = Environment.GetEnvironmentVariable(variableName);
+        Environment.SetEnvironmentVariable(variableName, "2");
+
+        try
+        {
+            await using var engine = CreateEngine();
+            var dll = GetSampleMySqlAppDll();
+
+            var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var requests = Enumerable.Range(0, 12)
+                .Select(async i =>
+                {
+                    await startGate.Task;
+                    return await engine.TranslateAsync(new TranslationRequest
+                    {
+                        AssemblyPath = dll,
+                        Expression = $"db.Orders.Where(o => o.UserId == {i % 5 + 1})",
+                        DbContextTypeName = DefaultMySqlDbContextType,
+                    });
+                })
+                .ToArray();
+
+            startGate.SetResult();
+            var results = await Task.WhenAll(requests);
+
+            Assert.All(results, r => Assert.True(r.Success, r.ErrorMessage));
+
+            var maxCreated = GetMaxDbContextPoolCreatedCount(engine);
+            Assert.True(maxCreated <= 2, $"Expected pool creation <= 2, got {maxCreated}.");
+
+            var nonReuseCount = results.Count(r =>
+                !string.Equals(r.Metadata.CreationStrategy, "pooled-reuse", StringComparison.Ordinal));
+            Assert.True(nonReuseCount <= 2, $"Expected <= 2 non-reuse leases, got {nonReuseCount}.");
+            Assert.Contains(results, r => string.Equals(r.Metadata.CreationStrategy, "pooled-reuse", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, originalPoolSize);
+        }
+    }
+
+    [Fact]
+    public async Task TranslateAsync_DbContextPoolFairness_AllQueuedLeasesComplete()
+    {
+        const string variableName = "QUERYLENS_DBCONTEXT_POOL_SIZE";
+        var originalPoolSize = Environment.GetEnvironmentVariable(variableName);
+        Environment.SetEnvironmentVariable(variableName, "1");
+
+        try
+        {
+            await using var engine = CreateEngine();
+            var dll = GetSampleMySqlAppDll();
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var requests = Enumerable.Range(0, 10)
+                .Select(async i =>
+                {
+                    await startGate.Task.WaitAsync(timeoutCts.Token);
+                    return await engine.TranslateAsync(new TranslationRequest
+                    {
+                        AssemblyPath = dll,
+                        Expression = i % 2 == 0
+                            ? "db.Orders.Where(o => o.Total > 0)"
+                            : "db.Products.Where(p => p.Price > 0)",
+                        DbContextTypeName = DefaultMySqlDbContextType,
+                    }, timeoutCts.Token);
+                })
+                .ToArray();
+
+            startGate.SetResult();
+            var results = await Task.WhenAll(requests);
+
+            Assert.Equal(10, results.Length);
+            Assert.All(results, r => Assert.True(r.Success, r.ErrorMessage));
+            Assert.Contains(results, r => string.Equals(r.Metadata.CreationStrategy, "pooled-reuse", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, originalPoolSize);
+        }
+    }
+
+    [Fact]
     public async Task TranslateAsync_ConcurrentColdStart_MixedQueries_AllSucceedWithoutTypeMismatch()
     {
         var assemblyPath = GetSampleMySqlAppDll();
@@ -412,10 +545,10 @@ public class QueryLensEngineTests
     // ── ExplainAsync ──────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ExplainAsync_ThrowsNotImplemented()
+    public async Task ExplainAsync_ThrowsNotSupported()
     {
         await using var engine = CreateEngine();
-        await Assert.ThrowsAsync<NotImplementedException>(() =>
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
             engine.ExplainAsync(new ExplainRequest
             {
                 AssemblyPath     = GetSampleMySqlAppDll(),

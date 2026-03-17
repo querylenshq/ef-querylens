@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Grpc;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
@@ -158,7 +159,7 @@ internal sealed partial class HoverHandler
 
         if (result.Status is QueryTranslationStatus.InQueue or QueryTranslationStatus.Starting
             && result.AvgTranslationMs > 0
-            && result.AvgTranslationMs < 200
+            && result.AvgTranslationMs < _structuredQueuedAdaptiveWaitMs
             && _structuredQueuedAdaptiveWaitMs > 0)
         {
             LogHoverDebug(

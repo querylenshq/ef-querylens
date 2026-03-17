@@ -6,7 +6,7 @@ using Domain = EFQueryLens.Core;
 
 public static partial class GrpcMappingExtensions
 {
-    public static ModelSnapshot ToProto(this Domain.ModelSnapshot snapshot)
+    public static ModelSnapshot ToProto(this Contracts.ModelSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -20,11 +20,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.ModelSnapshot ToDomain(this ModelSnapshot snapshot)
+    public static Contracts.ModelSnapshot ToDomain(this ModelSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        return new Domain.ModelSnapshot
+        return new Contracts.ModelSnapshot
         {
             DbContextType = snapshot.DbContextType,
             DbSetProperties = snapshot.DbSetProperties.ToArray(),
@@ -32,7 +32,7 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static EntitySnapshot ToProto(this Domain.EntitySnapshot snapshot)
+    public static EntitySnapshot ToProto(this Contracts.EntitySnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -48,11 +48,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.EntitySnapshot ToDomain(this EntitySnapshot snapshot)
+    public static Contracts.EntitySnapshot ToDomain(this EntitySnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        return new Domain.EntitySnapshot
+        return new Contracts.EntitySnapshot
         {
             ClrType = snapshot.ClrType,
             TableName = snapshot.TableName,
@@ -62,7 +62,7 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static PropertySnapshot ToProto(this Domain.PropertySnapshot snapshot)
+    public static PropertySnapshot ToProto(this Contracts.PropertySnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -76,11 +76,11 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static Domain.PropertySnapshot ToDomain(this PropertySnapshot snapshot)
+    public static Contracts.PropertySnapshot ToDomain(this PropertySnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        return new Domain.PropertySnapshot
+        return new Contracts.PropertySnapshot
         {
             Name = snapshot.Name,
             ClrType = snapshot.ClrType,
@@ -90,7 +90,7 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static NavigationSnapshot ToProto(this Domain.NavigationSnapshot snapshot)
+    public static NavigationSnapshot ToProto(this Contracts.NavigationSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -109,11 +109,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.NavigationSnapshot ToDomain(this NavigationSnapshot snapshot)
+    public static Contracts.NavigationSnapshot ToDomain(this NavigationSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        return new Domain.NavigationSnapshot
+        return new Contracts.NavigationSnapshot
         {
             Name = snapshot.Name,
             TargetEntity = snapshot.TargetEntity,
@@ -122,7 +122,7 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static IndexSnapshot ToProto(this Domain.IndexSnapshot snapshot)
+    public static IndexSnapshot ToProto(this Contracts.IndexSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
@@ -141,11 +141,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.IndexSnapshot ToDomain(this IndexSnapshot snapshot)
+    public static Contracts.IndexSnapshot ToDomain(this IndexSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        return new Domain.IndexSnapshot
+        return new Contracts.IndexSnapshot
         {
             Columns = snapshot.Columns.ToArray(),
             IsUnique = snapshot.IsUnique,

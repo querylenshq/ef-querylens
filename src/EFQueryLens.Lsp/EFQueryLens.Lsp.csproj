@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\EFQueryLens.Core\EFQueryLens.Core.csproj" />
     <ProjectReference Include="..\EFQueryLens.DaemonClient\EFQueryLens.DaemonClient.csproj" />
+    <ProjectReference Include="..\EFQueryLens.Transport.Grpc\EFQueryLens.Transport.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>

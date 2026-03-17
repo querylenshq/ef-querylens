@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Grpc;
 
@@ -7,7 +8,7 @@ using Domain = EFQueryLens.Core;
 
 public static partial class GrpcMappingExtensions
 {
-    public static TranslationRequestPayload ToProto(this Domain.TranslationRequest request)
+    public static TranslationRequestPayload ToProto(this TranslationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -39,11 +40,11 @@ public static partial class GrpcMappingExtensions
         return payload;
     }
 
-    public static Domain.TranslationRequest ToDomain(this TranslationRequestPayload payload)
+    public static TranslationRequest ToDomain(this TranslationRequestPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        return new Domain.TranslationRequest
+        return new TranslationRequest
         {
             Expression = payload.Expression,
             AssemblyPath = payload.AssemblyPath,
@@ -57,14 +58,14 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static TranslationResult ToProto(this Domain.QueryTranslationResult result)
+    public static TranslationResult ToProto(this QueryTranslationResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
 
         var proto = new TranslationResult
         {
             Success = result.Success,
-            Metadata = (result.Metadata ?? new Domain.TranslationMetadata
+            Metadata = (result.Metadata ?? new Contracts.TranslationMetadata
             {
                 DbContextType = string.Empty,
                 EfCoreVersion = string.Empty,
@@ -89,11 +90,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.QueryTranslationResult ToDomain(this TranslationResult result)
+    public static QueryTranslationResult ToDomain(this TranslationResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
 
-        return new Domain.QueryTranslationResult
+        return new QueryTranslationResult
         {
             Success = result.Success,
             Sql = result.HasSql ? result.Sql : null,

@@ -1,12 +1,12 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
+using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Contracts;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using EFQueryLens.Core.AssemblyContext;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 /// <summary>
 /// Evaluates a LINQ expression string against an offline <c>DbContext</c> instance
@@ -57,7 +57,11 @@ public sealed partial class QueryEvaluator
 
     // Known namespace/type index cache keyed by assemblySetHash — the scan is expensive
     // on large projects but the result only changes when the assembly set changes.
-    private sealed record NamespaceTypeIndexEntry(HashSet<string> Namespaces, HashSet<string> Types, long LastAccessTicks);
+    private sealed record NamespaceTypeIndexEntry(
+        string AssemblyPath,
+        HashSet<string> Namespaces,
+        HashSet<string> Types,
+        long LastAccessTicks);
 
     private readonly ConcurrentDictionary<string, NamespaceTypeIndexEntry>
         _namespaceTypeIndexCache = new(StringComparer.Ordinal);
@@ -90,8 +94,16 @@ public sealed partial class QueryEvaluator
             _evalRunnerCache.TryRemove(key, out _);
         }
 
-        // The assembly set likely changed; discard the cached namespace/type index.
-        _namespaceTypeIndexCache.Clear();
+        foreach (var key in _namespaceTypeIndexCache
+                     .Where(kvp => string.Equals(
+                         kvp.Value.AssemblyPath,
+                         normalized,
+                         StringComparison.OrdinalIgnoreCase))
+                     .Select(kvp => kvp.Key)
+                     .ToList())
+        {
+            _namespaceTypeIndexCache.TryRemove(key, out _);
+        }
     }
 
     private static string ComputeRequestHash(TranslationRequest request)
@@ -110,6 +122,7 @@ public sealed partial class QueryEvaluator
     }
 
     private (HashSet<string> Namespaces, HashSet<string> Types) GetOrBuildNamespaceTypeIndex(
+        string assemblyPath,
         string assemblySetHash,
         IReadOnlyList<Assembly> compilationAssemblies)
     {
@@ -121,6 +134,7 @@ public sealed partial class QueryEvaluator
 
         var result = BuildKnownNamespaceAndTypeIndex(compilationAssemblies);
         _namespaceTypeIndexCache[assemblySetHash] = new NamespaceTypeIndexEntry(
+            Path.GetFullPath(assemblyPath),
             result.Namespaces,
             result.Types,
             GetUtcNowTicks());
@@ -177,9 +191,9 @@ public sealed partial class QueryEvaluator
     // Roslyn compilation options are reused across all eval compilations.
     private static readonly CSharpCompilationOptions SCompilationOptions =
         new(OutputKind.DynamicallyLinkedLibrary,
-            optimizationLevel: OptimizationLevel.Release,
+            optimizationLevel: OptimizationLevel.Debug,
             allowUnsafe: false,
-            nullableContextOptions: NullableContextOptions.Disable);
+            nullableContextOptions: NullableContextOptions.Annotations);
 
     private static readonly CSharpParseOptions SParseOptions =
         CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest);

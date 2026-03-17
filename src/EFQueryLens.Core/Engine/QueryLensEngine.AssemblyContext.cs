@@ -1,6 +1,7 @@
 using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Contracts;
 
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Engine;
 
 public sealed partial class QueryLensEngine
 {
@@ -39,7 +40,7 @@ public sealed partial class QueryLensEngine
         }
     }
 
-    private string BuildSourceFingerprint(string sourceAssemblyPath)
+    private static string BuildSourceFingerprint(string sourceAssemblyPath)
     {
         var info = new FileInfo(sourceAssemblyPath);
         return $"{Path.GetFullPath(sourceAssemblyPath)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
@@ -67,6 +68,11 @@ public sealed partial class QueryLensEngine
         entry.Context.Dispose();
         ForceUnloadCollection(aggressive: string.Equals(reason, "dispose", StringComparison.Ordinal));
 
+        if (!_alcCache.ContainsKey(entry.SourceAssemblyPath))
+        {
+            _alcContextGates.TryRemove(entry.SourceAssemblyPath, out _);
+        }
+
         LogDebug($"alc-release reason={reason} source={entry.SourceAssemblyPath} shadow={entry.ShadowAssemblyPath}");
     }
 
@@ -86,7 +92,7 @@ public sealed partial class QueryLensEngine
 
     private void LogTranslationTiming(string assemblyPath, QueryTranslationResult result)
     {
-        if (!_debugEnabled || result.Metadata is null)
+        if (!_debugEnabled)
         {
             return;
         }

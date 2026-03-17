@@ -1,8 +1,8 @@
 using System.Text;
-using System.Linq;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting.Compilation;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {

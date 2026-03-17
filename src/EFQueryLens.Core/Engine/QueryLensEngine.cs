@@ -1,9 +1,12 @@
 using System.Collections.Concurrent;
 using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Common;
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Contracts.Explain;
 using EFQueryLens.Core.Scripting;
+using QueryEvaluator = EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator;
 
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Engine;
 
 /// <summary>
 /// Default implementation of <see cref="IQueryLensEngine"/>.
@@ -19,12 +22,27 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         string ShadowAssemblyPath,
         ProjectAssemblyContext Context);
 
-    private sealed record PooledDbContext(
-        string PoolKey,
-        string DbContextTypeFullName,
-        object Instance,
-        SemaphoreSlim Gate,
-        string CreationStrategy);
+    private sealed class PooledDbContextPool(
+        string poolKey,
+        string dbContextTypeFullName,
+        int poolSize)
+    {
+        public string PoolKey { get; } = poolKey;
+
+        public string DbContextTypeFullName { get; } = dbContextTypeFullName;
+
+        public int PoolSize { get; } = poolSize;
+
+        public SemaphoreSlim Gate { get; } = new(poolSize, poolSize);
+
+        public object CreateLock { get; } = new();
+
+        public ConcurrentQueue<object> AvailableInstances { get; } = new();
+
+        public ConcurrentBag<object> CreatedInstances { get; } = [];
+
+        public int CreatedCount;
+    }
 
     private sealed class CreateGateState
     {
@@ -32,24 +50,20 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         public int ActiveUsers;
     }
 
-    private sealed class DbContextLease : IDbContextLease
+    private sealed class DbContextLease(
+        QueryLensEngine owner,
+        PooledDbContextPool pool,
+        object instance,
+        string strategy)
+        : IDbContextLease
     {
-        private readonly QueryLensEngine _owner;
-        private readonly PooledDbContext _pooled;
         private bool _disposed;
 
-        public DbContextLease(QueryLensEngine owner, PooledDbContext pooled, string strategy)
-        {
-            _owner = owner;
-            _pooled = pooled;
-            Strategy = strategy;
-        }
+        public object Instance => instance;
 
-        public object Instance => _pooled.Instance;
+        public string PoolKey => pool.PoolKey;
 
-        public string PoolKey => _pooled.PoolKey;
-
-        public string Strategy { get; }
+        public string Strategy { get; } = strategy;
 
         public ValueTask DisposeAsync()
         {
@@ -59,7 +73,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
             }
 
             _disposed = true;
-            _owner.ReleaseDbContextLease(_pooled);
+            owner.ReleaseDbContextLease(pool, instance);
             return ValueTask.CompletedTask;
         }
     }
@@ -71,18 +85,24 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         StringComparer.OrdinalIgnoreCase);
     
     // DbContext pool: keyed by "assemblyPath|dbContextTypeFullName" for isolation
-    private readonly ConcurrentDictionary<string, PooledDbContext> _dbContextPool = new(
+    private readonly ConcurrentDictionary<string, PooledDbContextPool> _dbContextPool = new(
         StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, CreateGateState> _dbContextCreateGates = new(
         StringComparer.Ordinal);
     
     private readonly bool _debugEnabled;
+    private readonly int _dbContextPoolSize;
     private readonly ShadowAssemblyCache _shadowCache;
     private bool _disposed;
 
     public QueryLensEngine()
     {
         _debugEnabled = EnvironmentVariableParser.ReadBool("QUERYLENS_DEBUG", fallback: false);
+        _dbContextPoolSize = EnvironmentVariableParser.ReadInt(
+            "QUERYLENS_DBCONTEXT_POOL_SIZE",
+            fallback: 4,
+            min: 1,
+            max: 16);
         _shadowCache = new ShadowAssemblyCache(_debugEnabled);
         _shadowCache.ScheduleCleanupIfDue(force: true);
     }
@@ -115,13 +135,16 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         return retryResult;
     }
 
+    /// <summary>
+    /// In-process core engine performs immediate translation and always reports
+    /// <see cref="QueryTranslationStatus.Ready"/>. Daemon-backed implementations
+    /// may return queue lifecycle states with rolling metrics.
+    /// </summary>
     public async Task<QueuedTranslationResult> TranslateQueuedAsync(
         TranslationRequest request, CancellationToken ct = default)
     {
         var result = await TranslateAsync(request, ct);
-        var lastTranslationMs = result.Metadata is null
-            ? 0
-            : Math.Max(0, result.Metadata.TranslationTime.TotalMilliseconds);
+        var lastTranslationMs = Math.Max(0, result.Metadata.TranslationTime.TotalMilliseconds);
         return new QueuedTranslationResult
         {
             Status = QueryTranslationStatus.Ready,
@@ -133,32 +156,40 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
 
     public Task<ExplainResult> ExplainAsync(
         ExplainRequest request, CancellationToken ct = default) =>
-        throw new NotImplementedException(
-            "ExplainAsync requires a live database connection and is implemented in Phase 2.");
+        throw new NotSupportedException(
+            "ExplainAsync requires a live database connection and is deferred to Phase 2. " +
+            "Use TranslateAsync for offline SQL generation.");
 
-    public async Task<ModelSnapshot> InspectModelAsync(
+    public Task<ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request, CancellationToken ct = default)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentNullException.ThrowIfNull(request);
-
-        LogDebug($"inspect-model-start assembly={request.AssemblyPath}");
-
         try
         {
-            var assemblyPath = Path.GetFullPath(request.AssemblyPath);
-            var alcCtx = GetOrRefreshContext(assemblyPath);
-            var dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName);
-            var dbInstance = CreateDbContextForInspection(dbContextType, alcCtx);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ArgumentNullException.ThrowIfNull(request);
 
-            var snapshot = BuildModelSnapshot(dbInstance, dbContextType);
-            LogDebug($"inspect-model-success context={snapshot.DbContextType} dbSets={snapshot.DbSetProperties.Count} entities={snapshot.Entities.Count}");
-            return snapshot;
+            LogDebug($"inspect-model-start assembly={request.AssemblyPath}");
+
+            try
+            {
+                var assemblyPath = Path.GetFullPath(request.AssemblyPath);
+                var alcCtx = GetOrRefreshContext(assemblyPath);
+                var dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName);
+                var dbInstance = CreateDbContextForInspection(dbContextType, alcCtx);
+
+                var snapshot = BuildModelSnapshot(dbInstance, dbContextType);
+                LogDebug($"inspect-model-success context={snapshot.DbContextType} dbSets={snapshot.DbSetProperties.Count} entities={snapshot.Entities.Count}");
+                return Task.FromResult(snapshot);
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"inspect-model-failure type={ex.GetType().Name} message={ex.Message}");
+                throw;
+            }
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            LogDebug($"inspect-model-failure type={ex.GetType().Name} message={ex.Message}");
-            throw;
+            return Task.FromException<ModelSnapshot>(exception);
         }
     }
 

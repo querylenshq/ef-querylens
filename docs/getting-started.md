@@ -73,3 +73,13 @@ See [factory-setup.md](factory-setup.md) for placement rules and multi-DbContext
 - If no preview appears, rebuild your solution and reopen the file.
 - If actions fail, inspect plugin logs (`efquerylens` category).
 - If provider SQL looks wrong, validate your project uses a supported EF Core provider.
+
+## Performance Tuning
+
+- Shadow cache location:
+	- Set `QUERYLENS_SHADOW_ROOT` if you want the shadow assembly cache on a faster or larger drive.
+
+- DbContext pool concurrency:
+	- Start with `QUERYLENS_DBCONTEXT_POOL_SIZE=1`.
+	- Increase to `2`, then `4`, only after validating stable SQL output under concurrent hover requests.
+	- If behavior becomes inconsistent, revert to `1` and review DbContext factory statefulness.

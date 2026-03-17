@@ -9,7 +9,7 @@ internal sealed class TranslationMetrics
     {
         public readonly object SyncRoot = new();
         public readonly Queue<long> Samples = new();
-        public double SumMs;
+        public long SumMs;
         public int TotalSampleCount;
         public long LastSampleMs;
     }
@@ -77,7 +77,7 @@ internal sealed class TranslationMetrics
                 return 0;
             }
 
-            return state.SumMs / state.Samples.Count;
+            return (double)state.SumMs / state.Samples.Count;
         }
     }
 
@@ -101,7 +101,7 @@ internal sealed class TranslationMetrics
                 return true;
             }
 
-            var averageMs = state.SumMs / state.Samples.Count;
+            var averageMs = (double)state.SumMs / state.Samples.Count;
             return averageMs > _warmThresholdMs;
         }
     }
@@ -118,12 +118,6 @@ internal sealed class TranslationMetrics
         {
             return state.TotalSampleCount <= 0 ? 0 : state.LastSampleMs;
         }
-    }
-
-    public int GetAdaptiveWaitMs(string contextName)
-    {
-        var avg = GetAverageMs(contextName);
-        return avg > 0 && avg < 200 ? 200 : 0;
     }
 
     private static string NormalizeContext(string? contextName)

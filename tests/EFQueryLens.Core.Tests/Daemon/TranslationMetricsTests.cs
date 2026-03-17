@@ -39,19 +39,16 @@ public sealed class TranslationMetricsTests
     }
 
     [Fact]
-    public void GetAdaptiveWaitMs_UsesRollingAverage()
+    public void GetLastMs_ReturnsLatestSample()
     {
         var metrics = new TranslationMetrics(sampleWindowSize: 3, warmThresholdMs: 1_200, minSamplesBeforeReady: 3);
 
         metrics.RecordSample("ctx", 100);
         metrics.RecordSample("ctx", 120);
         metrics.RecordSample("ctx", 140);
-        Assert.Equal(200, metrics.GetAdaptiveWaitMs("ctx"));
+        Assert.Equal(140, metrics.GetLastMs("ctx"));
 
         metrics.RecordSample("ctx", 1_000);
-        metrics.RecordSample("ctx", 1_000);
-        metrics.RecordSample("ctx", 1_000);
-
-        Assert.Equal(0, metrics.GetAdaptiveWaitMs("ctx"));
+        Assert.Equal(1_000, metrics.GetLastMs("ctx"));
     }
 }

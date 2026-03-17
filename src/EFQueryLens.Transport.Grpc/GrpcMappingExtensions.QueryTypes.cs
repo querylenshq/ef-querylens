@@ -1,4 +1,5 @@
 using System.Linq;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Grpc;
 
@@ -6,7 +7,7 @@ using Domain = EFQueryLens.Core;
 
 public static partial class GrpcMappingExtensions
 {
-    public static QuerySqlCommand ToProto(this Domain.QuerySqlCommand command)
+    public static QuerySqlCommand ToProto(this Contracts.QuerySqlCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
 
@@ -18,18 +19,18 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.QuerySqlCommand ToDomain(this QuerySqlCommand command)
+    public static Contracts.QuerySqlCommand ToDomain(this QuerySqlCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        return new Domain.QuerySqlCommand
+        return new Contracts.QuerySqlCommand
         {
             Sql = command.Sql,
             Parameters = command.Parameters.Select(ToDomain).ToArray(),
         };
     }
 
-    public static QueryParameter ToProto(this Domain.QueryParameter parameter)
+    public static QueryParameter ToProto(this Contracts.QueryParameter parameter)
     {
         ArgumentNullException.ThrowIfNull(parameter);
 
@@ -47,11 +48,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.QueryParameter ToDomain(this QueryParameter parameter)
+    public static Contracts.QueryParameter ToDomain(this QueryParameter parameter)
     {
         ArgumentNullException.ThrowIfNull(parameter);
 
-        return new Domain.QueryParameter
+        return new Contracts.QueryParameter
         {
             Name = parameter.Name,
             ClrType = parameter.ClrType,
@@ -59,7 +60,7 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static QueryWarning ToProto(this Domain.QueryWarning warning)
+    public static QueryWarning ToProto(this Contracts.QueryWarning warning)
     {
         ArgumentNullException.ThrowIfNull(warning);
 
@@ -78,11 +79,11 @@ public static partial class GrpcMappingExtensions
         return proto;
     }
 
-    public static Domain.QueryWarning ToDomain(this QueryWarning warning)
+    public static Contracts.QueryWarning ToDomain(this QueryWarning warning)
     {
         ArgumentNullException.ThrowIfNull(warning);
 
-        return new Domain.QueryWarning
+        return new Contracts.QueryWarning
         {
             Severity = warning.Severity.ToDomain(),
             Code = warning.Code,
@@ -91,37 +92,37 @@ public static partial class GrpcMappingExtensions
         };
     }
 
-    public static TranslationStatus ToProto(this Domain.QueryTranslationStatus status) =>
+    public static TranslationStatus ToProto(this QueryTranslationStatus status) =>
         status switch
         {
-            Domain.QueryTranslationStatus.Ready => TranslationStatus.Ready,
-            Domain.QueryTranslationStatus.InQueue => TranslationStatus.InQueue,
-            Domain.QueryTranslationStatus.Starting => TranslationStatus.Starting,
+            QueryTranslationStatus.Ready => TranslationStatus.Ready,
+            QueryTranslationStatus.InQueue => TranslationStatus.InQueue,
+            QueryTranslationStatus.Starting => TranslationStatus.Starting,
             _ => TranslationStatus.Unreachable,
         };
 
-    public static Domain.QueryTranslationStatus ToDomain(this TranslationStatus status) =>
+    public static QueryTranslationStatus ToDomain(this TranslationStatus status) =>
         status switch
         {
-            TranslationStatus.Ready => Domain.QueryTranslationStatus.Ready,
-            TranslationStatus.InQueue => Domain.QueryTranslationStatus.InQueue,
-            TranslationStatus.Starting => Domain.QueryTranslationStatus.Starting,
-            _ => Domain.QueryTranslationStatus.Unreachable,
+            TranslationStatus.Ready => QueryTranslationStatus.Ready,
+            TranslationStatus.InQueue => QueryTranslationStatus.InQueue,
+            TranslationStatus.Starting => QueryTranslationStatus.Starting,
+            _ => QueryTranslationStatus.DaemonUnavailable,
         };
 
-    public static WarningSeverity ToProto(this Domain.WarningSeverity severity) =>
+    public static WarningSeverity ToProto(this Contracts.WarningSeverity severity) =>
         severity switch
         {
-            Domain.WarningSeverity.Info => WarningSeverity.Info,
-            Domain.WarningSeverity.Warning => WarningSeverity.Warning,
+            Contracts.WarningSeverity.Info => WarningSeverity.Info,
+            Contracts.WarningSeverity.Warning => WarningSeverity.Warning,
             _ => WarningSeverity.Critical,
         };
 
-    public static Domain.WarningSeverity ToDomain(this WarningSeverity severity) =>
+    public static Contracts.WarningSeverity ToDomain(this WarningSeverity severity) =>
         severity switch
         {
-            WarningSeverity.Info => Domain.WarningSeverity.Info,
-            WarningSeverity.Warning => Domain.WarningSeverity.Warning,
-            _ => Domain.WarningSeverity.Critical,
+            WarningSeverity.Info => Contracts.WarningSeverity.Info,
+            WarningSeverity.Warning => Contracts.WarningSeverity.Warning,
+            _ => Contracts.WarningSeverity.Critical,
         };
 }

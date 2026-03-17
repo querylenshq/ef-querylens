@@ -11,19 +11,33 @@ internal sealed partial class ShadowAssemblyCache
     private readonly string _root;
     private readonly string _bundleRoot;
     private readonly string _stagingRoot;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private int _backgroundCleanupScheduled;
     private DateTime _lastCleanupUtc = DateTime.MinValue;
 
     public ShadowAssemblyCache(bool debugEnabled)
     {
         _debugEnabled = debugEnabled;
-        _root = Path.Combine(Path.GetTempPath(), "EFQueryLens", "shadow");
+        _root = ResolveShadowRoot();
         _bundleRoot = Path.Combine(_root, "bundles");
         _stagingRoot = Path.Combine(_root, "staging");
 
         Directory.CreateDirectory(_bundleRoot);
         Directory.CreateDirectory(_stagingRoot);
+    }
+
+    private static string ResolveShadowRoot()
+    {
+        var envOverride = Environment.GetEnvironmentVariable("QUERYLENS_SHADOW_ROOT");
+        if (!string.IsNullOrWhiteSpace(envOverride))
+        {
+            return envOverride.Trim();
+        }
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "EFQueryLens",
+            "shadow");
     }
 
     public string ResolveOrCreateBundle(string sourceAssemblyPath)
@@ -37,51 +51,61 @@ internal sealed partial class ShadowAssemblyCache
             throw new DirectoryNotFoundException($"Source output directory not found: {sourceDir}");
         }
 
-        string bundleAssemblyPath;
-        var shouldScheduleCleanup = false;
+        var manifest = BuildManifest(sourceDir);
+        var bundleKey = ComputeBundleKey(sourceDir, manifest);
+        var bundlePath = Path.Combine(_bundleRoot, bundleKey);
+        var bundleAssemblyPath = Path.Combine(bundlePath, Path.GetFileName(fullSourcePath));
+        bool shouldScheduleCleanup;
         var forceCleanup = false;
 
-        lock (_gate)
+        if (File.Exists(bundleAssemblyPath))
         {
-            shouldScheduleCleanup = IsCleanupDue(DateTime.UtcNow, force: false);
-
-            var manifest = BuildManifest(sourceDir);
-            var bundleKey = ComputeBundleKey(sourceDir, manifest);
-            var bundlePath = Path.Combine(_bundleRoot, bundleKey);
-            bundleAssemblyPath = Path.Combine(bundlePath, Path.GetFileName(fullSourcePath));
-
-            if (File.Exists(bundleAssemblyPath))
+            lock (_gate)
             {
                 TouchDirectory(bundlePath);
+                shouldScheduleCleanup = IsCleanupDue(DateTime.UtcNow, force: false);
             }
-            else
+
+            if (shouldScheduleCleanup)
             {
-                var stagingPath = Path.Combine(_stagingRoot, $"{bundleKey}-{Guid.NewGuid():N}");
-                Directory.CreateDirectory(stagingPath);
+                ScheduleCleanupIfDue(force: false);
+            }
 
-                try
+            return bundleAssemblyPath;
+        }
+
+        var stagingPath = Path.Combine(_stagingRoot, $"{bundleKey}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stagingPath);
+
+        try
+        {
+            foreach (var entry in manifest)
+            {
+                var targetPath = Path.Combine(stagingPath, entry.RelativePath);
+                var targetDir = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrWhiteSpace(targetDir))
                 {
-                    foreach (var entry in manifest)
-                    {
-                        var targetPath = Path.Combine(stagingPath, entry.RelativePath);
-                        var targetDir = Path.GetDirectoryName(targetPath);
-                        if (!string.IsNullOrWhiteSpace(targetDir))
-                        {
-                            Directory.CreateDirectory(targetDir);
-                        }
+                    Directory.CreateDirectory(targetDir);
+                }
 
-                        File.Copy(entry.FullPath, targetPath, overwrite: true);
-                    }
+                File.Copy(entry.FullPath, targetPath, overwrite: true);
+            }
 
+            lock (_gate)
+            {
+                if (!File.Exists(bundleAssemblyPath))
+                {
                     TryAtomicPromote(stagingPath, bundlePath);
-                    TouchDirectory(bundlePath);
                     forceCleanup = true;
                 }
-                finally
-                {
-                    TryDeleteDirectory(stagingPath);
-                }
+
+                TouchDirectory(bundlePath);
+                shouldScheduleCleanup = IsCleanupDue(DateTime.UtcNow, force: false);
             }
+        }
+        finally
+        {
+            TryDeleteDirectory(stagingPath);
         }
 
         if (forceCleanup)

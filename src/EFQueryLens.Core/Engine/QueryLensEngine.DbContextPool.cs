@@ -1,11 +1,15 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting;
+using QueryEvaluator = EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator;
 
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Engine;
 
 public sealed partial class QueryLensEngine
 {
+    private static readonly ConcurrentDictionary<Type, Action<object>?> SClearChangeTrackerCache = new();
+
     // DbContext pool
     async ValueTask<IDbContextLease> IDbContextPoolProvider.AcquireDbContextLeaseAsync(
         Type dbContextType,
@@ -14,30 +18,25 @@ public sealed partial class QueryLensEngine
         CancellationToken cancellationToken)
     {
         var poolKey = BuildDbContextPoolKey(assemblyPath, dbContextType);
-        var createdNow = false;
 
-        if (!_dbContextPool.TryGetValue(poolKey, out var pooled))
+        if (!_dbContextPool.TryGetValue(poolKey, out var pool))
         {
             var gateState = _dbContextCreateGates.GetOrAdd(poolKey, static _ => new CreateGateState());
             Interlocked.Increment(ref gateState.ActiveUsers);
             await gateState.Gate.WaitAsync(cancellationToken);
             try
             {
-                if (!_dbContextPool.TryGetValue(poolKey, out pooled))
+                if (!_dbContextPool.TryGetValue(poolKey, out pool))
                 {
-                    var (instance, strategy) = QueryEvaluator.CreateDbContextInstance(dbContextType, userAssemblies);
-                    pooled = new PooledDbContext(
+                    pool = new PooledDbContextPool(
                         poolKey,
                         dbContextType.FullName!,
-                        instance,
-                        new SemaphoreSlim(1, 1),
-                        strategy);
-                    _dbContextPool[poolKey] = pooled;
-                    createdNow = true;
+                        _dbContextPoolSize);
+                    _dbContextPool[poolKey] = pool;
 
                     if (_debugEnabled)
                     {
-                        LogDebug($"dbcontext-pool-create type={dbContextType.Name} strategy={strategy}");
+                        LogDebug($"dbcontext-pool-create type={dbContextType.Name} size={_dbContextPoolSize}");
                     }
                 }
             }
@@ -46,7 +45,7 @@ public sealed partial class QueryLensEngine
                 gateState.Gate.Release();
 
                 // Once the pooled instance exists and no concurrent creators remain,
-                // prune the create gate entry to avoid long-lived per-key gate objects.
+                // prune the creation gate entry to avoid long-lived per-key gate objects.
                 if (Interlocked.Decrement(ref gateState.ActiveUsers) == 0
                     && _dbContextPool.ContainsKey(poolKey)
                     && _dbContextCreateGates.TryRemove(new KeyValuePair<string, CreateGateState>(poolKey, gateState)))
@@ -56,54 +55,112 @@ public sealed partial class QueryLensEngine
             }
         }
 
-        await pooled.Gate.WaitAsync(cancellationToken);
+        await pool.Gate.WaitAsync(cancellationToken);
 
-        var leaseStrategy = createdNow ? pooled.CreationStrategy : "pooled-reuse";
+        object? leasedInstance;
+        var leaseStrategy = "pooled-reuse";
+
+        try
+        {
+            if (!pool.AvailableInstances.TryDequeue(out leasedInstance))
+            {
+                lock (pool.CreateLock)
+                {
+                    if (!pool.AvailableInstances.TryDequeue(out leasedInstance)
+                        && pool.CreatedCount < pool.PoolSize)
+                    {
+                        var (instance, strategy) = QueryEvaluator.CreateDbContextInstance(dbContextType, userAssemblies);
+                        leasedInstance = instance;
+                        pool.CreatedInstances.Add(instance);
+                        pool.CreatedCount++;
+                        leaseStrategy = strategy;
+
+                        if (_debugEnabled)
+                        {
+                            LogDebug(
+                                $"dbcontext-pool-instance-create type={dbContextType.Name} " +
+                                $"created={pool.CreatedCount}/{pool.PoolSize} strategy={strategy}");
+                        }
+                    }
+                }
+            }
+
+            if (leasedInstance is null)
+            {
+                throw new InvalidOperationException(
+                    $"Pool '{pool.PoolKey}' granted a lease slot but no DbContext instance was available.");
+            }
+        }
+        catch
+        {
+            pool.Gate.Release();
+            throw;
+        }
+
         if (_debugEnabled)
         {
             LogDebug($"dbcontext-pool-lease-acquired type={dbContextType.Name} strategy={leaseStrategy}");
         }
 
-        return new DbContextLease(this, pooled, leaseStrategy);
+        return new DbContextLease(this, pool, leasedInstance, leaseStrategy);
     }
 
-    private void ReleaseDbContextLease(PooledDbContext pooled)
+    private void ReleaseDbContextLease(PooledDbContextPool pool, object instance)
     {
         try
         {
-            ClearChangeTracker(pooled.Instance);
+            ClearChangeTracker(instance);
 
             if (_debugEnabled)
             {
-                LogDebug($"dbcontext-pool-lease-released type={pooled.DbContextTypeFullName}");
+                LogDebug($"dbcontext-pool-lease-released type={pool.DbContextTypeFullName}");
             }
         }
         catch (Exception ex)
         {
-            LogDebug($"dbcontext-pool-clear-error type={pooled.DbContextTypeFullName} error={ex.GetType().Name} message={ex.Message}");
+            LogDebug($"dbcontext-pool-clear-error type={pool.DbContextTypeFullName} error={ex.GetType().Name} message={ex.Message}");
         }
         finally
         {
-            pooled.Gate.Release();
+            pool.AvailableInstances.Enqueue(instance);
+            try
+            {
+                pool.Gate.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Pool was disposed/evicted while lease was still in-flight.
+            }
         }
     }
 
     private static void ClearChangeTracker(object dbContextInstance)
     {
-        var changeTrackerProp = dbContextInstance.GetType()
-            .GetProperty("ChangeTracker", BindingFlags.Public | BindingFlags.Instance);
-
-        if (changeTrackerProp?.GetValue(dbContextInstance) is not { } changeTracker)
+        var dbContextType = dbContextInstance.GetType();
+        var clearDelegate = SClearChangeTrackerCache.GetOrAdd(dbContextType, static type =>
         {
-            return;
-        }
+            var changeTrackerProp = type.GetProperty("ChangeTracker", BindingFlags.Public | BindingFlags.Instance);
 
-        var clearMethod = changeTracker.GetType()
-            .GetMethod("Clear", BindingFlags.Public | BindingFlags.Instance);
-        clearMethod?.Invoke(changeTracker, null);
+            var clearMethod = changeTrackerProp?.PropertyType.GetMethod("Clear", BindingFlags.Public | BindingFlags.Instance);
+            if (clearMethod is null)
+            {
+                return null;
+            }
+
+            return instance =>
+            {
+                var changeTracker = changeTrackerProp?.GetValue(instance);
+                if (changeTracker is not null)
+                {
+                    clearMethod.Invoke(changeTracker, null);
+                }
+            };
+        });
+
+        clearDelegate?.Invoke(dbContextInstance);
     }
 
-    private string BuildDbContextPoolKey(string assemblyPath, Type dbContextType)
+    private static string BuildDbContextPoolKey(string assemblyPath, Type dbContextType)
     {
         return $"{Path.GetFullPath(assemblyPath)}|{dbContextType.FullName}";
     }
@@ -121,13 +178,16 @@ public sealed partial class QueryLensEngine
             {
                 pooled.Gate.Dispose();
 
-                if (pooled.Instance is IAsyncDisposable asyncDisposable)
+                foreach (var instance in pooled.CreatedInstances)
                 {
-                    await asyncDisposable.DisposeAsync();
-                }
-                else if (pooled.Instance is IDisposable disposable)
-                {
-                    disposable.Dispose();
+                    if (instance is IAsyncDisposable asyncDisposable)
+                    {
+                        await asyncDisposable.DisposeAsync();
+                    }
+                    else if (instance is IDisposable disposable)
+                    {
+                        disposable.Dispose();
+                    }
                 }
             }
             catch (Exception ex)
@@ -162,13 +222,16 @@ public sealed partial class QueryLensEngine
                 {
                     pooled.Gate.Dispose();
 
-                    if (pooled.Instance is IAsyncDisposable asyncDisposable)
+                    foreach (var instance in pooled.CreatedInstances)
                     {
-                        await asyncDisposable.DisposeAsync();
-                    }
-                    else if (pooled.Instance is IDisposable disposable)
-                    {
-                        disposable.Dispose();
+                        if (instance is IAsyncDisposable asyncDisposable)
+                        {
+                            await asyncDisposable.DisposeAsync();
+                        }
+                        else if (instance is IDisposable disposable)
+                        {
+                            disposable.Dispose();
+                        }
                     }
                 }
                 catch (Exception ex)

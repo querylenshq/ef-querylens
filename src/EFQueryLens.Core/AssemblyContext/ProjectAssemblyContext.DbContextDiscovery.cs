@@ -1,4 +1,7 @@
 using System.Reflection;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EFQueryLens.Core.AssemblyContext;
 
@@ -7,7 +10,7 @@ public sealed partial class ProjectAssemblyContext
     /// <summary>
     /// Returns all concrete (non-abstract) DbContext subclasses found across
     /// <b>all assemblies</b> currently loaded into this context (including any
-    /// additional assemblies pre-loaded via <see cref="LoadAdditionalAssembly"/>).
+    /// additional assemblies preloaded via <see cref="LoadAdditionalAssembly"/>).
     /// Walks the full inheritance chain by type name, because the DbContext type
     /// in the user's ALC is a different runtime instance than the one in the
     /// tool's default load context.
@@ -67,6 +70,7 @@ public sealed partial class ProjectAssemblyContext
     ///   ("SampleApp.AppDbContext"). Pass null to auto-discover when exactly
     ///   one DbContext exists in the assembly.
     /// </param>
+    /// <param name="expressionHint"></param>
     /// <exception cref="InvalidOperationException">
     ///   No DbContext found; multiple found with null typeName; or no match
     ///   for the provided typeName.
@@ -141,25 +145,39 @@ public sealed partial class ProjectAssemblyContext
     /// </summary>
     private static string? ExtractFirstPropertyAccess(string expression)
     {
-        // Trim leading whitespace and the variable name prefix (e.g. "dbContext." or "db.")
-        var trimmed = expression.TrimStart();
+        var tree = CSharpSyntaxTree.ParseText(
+            expression,
+            CSharpParseOptions.Default.WithKind(SourceCodeKind.Script));
 
-        // Find the first dot - everything after is the property chain.
-        var firstDot = trimmed.IndexOf('.');
-        if (firstDot < 0 || firstDot >= trimmed.Length - 1)
-            return null;
+        var root = tree.GetRoot();
 
-        var afterDot = trimmed[(firstDot + 1)..].TrimStart();
-
-        // The property name is everything up to the next dot, paren, or whitespace.
-        var endIndex = 0;
-        while (endIndex < afterDot.Length &&
-               (char.IsLetterOrDigit(afterDot[endIndex]) || afterDot[endIndex] == '_'))
+        var memberAccess = root.DescendantNodes()
+            .OfType<MemberAccessExpressionSyntax>()
+            .FirstOrDefault(static m => IsRootContextExpression(m.Expression));
+        if (memberAccess is not null)
         {
-            endIndex++;
+            return memberAccess.Name.Identifier.Text;
         }
 
-        return endIndex > 0 ? afterDot[..endIndex] : null;
+        var conditionalAccess = root.DescendantNodes()
+            .OfType<ConditionalAccessExpressionSyntax>()
+            .FirstOrDefault(static c => IsRootContextExpression(c.Expression));
+        if (conditionalAccess?.WhenNotNull is MemberBindingExpressionSyntax memberBinding)
+        {
+            return memberBinding.Name.Identifier.Text;
+        }
+
+        var fallbackMemberBinding = root.DescendantNodes()
+            .OfType<MemberBindingExpressionSyntax>()
+            .FirstOrDefault();
+        return fallbackMemberBinding?.Name.Identifier.Text;
+
+        static bool IsRootContextExpression(ExpressionSyntax expression) => expression switch
+        {
+            IdentifierNameSyntax => true,
+            ParenthesizedExpressionSyntax { Expression: IdentifierNameSyntax } => true,
+            _ => false,
+        };
     }
 
     /// <summary>
