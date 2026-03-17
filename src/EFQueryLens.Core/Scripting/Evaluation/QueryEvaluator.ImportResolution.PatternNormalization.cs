@@ -2,7 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {
@@ -41,7 +41,7 @@ public sealed partial class QueryEvaluator
     {
         public bool Changed { get; private set; }
 
-        public override SyntaxNode? VisitConditionalExpression(ConditionalExpressionSyntax node)
+        public override SyntaxNode VisitConditionalExpression(ConditionalExpressionSyntax node)
         {
             var visited = (ConditionalExpressionSyntax)base.VisitConditionalExpression(node)!;
 
@@ -117,7 +117,7 @@ public sealed partial class QueryEvaluator
     {
         public bool Changed { get; private set; }
 
-        public override SyntaxNode? VisitIsPatternExpression(IsPatternExpressionSyntax node)
+        public override SyntaxNode VisitIsPatternExpression(IsPatternExpressionSyntax node)
         {
             var visited = (IsPatternExpressionSyntax)base.VisitIsPatternExpression(node)!;
 

@@ -1,8 +1,10 @@
 using System.Reflection;
 using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using QueryEvaluator = EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator;
 
 namespace EFQueryLens.Core.Tests.Scripting;
 

@@ -1,4 +1,5 @@
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Lsp.Services;
 

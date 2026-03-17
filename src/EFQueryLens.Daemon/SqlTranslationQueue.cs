@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 using Microsoft.Extensions.Hosting;
 
 namespace EFQueryLens.Daemon;

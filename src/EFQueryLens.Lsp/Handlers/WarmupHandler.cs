@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Parsing;
 using Microsoft.VisualStudio.LanguageServer.Protocol;

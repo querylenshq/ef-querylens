@@ -1,4 +1,4 @@
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Contracts;
 
 /// <summary>
 /// Implement this interface in your project to give QueryLens full control over

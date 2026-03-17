@@ -1,4 +1,6 @@
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting;
+using EFQueryLens.Core.Scripting.DesignTime;
 
 namespace EFQueryLens.Core.Tests.Scripting;
 

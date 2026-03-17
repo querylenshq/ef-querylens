@@ -1,4 +1,4 @@
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Contracts;
 
 public sealed record QuerySqlCommand
 {

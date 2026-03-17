@@ -1,4 +1,4 @@
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Contracts.Explain;
 
 public sealed record ExplainRequest : TranslationRequest
 {

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Daemon;
 using EFQueryLens.Core.Grpc;
 using EFQueryLens.DaemonClient;

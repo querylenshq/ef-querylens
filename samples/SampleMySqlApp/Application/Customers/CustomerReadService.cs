@@ -53,9 +53,9 @@ public sealed class CustomerReadService
         var pageSize = Math.Clamp(request.PageSize, 1, 200);
 
 
-        var q = page > 1 ?
+        _ = page > 1 ?
             (await _dbContext.Customers.FirstAsync())
-                : (await  _dbContext.Customers.Where(w => w.IsActive).FirstAsync());
+            : (await  _dbContext.Customers.Where(w => w.IsActive).FirstAsync());
 
 
     var query = _dbContext.Customers
@@ -185,7 +185,7 @@ public sealed class CustomerReadService
         if (request.CustomerId is not null)
         {
             var customerId = request.CustomerId.Value;
-            baseQuery = baseQuery.Where(o => o.Customer.CustomerId == customerId);
+            baseQuery = baseQuery.Where(o => o.Customer.CustomerId == customerId && o.Status == OrderStatus.Confirmed);
         }
         if (request.Status is not null)
         {
@@ -236,7 +236,7 @@ public sealed class CustomerReadService
         if (request.CustomerId is not null)
         {
             var customerId = request.CustomerId.Value;
-            query = query.Where(o => o.Customer.CustomerId == customerId);
+            query = query.Where(o => o.Customer.CustomerId == customerId && o.Status == OrderStatus.Confirmed);
         }
 
         if (request.Status is not null)
@@ -279,8 +279,7 @@ public sealed class CustomerReadService
                 c.CustomerId,
                 c.Name,
                 c.Email,
-                c.IsActive,
-                c.Orders.Count(o => o.IsNotDeleted)));
+                c.IsActive));
 
         var customersSearch = GetCustomersQuery(
             new CustomerQueryRequest
@@ -383,9 +382,12 @@ public sealed class CustomerReadService
     }
 
     public sealed record PagedResult<T>(IReadOnlyList<T> Items, int TotalCount, int Page, int PageSize);
-    public sealed record CustomerDetailsDto(Guid CustomerId, string Name, string Email, bool IsActive, int TotalOrders);
-    public sealed record CustomerListItemDto(Guid CustomerId, string Name, string Email, bool IsActive);
-    public sealed record OrderListItemDto(int OrderId, Guid CustomerId, decimal Total, OrderStatus Status, DateTime CreatedUtc);
+
+    private sealed record CustomerDetailsDto(Guid CustomerId, string Name, string Email, bool IsActive);
+
+    private sealed record CustomerListItemDto(Guid CustomerId, string Name, string Email, bool IsActive);
+
+    private sealed record OrderListItemDto(int OrderId, Guid CustomerId, decimal Total, OrderStatus Status, DateTime CreatedUtc);
     public sealed record CustomerRevenueDto(Guid CustomerId, string CustomerName, int OrderCount, decimal Revenue, decimal AverageOrderValue);
     public sealed record CustomerHealthDto(Guid CustomerId, string CustomerName, int TotalOrders, decimal AverageOrderValue);
 }

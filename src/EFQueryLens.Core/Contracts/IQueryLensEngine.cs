@@ -1,8 +1,10 @@
-namespace EFQueryLens.Core;
+using EFQueryLens.Core.Contracts.Explain;
+
+namespace EFQueryLens.Core.Contracts;
 
 /// <summary>
 /// Primary engine interface. CLI, MCP server, and IDE analyzer are thin hosts over this.
-/// No UI, no transport, no provider references belong here — only in the host layer.
+/// No UI, no transport, no provider references to belong here — only in the host layer.
 /// </summary>
 public interface IQueryLensEngine : IAsyncDisposable
 {

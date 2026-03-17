@@ -1,10 +1,13 @@
 using System.Reflection;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Contracts.Explain;
 using EFQueryLens.Core.Grpc;
 using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Handlers;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
+using ModelSnapshot = EFQueryLens.Core.Contracts.ModelSnapshot;
 
 namespace EFQueryLens.Core.Tests.Lsp;
 

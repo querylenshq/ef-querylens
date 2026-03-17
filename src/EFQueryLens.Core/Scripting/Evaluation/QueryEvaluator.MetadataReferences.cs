@@ -1,10 +1,10 @@
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
-using Microsoft.CodeAnalysis;
 using EFQueryLens.Core.AssemblyContext;
+using Microsoft.CodeAnalysis;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {
@@ -24,12 +24,12 @@ public sealed partial class QueryEvaluator
         }
 
         var refs = CollectMetadataReferences(compilationAssemblies).ToArray();
-        _refCache[cacheKey] = new MetadataRefEntry(
+        _refCache[cacheKey] = new QueryEvaluator.MetadataRefEntry(
             alcCtx.AssemblyTimestamp,
             setHash,
             refs,
-            GetUtcNowTicks());
-        TrimCacheByLastAccess(_refCache, MaxMetadataRefCacheEntries, static e => e.LastAccessTicks);
+            QueryEvaluator.GetUtcNowTicks());
+        TrimCacheByLastAccess(_refCache, QueryEvaluator.MaxMetadataRefCacheEntries, static e => e.LastAccessTicks);
         return refs;
     }
 

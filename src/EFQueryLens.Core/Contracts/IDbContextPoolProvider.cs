@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Contracts;
 
 internal interface IDbContextLease : IAsyncDisposable
 {

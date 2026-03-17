@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {

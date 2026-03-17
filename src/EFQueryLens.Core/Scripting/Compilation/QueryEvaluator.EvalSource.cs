@@ -1,9 +1,10 @@
 using System.Text;
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Scripting.Compilation;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using EFQueryLens.Core.Scripting.Compilation;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {

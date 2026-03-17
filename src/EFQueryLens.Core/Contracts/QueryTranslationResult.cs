@@ -1,4 +1,4 @@
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Contracts;
 
 public record QueryTranslationResult
 {
@@ -8,5 +8,5 @@ public record QueryTranslationResult
     public IReadOnlyList<QueryParameter> Parameters { get; init; } = [];
     public IReadOnlyList<QueryWarning> Warnings { get; init; } = [];
     public string? ErrorMessage { get; init; }
-    public TranslationMetadata Metadata { get; init; } = default!;
+    public TranslationMetadata Metadata { get; init; } = null!;
 }

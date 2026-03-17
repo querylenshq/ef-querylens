@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Daemon;
 

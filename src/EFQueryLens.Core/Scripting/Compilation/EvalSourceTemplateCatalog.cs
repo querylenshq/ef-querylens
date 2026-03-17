@@ -1,22 +1,20 @@
-using System.Reflection;
-
 namespace EFQueryLens.Core.Scripting.Compilation;
 
 internal static class EvalSourceTemplateCatalog
 {
-    private static readonly Lazy<string> s_capturedTypes = new(() => LoadTemplate("CapturedTypes.cs.tmpl"));
-    private static readonly Lazy<string> s_offlineDbConnection = new(() => LoadTemplate("OfflineDbConnection.cs.tmpl"));
-    private static readonly Lazy<string> s_fakeDbDataReader = new(() => LoadTemplate("FakeDbDataReader.cs.tmpl"));
-    private static readonly Lazy<string> s_sqlCaptureScope = new(() => LoadTemplate("SqlCaptureScope.cs.tmpl"));
-    private static readonly Lazy<string> s_offlineCapture = new(() => LoadTemplate("OfflineCapture.cs.tmpl"));
-    private static readonly Lazy<string> s_runner = new(() => LoadTemplate("Runner.cs.tmpl"));
+    private static readonly Lazy<string> SCapturedTypes = new(() => LoadTemplate("CapturedTypes.cs.tmpl"));
+    private static readonly Lazy<string> SOfflineDbConnection = new(() => LoadTemplate("OfflineDbConnection.cs.tmpl"));
+    private static readonly Lazy<string> SFakeDbDataReader = new(() => LoadTemplate("FakeDbDataReader.cs.tmpl"));
+    private static readonly Lazy<string> SSqlCaptureScope = new(() => LoadTemplate("SqlCaptureScope.cs.tmpl"));
+    private static readonly Lazy<string> SOfflineCapture = new(() => LoadTemplate("OfflineCapture.cs.tmpl"));
+    private static readonly Lazy<string> SRunner = new(() => LoadTemplate("Runner.cs.tmpl"));
 
-    internal static string CapturedTypes => s_capturedTypes.Value;
-    internal static string OfflineDbConnection => s_offlineDbConnection.Value;
-    internal static string FakeDbDataReader => s_fakeDbDataReader.Value;
-    internal static string SqlCaptureScope => s_sqlCaptureScope.Value;
-    internal static string OfflineCapture => s_offlineCapture.Value;
-    internal static string Runner => s_runner.Value;
+    internal static string CapturedTypes => SCapturedTypes.Value;
+    internal static string OfflineDbConnection => SOfflineDbConnection.Value;
+    internal static string FakeDbDataReader => SFakeDbDataReader.Value;
+    internal static string SqlCaptureScope => SSqlCaptureScope.Value;
+    internal static string OfflineCapture => SOfflineCapture.Value;
+    internal static string Runner => SRunner.Value;
 
     internal static string Render(string template, IReadOnlyDictionary<string, string> tokens)
     {
@@ -31,7 +29,7 @@ internal static class EvalSourceTemplateCatalog
 
     private static string LoadTemplate(string fileName)
     {
-        var assembly = typeof(QueryEvaluator).Assembly;
+        var assembly = typeof(Evaluation.QueryEvaluator).Assembly;
         var suffix = $".Scripting.Compilation.Templates.{fileName}";
 
         var resourceName = assembly.GetManifestResourceNames()

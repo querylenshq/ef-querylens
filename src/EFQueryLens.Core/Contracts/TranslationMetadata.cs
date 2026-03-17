@@ -1,10 +1,10 @@
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Contracts;
 
 public sealed record TranslationMetadata
 {
-    public string DbContextType { get; init; } = default!;
-    public string EfCoreVersion { get; init; } = default!;
-    public string ProviderName { get; init; } = default!;
+    public string DbContextType { get; init; } = null!;
+    public string EfCoreVersion { get; init; } = null!;
+    public string ProviderName { get; init; } = null!;
     public TimeSpan TranslationTime { get; init; }
     public TimeSpan? ContextResolutionTime { get; init; }
     public TimeSpan? DbContextCreationTime { get; init; }

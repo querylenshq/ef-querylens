@@ -1,5 +1,6 @@
 using System.Text;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.DaemonClient;
 using EFQueryLens.Lsp;
 

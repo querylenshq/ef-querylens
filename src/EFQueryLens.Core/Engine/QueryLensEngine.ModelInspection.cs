@@ -1,13 +1,15 @@
 using System.Reflection;
 using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting;
+using QueryEvaluator = EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator;
 
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Engine;
 
 public sealed partial class QueryLensEngine
 {
     // DbContext instantiation for model inspection
-    private object CreateDbContextForInspection(Type dbContextType, ProjectAssemblyContext alcCtx)
+    private static object CreateDbContextForInspection(Type dbContextType, ProjectAssemblyContext alcCtx)
     {
         var created = QueryEvaluator.CreateDbContextInstance(
             dbContextType,

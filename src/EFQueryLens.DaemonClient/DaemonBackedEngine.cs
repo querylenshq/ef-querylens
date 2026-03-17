@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Contracts.Explain;
 using EFQueryLens.Core.Grpc;
 using Grpc.Net.Client;
+using ModelSnapshot = EFQueryLens.Core.Contracts.ModelSnapshot;
 
 namespace EFQueryLens.DaemonClient;
 
@@ -92,7 +95,7 @@ public sealed partial class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposa
         ExplainRequest request, CancellationToken ct = default) =>
         throw new NotSupportedException("ExplainAsync is not yet exposed by the daemon protocol.");
 
-    public async Task<EFQueryLens.Core.ModelSnapshot> InspectModelAsync(
+    public async Task<ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request, CancellationToken ct = default)
     {
         var payload = new InspectModelRequest

@@ -1,5 +1,8 @@
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Contracts.Explain;
 using EFQueryLens.Core.Grpc;
+using ModelSnapshot = EFQueryLens.Core.Contracts.ModelSnapshot;
 
 namespace EFQueryLens.DaemonClient;
 
@@ -59,7 +62,7 @@ public sealed partial class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDis
         ExplainRequest request, CancellationToken ct = default) =>
         _inner.ExplainAsync(request, ct);
 
-    public async Task<EFQueryLens.Core.ModelSnapshot> InspectModelAsync(
+    public async Task<ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request, CancellationToken ct = default) =>
         await ExecuteWithReconnectAsync(e => e.InspectModelAsync(request, ct), ct);
 

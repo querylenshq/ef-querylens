@@ -1,7 +1,8 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using EFQueryLens.Core.Contracts;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {

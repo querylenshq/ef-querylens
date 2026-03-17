@@ -12,6 +12,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 using EFQueryLens.Core.Common;
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Engine;
 
 Console.SetError(new TimestampedTextWriter(Console.Error));
 

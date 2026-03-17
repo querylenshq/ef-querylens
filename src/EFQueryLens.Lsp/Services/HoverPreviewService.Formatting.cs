@@ -3,6 +3,7 @@ using SQL.Formatter;
 using SQL.Formatter.Core;
 using SQL.Formatter.Language;
 using System.Text;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Lsp.Services;
 

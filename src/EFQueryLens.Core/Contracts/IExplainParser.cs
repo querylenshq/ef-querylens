@@ -1,4 +1,6 @@
-namespace EFQueryLens.Core;
+using EFQueryLens.Core.Contracts.Explain;
+
+namespace EFQueryLens.Core.Contracts;
 
 /// <summary>
 /// Parses raw EXPLAIN output from a specific database provider into

@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.DesignTime;
 
 internal static partial class DesignTimeDbContextFactory
 {

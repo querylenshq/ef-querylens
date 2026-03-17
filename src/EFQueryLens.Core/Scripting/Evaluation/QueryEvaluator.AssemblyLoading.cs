@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using EFQueryLens.Core.AssemblyContext;
 
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {

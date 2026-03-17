@@ -1,4 +1,6 @@
-namespace EFQueryLens.Core.Scripting;
+using EFQueryLens.Core.Contracts;
+
+namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {

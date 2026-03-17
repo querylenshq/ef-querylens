@@ -13,7 +13,7 @@ namespace EFQueryLens.Core.AssemblyContext;
 /// </summary>
 public sealed partial class ProjectAssemblyContext : IDisposable
 {
-    private static readonly string[] s_defaultLoadContextPrefixes =
+    private static readonly string[] SDefaultLoadContextPrefixes =
     [
         "Microsoft.Build",
         "NuGet.",
@@ -27,7 +27,6 @@ public sealed partial class ProjectAssemblyContext : IDisposable
     // can actually be collected. Collectible ALCs are GC-rooted only by the
     // types loaded into them — not by strong CLR handles.
     private readonly WeakReference<IsolatedLoadContext> _contextRef;
-    private Assembly? _targetAssembly;
     private bool _disposed;
 
     /// <summary>Absolute path to the primary assembly that was loaded.</summary>
@@ -50,7 +49,7 @@ public sealed partial class ProjectAssemblyContext : IDisposable
 
         var ctx = new IsolatedLoadContext(AssemblyPath);
         _contextRef = new WeakReference<IsolatedLoadContext>(ctx);
-        _targetAssembly = ctx.LoadFromAssemblyPath(AssemblyPath);
+        ctx.LoadFromAssemblyPath(AssemblyPath);
 
         EagerLoadBinDirAssemblies();
     }
@@ -135,7 +134,6 @@ public sealed partial class ProjectAssemblyContext : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _targetAssembly = null;
 
         if (_contextRef.TryGetTarget(out var ctx))
             ctx.Unload();
@@ -211,7 +209,7 @@ public sealed partial class ProjectAssemblyContext : IDisposable
         if (string.IsNullOrWhiteSpace(assemblyName))
             return false;
 
-        foreach (var prefix in s_defaultLoadContextPrefixes)
+        foreach (var prefix in SDefaultLoadContextPrefixes)
         {
             if (assemblyName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 return true;

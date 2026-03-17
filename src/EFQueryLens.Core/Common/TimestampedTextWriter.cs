@@ -1,7 +1,4 @@
-using System;
-using System.IO;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace EFQueryLens.Core.Common;
 
@@ -10,14 +7,9 @@ namespace EFQueryLens.Core.Common;
 /// Used to wrap standard output streams (e.g. Console.Error) to ensure all logs
 /// have consistent timing without needing to manually add the stamp at each log site.
 /// </summary>
-public sealed class TimestampedTextWriter : TextWriter
+public sealed class TimestampedTextWriter(TextWriter inner) : TextWriter
 {
-    private readonly TextWriter _inner;
-
-    public TimestampedTextWriter(TextWriter inner)
-    {
-        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-    }
+    private readonly TextWriter _inner = inner ?? throw new ArgumentNullException(nameof(inner));
 
     public override Encoding Encoding => _inner.Encoding;
 

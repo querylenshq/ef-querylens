@@ -1,4 +1,4 @@
-namespace EFQueryLens.Core.Scripting;
+namespace EFQueryLens.Core.Scripting.DesignTime;
 
 /// <summary>
 /// Pure-reflection helpers that discover and invoke QueryLens factory interfaces

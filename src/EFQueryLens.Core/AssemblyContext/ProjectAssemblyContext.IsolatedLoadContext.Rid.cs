@@ -6,7 +6,7 @@ public sealed partial class ProjectAssemblyContext
 {
     private sealed partial class IsolatedLoadContext
     {
-        internal string? TryResolveRidRuntimeAssemblyPath(string assemblySimpleName)
+        private string? TryResolveRidRuntimeAssemblyPath(string assemblySimpleName)
         {
             if (string.IsNullOrWhiteSpace(assemblySimpleName))
                 return null;
@@ -104,10 +104,7 @@ public sealed partial class ProjectAssemblyContext
 
             var start = markerIndex + marker.Length;
             var end = normalized.IndexOf('/', start);
-            if (end <= start)
-                return null;
-
-            return normalized[start..end];
+            return end <= start ? null : normalized[start..end];
         }
 
         private static string? TryExtractTfm(string path)
@@ -120,10 +117,7 @@ public sealed partial class ProjectAssemblyContext
 
             var start = markerIndex + marker.Length;
             var end = normalized.IndexOf('/', start);
-            if (end <= start)
-                return null;
-
-            return normalized[start..end];
+            return end <= start ? null : normalized[start..end];
         }
 
         private static string[] BuildRuntimeRidProbeOrder()

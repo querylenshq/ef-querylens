@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 
-namespace EFQueryLens.Core;
+namespace EFQueryLens.Core.Engine;
 
 public sealed partial class QueryLensEngine
 {
@@ -17,7 +17,7 @@ public sealed partial class QueryLensEngine
         try
         {
             var alc = AssemblyLoadContext.GetLoadContext(entityType.GetType().Assembly);
-            var relAsm = (alc?.Assemblies ?? Enumerable.Empty<Assembly>())
+            var relAsm = (alc?.Assemblies ?? [])
                 .Concat(AssemblyLoadContext.Default.Assemblies)
                 .FirstOrDefault(a => a.GetName().Name == "Microsoft.EntityFrameworkCore.Relational");
 

@@ -1,4 +1,5 @@
 using EFQueryLens.Core;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Daemon;
 
 namespace EFQueryLens.DaemonClient;
