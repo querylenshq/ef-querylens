@@ -769,20 +769,56 @@ Alternatively, pass the threshold into `TranslationMetrics` constructor alongsid
 
 | # | Issue | Severity | File | Status |
 |---|-------|----------|------|--------|
-| 01 | gRPC in Core | HIGH | `Core/Core.csproj` | ⬜ |
-| 02 | Pool is a singleton | HIGH | `Engine/DbContextPool.cs` | ⬜ |
-| 03 | Lock during manifest scan | HIGH | `AssemblyContext/ShadowAssemblyCache.cs` | ⬜ |
-| 04 | Uncached ChangeTracker reflection | MEDIUM | `Engine/DbContextPool.cs` | ⬜ |
-| 05 | `_alcContextGates` never pruned | MEDIUM | `Engine/QueryLensEngine.cs` | ⬜ |
-| 06 | Namespace cache nuked on any rebuild | MEDIUM | `Scripting/QueryEvaluator.cs` | ⬜ |
-| 07 | `double` accumulation in metrics | MEDIUM | `Daemon/TranslationMetrics.cs` | ⬜ |
-| 08 | `OptimizationLevel.Release` on eval | LOW | `Scripting/QueryEvaluator.cs` | ⬜ |
-| 09 | `NullableContextOptions.Disable` | LOW | `Scripting/QueryEvaluator.cs` | ⬜ |
-| 10 | `NotImplementedException` → `NotSupportedException` | LOW | `Engine/QueryLensEngine.cs` | ⬜ |
-| 11 | Record inheritance on `ExplainResult` | LOW | `Contracts/ExplainResult.cs` | ⬜ |
-| 12 | Custom factory interface vs EF's own | MEDIUM | `Contracts/IQueryLensDbContextFactory.cs` | ⬜ |
-| 13 | Fragile string parsing for LINQ property | MEDIUM | `AssemblyContext/DbContextDiscovery.cs` | ⬜ |
-| 14 | `Unreachable` enum value name | LOW | `Contracts/QueryTranslationStatus.cs` | ⬜ |
-| 15 | `TranslateQueuedAsync` in core interface | LOW | `Contracts/IQueryLensEngine.cs` | ⬜ |
-| 16 | Shadow cache root not configurable | LOW | `AssemblyContext/ShadowAssemblyCache.cs` | ⬜ |
-| 17 | `GetAdaptiveWaitMs` hardcoded values | LOW | `Daemon/TranslationMetrics.cs` | ⬜ |
+| 01 | gRPC in Core | HIGH | `Core/Core.csproj` → new `Transport.Grpc` project | ✅ |
+| 02 | Pool is a singleton | HIGH | `Engine/DbContextPool.cs` | ✅ |
+| 03 | Lock during manifest scan | HIGH | `AssemblyContext/ShadowAssemblyCache.cs` | ✅ |
+| 04 | Uncached ChangeTracker reflection | MEDIUM | `Engine/DbContextPool.cs` | ✅ |
+| 05 | `_alcContextGates` never pruned | MEDIUM | `Engine/QueryLensEngine.cs` | ✅ |
+| 06 | Namespace cache nuked on any rebuild | MEDIUM | `Scripting/QueryEvaluator.cs` | ✅ |
+| 07 | `double` accumulation in metrics | MEDIUM | `Daemon/TranslationMetrics.cs` | ✅ |
+| 08 | `OptimizationLevel.Release` on eval | LOW | `Scripting/QueryEvaluator.cs` | ✅ |
+| 09 | `NullableContextOptions.Disable` | LOW | `Scripting/QueryEvaluator.cs` | ✅ |
+| 10 | `NotImplementedException` → `NotSupportedException` | LOW | `Engine/QueryLensEngine.cs` | ✅ |
+| 11 | Record inheritance on `ExplainResult` | LOW | `Contracts/ExplainResult.cs` | ✅ |
+| 12 | Custom factory interface vs EF's own | MEDIUM | `Contracts/IQueryLensDbContextFactory.cs` | ✅ |
+| 13 | Fragile string parsing for LINQ property | MEDIUM | `AssemblyContext/DbContextDiscovery.cs` | ✅ |
+| 14 | `Unreachable` enum value name | LOW | `Contracts/QueryTranslationStatus.cs` | ✅ |
+| 15 | `TranslateQueuedAsync` in core interface | LOW | `Contracts/IQueryLensEngine.cs` | ✅ |
+| 16 | Shadow cache root not configurable | LOW | `AssemblyContext/ShadowAssemblyCache.cs` | ✅ |
+| 17 | `GetAdaptiveWaitMs` hardcoded values | LOW | `Daemon/TranslationMetrics.cs` | ✅ |
+
+---
+
+## New Finding (surfaced during fix review)
+
+### ISSUE-18 · Pool eviction can throw `ObjectDisposedException` on concurrent lease acquire [MEDIUM]
+
+**File:** `src/EFQueryLens.Core/Engine/QueryLensEngine.DbContextPool.cs`
+**Line:** `58`
+
+**Problem:**
+`EvictPooledDbContextsForAssemblyAsync` calls `pooled.Gate.Dispose()` while another thread may be blocked on `await pool.Gate.WaitAsync(cancellationToken)` (line 58). Disposing a `SemaphoreSlim` with waiters throws `ObjectDisposedException` on the waiting thread — this is unhandled in `AcquireDbContextLeaseAsync`. The `catch (ObjectDisposedException)` guard only covers the `Gate.Release()` in `ReleaseDbContextLease`, not the `WaitAsync` in the acquire path.
+
+**Current code (acquire, line 58):**
+```csharp
+await pool.Gate.WaitAsync(cancellationToken);
+// ↑ No catch for ObjectDisposedException if eviction disposes pool.Gate here
+```
+
+**Fix:**
+Wrap the acquire and the code that follows it in a try/catch, and treat disposal as a transient "pool evicted" signal that triggers a retry:
+
+```csharp
+try
+{
+    await pool.Gate.WaitAsync(cancellationToken);
+}
+catch (ObjectDisposedException)
+{
+    // Pool was evicted between the TryGetValue check and the WaitAsync.
+    // Remove the stale reference and retry from the top so a new pool is created.
+    _dbContextPool.TryRemove(poolKey, out _);
+    return await ((IDbContextPoolProvider)this).AcquireDbContextLeaseAsync(
+        dbContextType, assemblyPath, userAssemblies, cancellationToken);
+}
+```

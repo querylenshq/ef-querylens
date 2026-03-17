@@ -135,25 +135,6 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         return retryResult;
     }
 
-    /// <summary>
-    /// In-process core engine performs immediate translation and always reports
-    /// <see cref="QueryTranslationStatus.Ready"/>. Daemon-backed implementations
-    /// may return queue lifecycle states with rolling metrics.
-    /// </summary>
-    public async Task<QueuedTranslationResult> TranslateQueuedAsync(
-        TranslationRequest request, CancellationToken ct = default)
-    {
-        var result = await TranslateAsync(request, ct);
-        var lastTranslationMs = Math.Max(0, result.Metadata.TranslationTime.TotalMilliseconds);
-        return new QueuedTranslationResult
-        {
-            Status = QueryTranslationStatus.Ready,
-            AverageTranslationMs = 0,
-            LastTranslationMs = lastTranslationMs,
-            Result = result,
-        };
-    }
-
     public Task<ExplainResult> ExplainAsync(
         ExplainRequest request, CancellationToken ct = default) =>
         throw new NotSupportedException(

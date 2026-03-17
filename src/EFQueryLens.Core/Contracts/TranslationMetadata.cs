@@ -29,8 +29,12 @@ public sealed record TranslationMetadata
     ///     created the DbContext for this request.
     ///   </description></item>
     ///   <item><description>
-    ///     <c>"pooled-reuse"</c> — a previously-created QueryLens factory DbContext
-    ///     instance was reused from the pool.
+    ///     <c>"ef-design-time-factory"</c> — an
+    ///     <c>IDesignTimeDbContextFactory&lt;T&gt;</c> created the DbContext.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <c>"pooled-reuse"</c> — a previously-created DbContext instance
+    ///     was reused from the pool.
     ///   </description></item>
     /// </list>
     /// </summary>

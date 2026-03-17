@@ -11,7 +11,7 @@ namespace EFQueryLens.DaemonClient;
 /// <summary>
 /// <see cref="IQueryLensEngine"/> backed by a QueryLens daemon over gRPC loopback.
 /// </summary>
-public sealed partial class DaemonBackedEngine : IQueryLensEngine, IAsyncDisposable
+public sealed partial class DaemonBackedEngine : IQueryLensEngine, IQueuedTranslationEngine, IAsyncDisposable
 {
     private readonly GrpcChannel _channel;
     private readonly DaemonService.DaemonServiceClient _client;

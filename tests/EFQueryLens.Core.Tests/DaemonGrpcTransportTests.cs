@@ -290,7 +290,7 @@ public class DaemonGrpcTransportTests
     }
 
     private static async Task<QueuedTranslationResult> WaitForReadyAsync(
-        IQueryLensEngine engine,
+        IQueuedTranslationEngine engine,
         TranslationRequest request,
         TimeSpan timeout)
     {

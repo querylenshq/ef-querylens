@@ -23,7 +23,15 @@ public sealed partial class QueryEvaluator
         if (fromQueryLens is not null)
             return (fromQueryLens, "querylens-factory");
 
-        var details = string.Join(" ", new[] { queryLensFailure }
+        var fromEfDesignTime = DesignTimeDbContextFactory.TryCreateEfDesignTimeFactory(
+            dbContextType,
+            all,
+            executableAssemblyPath,
+            out var efDesignTimeFailure);
+        if (fromEfDesignTime is not null)
+            return (fromEfDesignTime, "ef-design-time-factory");
+
+        var details = string.Join(" ", new[] { queryLensFailure, efDesignTimeFailure }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
         var executableHint = string.IsNullOrWhiteSpace(executableAssemblyPath)
@@ -32,7 +40,7 @@ public sealed partial class QueryEvaluator
 
         throw new InvalidOperationException(
             $"No factory found for '{dbContextType.FullName}'. " +
-            "Add an IQueryLensDbContextFactory<T> implementation to your executable project (API / Worker / Console), not in a class library. " +
+            "Add an IQueryLensDbContextFactory<T> or IDesignTimeDbContextFactory<T> implementation to your executable project (API / Worker / Console), not in a class library. " +
             executableHint + " " +
             "See the QueryLens README for setup instructions." +
             (string.IsNullOrWhiteSpace(details) ? string.Empty : $" Details: {details}"));

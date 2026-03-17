@@ -10,7 +10,7 @@ namespace EFQueryLens.DaemonClient;
 /// Wraps <see cref="DaemonBackedEngine"/> with transparent reconnection logic.
 /// If the daemon transport fails, re-discover/restart daemon and retry once.
 /// </summary>
-public sealed partial class ResiliencyDaemonEngine : IQueryLensEngine, IAsyncDisposable
+public sealed partial class ResiliencyDaemonEngine : IQueryLensEngine, IQueuedTranslationEngine, IAsyncDisposable
 {
     private DaemonBackedEngine _inner;
     private readonly string _workspacePath;

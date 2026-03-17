@@ -154,7 +154,10 @@ public class HoverHandlerDaemonEventTests
             });
 
         public Task<ExplainResult> ExplainAsync(ExplainRequest request, CancellationToken ct = default)
-            => Task.FromResult(new ExplainResult());
+            => Task.FromResult(new ExplainResult
+            {
+                Translation = new QueryTranslationResult(),
+            });
 
         public Task<ModelSnapshot> InspectModelAsync(ModelInspectionRequest request, CancellationToken ct = default)
             => Task.FromResult(new ModelSnapshot

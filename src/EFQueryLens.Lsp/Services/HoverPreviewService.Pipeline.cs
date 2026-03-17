@@ -2,6 +2,7 @@ using EFQueryLens.Core;
 using EFQueryLens.Lsp.Parsing;
 using System.Diagnostics;
 using EFQueryLens.Core.Contracts;
+using EFQueryLens.DaemonClient;
 
 namespace EFQueryLens.Lsp.Services;
 
@@ -76,7 +77,7 @@ internal sealed partial class HoverPreviewService
             var sw = Stopwatch.StartNew();
             log($"translate-start line={line} char={character} assembly={targetAssembly}");
 
-            var queued = await _engine.TranslateQueuedAsync(new TranslationRequest
+            var translationRequest = new TranslationRequest
             {
                 AssemblyPath = targetAssembly,
                 Expression = expression,
@@ -84,7 +85,9 @@ internal sealed partial class HoverPreviewService
                 AdditionalImports = usingContext.Imports.ToArray(),
                 UsingAliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
                 UsingStaticTypes = usingContext.StaticTypes.ToArray(),
-            }, cancellationToken);
+            };
+
+            var queued = await TranslateQueuedOrImmediateAsync(translationRequest, cancellationToken);
 
             if (queued.Status is not QueryTranslationStatus.Ready)
             {
@@ -156,5 +159,25 @@ internal sealed partial class HoverPreviewService
             log($"translate-exception line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
             return Fail($"{ex.GetType().Name}: {ex.Message}", sourceLine, QueryTranslationStatus.DaemonUnavailable);
         }
+    }
+
+    private async Task<QueuedTranslationResult> TranslateQueuedOrImmediateAsync(
+        TranslationRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (_engine is IQueuedTranslationEngine queuedEngine)
+        {
+            return await queuedEngine.TranslateQueuedAsync(request, cancellationToken);
+        }
+
+        var result = await _engine.TranslateAsync(request, cancellationToken);
+        var lastTranslationMs = Math.Max(0, result.Metadata.TranslationTime.TotalMilliseconds);
+        return new QueuedTranslationResult
+        {
+            Status = QueryTranslationStatus.Ready,
+            AverageTranslationMs = 0,
+            LastTranslationMs = lastTranslationMs,
+            Result = result,
+        };
     }
 }
