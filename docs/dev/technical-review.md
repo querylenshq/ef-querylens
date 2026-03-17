@@ -793,6 +793,8 @@ Alternatively, pass the threshold into `TranslationMetrics` constructor alongsid
 
 ### ISSUE-18 · Pool eviction can throw `ObjectDisposedException` on concurrent lease acquire [MEDIUM]
 
+**Status:** ✅ Implemented (retry-on-evicted-pool lease acquisition)
+
 **File:** `src/EFQueryLens.Core/Engine/QueryLensEngine.DbContextPool.cs`
 **Line:** `58`
 

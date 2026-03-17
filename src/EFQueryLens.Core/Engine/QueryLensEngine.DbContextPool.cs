@@ -19,90 +19,116 @@ public sealed partial class QueryLensEngine
     {
         var poolKey = BuildDbContextPoolKey(assemblyPath, dbContextType);
 
-        if (!_dbContextPool.TryGetValue(poolKey, out var pool))
+        while (true)
         {
-            var gateState = _dbContextCreateGates.GetOrAdd(poolKey, static _ => new CreateGateState());
-            Interlocked.Increment(ref gateState.ActiveUsers);
-            await gateState.Gate.WaitAsync(cancellationToken);
-            try
+            if (!_dbContextPool.TryGetValue(poolKey, out var pool))
             {
-                if (!_dbContextPool.TryGetValue(poolKey, out pool))
+                var gateState = _dbContextCreateGates.GetOrAdd(poolKey, static _ => new CreateGateState());
+                Interlocked.Increment(ref gateState.ActiveUsers);
+                await gateState.Gate.WaitAsync(cancellationToken);
+                try
                 {
-                    pool = new PooledDbContextPool(
-                        poolKey,
-                        dbContextType.FullName!,
-                        _dbContextPoolSize);
-                    _dbContextPool[poolKey] = pool;
-
-                    if (_debugEnabled)
+                    if (!_dbContextPool.TryGetValue(poolKey, out pool))
                     {
-                        LogDebug($"dbcontext-pool-create type={dbContextType.Name} size={_dbContextPoolSize}");
-                    }
-                }
-            }
-            finally
-            {
-                gateState.Gate.Release();
-
-                // Once the pooled instance exists and no concurrent creators remain,
-                // prune the creation gate entry to avoid long-lived per-key gate objects.
-                if (Interlocked.Decrement(ref gateState.ActiveUsers) == 0
-                    && _dbContextPool.ContainsKey(poolKey)
-                    && _dbContextCreateGates.TryRemove(new KeyValuePair<string, CreateGateState>(poolKey, gateState)))
-                {
-                    gateState.Gate.Dispose();
-                }
-            }
-        }
-
-        await pool.Gate.WaitAsync(cancellationToken);
-
-        object? leasedInstance;
-        var leaseStrategy = "pooled-reuse";
-
-        try
-        {
-            if (!pool.AvailableInstances.TryDequeue(out leasedInstance))
-            {
-                lock (pool.CreateLock)
-                {
-                    if (!pool.AvailableInstances.TryDequeue(out leasedInstance)
-                        && pool.CreatedCount < pool.PoolSize)
-                    {
-                        var (instance, strategy) = QueryEvaluator.CreateDbContextInstance(dbContextType, userAssemblies);
-                        leasedInstance = instance;
-                        pool.CreatedInstances.Add(instance);
-                        pool.CreatedCount++;
-                        leaseStrategy = strategy;
+                        pool = new PooledDbContextPool(
+                            poolKey,
+                            dbContextType.FullName!,
+                            _dbContextPoolSize);
+                        _dbContextPool[poolKey] = pool;
 
                         if (_debugEnabled)
                         {
-                            LogDebug(
-                                $"dbcontext-pool-instance-create type={dbContextType.Name} " +
-                                $"created={pool.CreatedCount}/{pool.PoolSize} strategy={strategy}");
+                            LogDebug($"dbcontext-pool-create type={dbContextType.Name} size={_dbContextPoolSize}");
                         }
+                    }
+                }
+                finally
+                {
+                    gateState.Gate.Release();
+
+                    // Once the pooled instance exists and no concurrent creators remain,
+                    // prune the creation gate entry to avoid long-lived per-key gate objects.
+                    if (Interlocked.Decrement(ref gateState.ActiveUsers) == 0
+                        && _dbContextPool.ContainsKey(poolKey)
+                        && _dbContextCreateGates.TryRemove(new KeyValuePair<string, CreateGateState>(poolKey, gateState)))
+                    {
+                        gateState.Gate.Dispose();
                     }
                 }
             }
 
-            if (leasedInstance is null)
+            try
             {
-                throw new InvalidOperationException(
-                    $"Pool '{pool.PoolKey}' granted a lease slot but no DbContext instance was available.");
+                await pool.Gate.WaitAsync(cancellationToken);
             }
-        }
-        catch
-        {
-            pool.Gate.Release();
-            throw;
-        }
+            catch (ObjectDisposedException)
+            {
+                // Pool was evicted between TryGetValue and WaitAsync. Retry so a fresh pool can be created.
+                _dbContextPool.TryRemove(poolKey, out _);
 
-        if (_debugEnabled)
-        {
-            LogDebug($"dbcontext-pool-lease-acquired type={dbContextType.Name} strategy={leaseStrategy}");
-        }
+                if (_debugEnabled)
+                {
+                    LogDebug($"dbcontext-pool-lease-race-evicted type={dbContextType.Name} key={poolKey}");
+                }
 
-        return new DbContextLease(this, pool, leasedInstance, leaseStrategy);
+                continue;
+            }
+
+            object? leasedInstance;
+            var leaseStrategy = "pooled-reuse";
+
+            try
+            {
+                if (!pool.AvailableInstances.TryDequeue(out leasedInstance))
+                {
+                    lock (pool.CreateLock)
+                    {
+                        if (!pool.AvailableInstances.TryDequeue(out leasedInstance)
+                            && pool.CreatedCount < pool.PoolSize)
+                        {
+                            var (instance, strategy) = QueryEvaluator.CreateDbContextInstance(dbContextType, userAssemblies);
+                            leasedInstance = instance;
+                            pool.CreatedInstances.Add(instance);
+                            pool.CreatedCount++;
+                            leaseStrategy = strategy;
+
+                            if (_debugEnabled)
+                            {
+                                LogDebug(
+                                    $"dbcontext-pool-instance-create type={dbContextType.Name} " +
+                                    $"created={pool.CreatedCount}/{pool.PoolSize} strategy={strategy}");
+                            }
+                        }
+                    }
+                }
+
+                if (leasedInstance is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Pool '{pool.PoolKey}' granted a lease slot but no DbContext instance was available.");
+                }
+            }
+            catch
+            {
+                try
+                {
+                    pool.Gate.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Pool was disposed/evicted while acquire path was unwinding.
+                }
+
+                throw;
+            }
+
+            if (_debugEnabled)
+            {
+                LogDebug($"dbcontext-pool-lease-acquired type={dbContextType.Name} strategy={leaseStrategy}");
+            }
+
+            return new DbContextLease(this, pool, leasedInstance, leaseStrategy);
+        }
     }
 
     private void ReleaseDbContextLease(PooledDbContextPool pool, object instance)
