@@ -808,64 +808,6 @@ public sealed class C
         Assert.True(r2.Metadata.TranslationTime < TimeSpan.FromSeconds(10));
     }
 
-    // ─── IQueryLensDbContextFactory discovery ────────────────────────────────────
-
-    [Fact]
-    public async Task Evaluate_WhenQueryLensFactoryExists_StrategyIsQueryLensFactory()
-    {
-        // SampleApp ships AppQueryLensFactory : IQueryLensDbContextFactory<AppDbContext>.
-        // QueryEvaluator must report "querylens-factory" as the creation strategy.
-        var result = await TranslateAsync("db.Orders");
-
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
-    }
-
-    [Fact]
-    public async Task Evaluate_QueryLensFactory_AttemptsExecutionCapture()
-    {
-        var result = await TranslateAsync("db.Orders");
-
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotEmpty(result.Commands);
-        Assert.DoesNotContain(result.Warnings, w => w.Code == "QL_CAPTURE_SKIPPED");
-    }
-
-    [Fact]
-    public async Task Evaluate_QueryLensFactory_DoesNotUseLegacyStrategyValues()
-    {
-        // QueryLens factory is the only supported creation path.
-        var result = await TranslateAsync("db.Users");
-
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
-        Assert.NotEqual("design-time-factory", result.Metadata.CreationStrategy);
-        Assert.NotEqual("bootstrap", result.Metadata.CreationStrategy);
-    }
-
-    [Fact]
-    public async Task Evaluate_QueryLensFactory_StillGeneratesSqlForSimpleSet()
-    {
-        var result = await TranslateAsync("db.Orders");
-
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.Contains("Orders", result.Sql, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
-    }
-
-    [Fact]
-    public async Task Evaluate_QueryLensFactory_StillGeneratesSqlForWhereClause()
-    {
-        // Verify that using the factory does not break SQL generation for
-        // WHERE clauses or any other operator.
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId == 5)");
-
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.Contains("WHERE", result.Sql, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
-    }
 
     [Fact]
     public void CreateDbContextInstance_WhenSelectedExecutableAssemblyDiffers_RejectsFactoriesFromOtherAssemblies()
@@ -888,27 +830,9 @@ public sealed class C
     }
 
     [Fact]
-    public void CreateDbContextInstance_WhenFactoryInSelectedExecutableAssembly_Succeeds()
-    {
-        var dbContextType = _alcCtx.FindDbContextType(
-            "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext");
-
-        var created = QueryEvaluator.CreateDbContextInstance(
-            dbContextType,
-            _alcCtx.LoadedAssemblies,
-            _alcCtx.AssemblyPath);
-
-        Assert.NotNull(created.Instance);
-        Assert.Equal("querylens-factory", created.Strategy);
-
-        if (created.Instance is IDisposable disposable)
-            disposable.Dispose();
-    }
-
-    [Fact]
     public async Task Evaluate_ExistingTests_StillPassWithFactoryPath()
     {
-        // All four entity sets must translate correctly when any factory is active.
+        // All four entity sets must translate correctly.
         string[] expressions = ["db.Orders", "db.Users", "db.Products", "db.Categories"];
 
         foreach (var expr in expressions)
@@ -916,7 +840,6 @@ public sealed class C
             var result = await TranslateAsync(expr);
             Assert.True(result.Success, $"Failed for '{expr}': {result.ErrorMessage}");
             Assert.NotNull(result.Sql);
-            Assert.Equal("querylens-factory", result.Metadata.CreationStrategy);
         }
     }
 

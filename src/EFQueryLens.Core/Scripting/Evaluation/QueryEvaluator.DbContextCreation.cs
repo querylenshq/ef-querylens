@@ -15,14 +15,6 @@ public sealed partial class QueryEvaluator
             .Default.Assemblies.Concat(userAssemblies)
             .ToList();
 
-        var fromQueryLens = DesignTimeDbContextFactory.TryCreateQueryLensFactory(
-            dbContextType,
-            all,
-            executableAssemblyPath,
-            out var queryLensFailure);
-        if (fromQueryLens is not null)
-            return (fromQueryLens, "querylens-factory");
-
         var fromEfDesignTime = DesignTimeDbContextFactory.TryCreateEfDesignTimeFactory(
             dbContextType,
             all,
@@ -31,18 +23,16 @@ public sealed partial class QueryEvaluator
         if (fromEfDesignTime is not null)
             return (fromEfDesignTime, "ef-design-time-factory");
 
-        var details = string.Join(" ", new[] { queryLensFailure, efDesignTimeFailure }
-            .Where(s => !string.IsNullOrWhiteSpace(s)));
-
         var executableHint = string.IsNullOrWhiteSpace(executableAssemblyPath)
             ? "Use the compiled executable assembly (API / Worker / Console) as the QueryLens target."
             : $"Selected executable assembly: '{Path.GetFileName(executableAssemblyPath)}'.";
 
         throw new InvalidOperationException(
             $"No factory found for '{dbContextType.FullName}'. " +
-            "Add an IQueryLensDbContextFactory<T> or IDesignTimeDbContextFactory<T> implementation to your executable project (API / Worker / Console), not in a class library. " +
+            "Add an IDesignTimeDbContextFactory<T> implementation to your executable project (API / Worker / Console), not in a class library. " +
+            "This is the same factory EF Core uses for 'dotnet ef migrations add'. " +
             executableHint + " " +
-            "See the QueryLens README for setup instructions." +
-            (string.IsNullOrWhiteSpace(details) ? string.Empty : $" Details: {details}"));
+            "See: https://learn.microsoft.com/en-us/ef/core/cli/dbcontext-creation" +
+            (string.IsNullOrWhiteSpace(efDesignTimeFailure) ? string.Empty : $" Details: {efDesignTimeFailure}"));
     }
 }

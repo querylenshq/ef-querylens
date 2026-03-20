@@ -14,21 +14,17 @@ public static partial class AssemblyResolver
 
     /// <summary>
     /// Returns true if the project directory contains a source file with an
-    /// IQueryLensDbContextFactory implementation — i.e. the user explicitly set
+    /// IDesignTimeDbContextFactory implementation — i.e. the user explicitly set
     /// this project up as the QueryLens host.
     /// </summary>
     private static bool HasQueryLensFactory(string projectDir)
     {
         foreach (var file in EnumerateProjectSourceFiles(projectDir))
         {
-            var fileName = Path.GetFileName(file);
-            if (fileName.Contains("QueryLensDbContextFactory", StringComparison.OrdinalIgnoreCase))
-                return true;
-
             try
             {
                 var text = File.ReadAllText(file);
-                if (text.Contains("IQueryLensDbContextFactory<", StringComparison.Ordinal))
+                if (text.Contains("IDesignTimeDbContextFactory<", StringComparison.Ordinal))
                     return true;
             }
             catch
