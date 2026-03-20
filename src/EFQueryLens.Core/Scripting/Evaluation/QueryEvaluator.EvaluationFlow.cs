@@ -354,6 +354,15 @@ public sealed partial class QueryEvaluator
             var msg = ex is TargetInvocationException { InnerException: { } inner }
                 ? inner.ToString()
                 : ex.Message;
+
+            if (msg.Contains("does not have a type mapping assigned", StringComparison.OrdinalIgnoreCase))
+            {
+                msg += "\n\nHint: A variable in your query has a type that EF Core cannot map to a SQL parameter type. " +
+                       "This often happens with provider-specific value types (e.g. Pgvector.Vector for pgvector, " +
+                       "NetTopologySuite.Geometries.Point for spatial). Ensure the variable is typed explicitly in " +
+                       "the hovered expression, or assign it from a typed entity property.";
+            }
+
             return Failure(msg, sw.Elapsed, null, null);
         }
         finally
