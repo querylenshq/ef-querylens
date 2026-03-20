@@ -1,5 +1,4 @@
 using EFQueryLens.Core.Contracts;
-using EFQueryLens.Core.Contracts.Explain;
 using EFQueryLens.Core.Engine;
 using System.Collections;
 
@@ -542,18 +541,4 @@ public class QueryLensEngineTests
         Assert.Contains("Categories", snapshot.DbSetProperties);
     }
 
-    // ── ExplainAsync ──────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task ExplainAsync_ThrowsNotSupported()
-    {
-        await using var engine = CreateEngine();
-        await Assert.ThrowsAsync<NotSupportedException>(() =>
-            engine.ExplainAsync(new ExplainRequest
-            {
-                AssemblyPath     = GetSampleMySqlAppDll(),
-                Expression       = "db.Orders",
-                ConnectionString = "Server=localhost",
-            }));
-    }
 }

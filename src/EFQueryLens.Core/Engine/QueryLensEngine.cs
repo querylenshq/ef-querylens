@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Common;
 using EFQueryLens.Core.Contracts;
-using EFQueryLens.Core.Contracts.Explain;
 using EFQueryLens.Core.Scripting;
 using QueryEvaluator = EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator;
 
@@ -134,12 +133,6 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         LogTranslationTiming(fullPath, retryResult);
         return retryResult;
     }
-
-    public Task<ExplainResult> ExplainAsync(
-        ExplainRequest request, CancellationToken ct = default) =>
-        throw new NotSupportedException(
-            "ExplainAsync requires a live database connection and is deferred to Phase 2. " +
-            "Use TranslateAsync for offline SQL generation.");
 
     public Task<ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request, CancellationToken ct = default)

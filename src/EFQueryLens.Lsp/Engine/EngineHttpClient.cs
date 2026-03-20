@@ -2,7 +2,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EFQueryLens.Core.Contracts;
-using EFQueryLens.Core.Contracts.Explain;
 
 namespace EFQueryLens.Lsp.Engine;
 
@@ -64,14 +63,6 @@ internal sealed class EngineHttpClient : IQueryLensEngine, IEngineControl
         CancellationToken ct = default)
     {
         return await PostJsonAsync<ModelInspectionRequest, ModelSnapshot>("/inspect-model", request, ct);
-    }
-
-    public Task<ExplainResult> ExplainAsync(
-        ExplainRequest request,
-        CancellationToken ct = default)
-    {
-        throw new NotSupportedException(
-            "ExplainAsync requires a live database connection and is not implemented in engine server mode.");
     }
 
     // --- IEngineControl ---

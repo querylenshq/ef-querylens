@@ -1,5 +1,3 @@
-using EFQueryLens.Core.Contracts.Explain;
-
 namespace EFQueryLens.Core.Contracts;
 
 /// <summary>
@@ -14,14 +12,6 @@ public interface IQueryLensEngine : IAsyncDisposable
     /// </summary>
     Task<QueryTranslationResult> TranslateAsync(
         TranslationRequest request,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Runs EXPLAIN (ANALYZE) against a real database and returns the normalized plan.
-    /// Requires a live connection string.
-    /// </summary>
-    Task<ExplainResult> ExplainAsync(
-        ExplainRequest request,
         CancellationToken ct = default);
 
     /// <summary>

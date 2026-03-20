@@ -1,7 +1,6 @@
 using System.Reflection;
 using EFQueryLens.Core;
 using EFQueryLens.Core.Contracts;
-using EFQueryLens.Core.Contracts.Explain;
 using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Handlers;
 using EFQueryLens.Lsp.Services;
@@ -122,12 +121,6 @@ public class HoverHandlerDaemonEventTests
 
         public Task<QueryTranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct = default)
             => Task.FromResult(new QueryTranslationResult());
-
-        public Task<ExplainResult> ExplainAsync(ExplainRequest request, CancellationToken ct = default)
-            => Task.FromResult(new ExplainResult
-            {
-                Translation = new QueryTranslationResult(),
-            });
 
         public Task<ModelSnapshot> InspectModelAsync(ModelInspectionRequest request, CancellationToken ct = default)
             => Task.FromResult(new ModelSnapshot
