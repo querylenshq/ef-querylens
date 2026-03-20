@@ -103,7 +103,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
             min: 1,
             max: 16);
         _shadowCache = new ShadowAssemblyCache(_debugEnabled);
-        _shadowCache.ScheduleCleanupIfDue(force: true);
+        _shadowCache.RunStartupCleanup();
     }
 
     // ── IQueryLensEngine ──────────────────────────────────────────────────────
@@ -176,6 +176,5 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         _alcCache.Clear();
         _alcContextGates.Clear();
         await DisposeDbContextPoolAsync();
-        _shadowCache.CleanupIfDue(force: true);
     }
 }
