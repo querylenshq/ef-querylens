@@ -68,7 +68,6 @@ message TranslationMetadata {
   optional int32 compilation_retry_count = 9;
   optional int64 eval_assembly_load_time_ticks = 10;
   optional int64 runner_execution_time_ticks = 11;
-  optional int64 to_query_string_fallback_time_ticks = 12;
   bool has_client_evaluation = 13;
   string creation_strategy = 14;
 }

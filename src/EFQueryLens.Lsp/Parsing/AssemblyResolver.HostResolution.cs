@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace EFQueryLens.Lsp.Parsing;
@@ -176,7 +177,7 @@ public static partial class AssemblyResolver
             return null;
         }
 
-        // Step 4d: Among candidates, find one whose bin folder contains the library DLL.
+        // Step 4d: Among candidates, find one whose output contains the library DLL.
         // Prefer projects that explicitly contain a QueryLensDbContextFactory source file
         // (the user set them up as the QueryLens host) over projects that are merely
         // referencing the library for other purposes (e.g. data-migration workers).
@@ -186,30 +187,25 @@ public static partial class AssemblyResolver
         foreach (var (csprojPath, exeAssemblyName) in candidates)
         {
             var projDir = Path.GetDirectoryName(csprojPath)!;
-            var binDir = Path.Combine(projDir, "bin");
 
-            if (!Directory.Exists(binDir))
+            // Resolve all output paths for this host executable (bin glob + MSBuild fallback)
+            var hostDllPaths = FindProjectOutputDllPaths(csprojPath, exeAssemblyName, ref debugLog);
+            if (hostDllPaths.Count == 0)
             {
-                debugLog += $"  -> {exeAssemblyName}: bin dir does not exist\n";
-                continue;
-            }
-
-            // Look for the LIBRARY's DLL in the host's bin folder (proves it was built with the reference)
-            var libraryDlls = Directory.GetFiles(binDir, $"{libraryAssemblyName}.dll", SearchOption.AllDirectories);
-            if (libraryDlls.Length == 0)
-            {
-                debugLog += $"  -> {exeAssemblyName}: library DLL not found in bin\n";
+                debugLog += $"  -> {exeAssemblyName}: no output DLL found\n";
                 continue;
             }
 
             var hasFactory = HasQueryLensFactory(projDir);
 
-            foreach (var libraryDll in libraryDlls)
+            foreach (var hostDll in hostDllPaths)
             {
-                var tfmDir = Path.GetDirectoryName(libraryDll)!;
-                var hostDll = Path.Combine(tfmDir, $"{exeAssemblyName}.dll");
-                if (!File.Exists(hostDll))
+                // Verify the library DLL is co-located, proving this host was built with the reference
+                var tfmDir = Path.GetDirectoryName(hostDll)!;
+                var libraryDll = Path.Combine(tfmDir, $"{libraryAssemblyName}.dll");
+                if (!File.Exists(libraryDll))
                 {
+                    debugLog += $"  -> {exeAssemblyName}: host DLL found at {hostDll} but library DLL not alongside\n";
                     continue;
                 }
 
@@ -258,42 +254,102 @@ public static partial class AssemblyResolver
     }
 
     /// <summary>
-    /// Searches the bin directory of a project for a DLL matching the assembly name.
+    /// Returns all candidate output DLL paths for a project, trying the bin/ folder first
+    /// and falling back to an MSBuild TargetPath query for non-standard layouts such as
+    /// UseArtifactsOutput=true.
     /// </summary>
-    private static string? FindDllInBin(string projectDir, string assemblyName, ref string debugLog)
+    private static List<string> FindProjectOutputDllPaths(
+        string csprojPath,
+        string assemblyName,
+        ref string debugLog)
     {
+        var projectDir = Path.GetDirectoryName(csprojPath)!;
         var binDir = Path.Combine(projectDir, "bin");
-        debugLog += $"  -> Checking bin dir: {binDir}\n";
 
-        if (!Directory.Exists(binDir))
+        if (Directory.Exists(binDir))
         {
-            debugLog += "  -> EXCEPTION: bin directory does not exist.\n";
+            var dllFiles = Directory.GetFiles(binDir, $"{assemblyName}.dll", SearchOption.AllDirectories);
+            if (dllFiles.Length > 0)
+            {
+                debugLog += $"  -> Found {dllFiles.Length} bin candidate(s) for {assemblyName}\n";
+                return [.. dllFiles];
+            }
+
+            debugLog += $"  -> {assemblyName}: not found in bin dir, trying MSBuild\n";
+        }
+        else
+        {
+            debugLog += $"  -> {assemblyName}: bin dir does not exist, trying MSBuild\n";
+        }
+
+        var msBuildDll = TryResolveDllViaMsBuild(csprojPath, ref debugLog);
+        return msBuildDll is not null ? [msBuildDll] : [];
+    }
+
+    /// <summary>
+    /// Picks the single best DLL from a list of candidates using runtime-artifact presence,
+    /// ref/obj path detection, and last-write timestamp as tiebreakers.
+    /// </summary>
+    private static string? SelectBestDll(List<string> paths, ref string debugLog)
+    {
+        if (paths.Count == 0)
             return null;
-        }
 
-        var dllFiles = Directory.GetFiles(binDir, $"{assemblyName}.dll", SearchOption.AllDirectories);
-        if (dllFiles.Length > 0)
+        var selected = paths
+            .Select(path => new CandidateAssembly(
+                path,
+                File.GetLastWriteTimeUtc(path),
+                HasFactory: false,
+                HasRuntimeArtifacts: HasExecutableRuntimeArtifacts(path),
+                LooksLikeRefOrObj: LooksLikeRefOrObjPath(path)))
+            .OrderByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
+            .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
+            .ThenByDescending(x => x.TimestampUtc)
+            .First();
+
+        debugLog +=
+            $"  -> Selected {selected.DllPath} " +
+            $"(hasRuntimeArtifacts: {selected.HasRuntimeArtifacts}, looksLikeRefOrObj: {selected.LooksLikeRefOrObj}, timestamp: {selected.TimestampUtc:u})\n";
+
+        return selected.DllPath;
+    }
+
+    /// <summary>
+    /// Queries MSBuild for the TargetPath property of a project without triggering a build.
+    /// Handles non-standard output layouts such as UseArtifactsOutput=true.
+    /// </summary>
+    private static string? TryResolveDllViaMsBuild(string csprojPath, ref string debugLog)
+    {
+        try
         {
-            var selected = dllFiles
-                .Select(path => new CandidateAssembly(
-                    path,
-                    File.GetLastWriteTimeUtc(path),
-                    HasFactory: false,
-                    HasRuntimeArtifacts: HasExecutableRuntimeArtifacts(path),
-                    LooksLikeRefOrObj: LooksLikeRefOrObjPath(path)))
-                .OrderByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
-                .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
-                .ThenByDescending(x => x.TimestampUtc)
-                .First();
+            var psi = new ProcessStartInfo("dotnet")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add("build");
+            psi.ArgumentList.Add(csprojPath);
+            psi.ArgumentList.Add("-getProperty:TargetPath");
 
-            debugLog +=
-                $"  -> Selected {selected.DllPath} " +
-                $"(hasRuntimeArtifacts: {selected.HasRuntimeArtifacts}, looksLikeRefOrObj: {selected.LooksLikeRefOrObj}, timestamp: {selected.TimestampUtc:u})\n";
+            using var process = Process.Start(psi)!;
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            process.WaitForExit(15_000);
 
-            return selected.DllPath;
+            if (process.ExitCode == 0 && !string.IsNullOrEmpty(output) && File.Exists(output))
+            {
+                debugLog += $"  -> MSBuild TargetPath resolved: {output}\n";
+                return output;
+            }
+
+            debugLog += $"  -> MSBuild TargetPath query failed (exit: {process.ExitCode})\n";
+        }
+        catch (Exception ex)
+        {
+            debugLog += $"  -> MSBuild TargetPath exception: {ex.Message}\n";
         }
 
-        debugLog += $"  -> EXCEPTION: Searched for {assemblyName}.dll in {binDir} recursively but found 0 files.\n";
         return null;
     }
 

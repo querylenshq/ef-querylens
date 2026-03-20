@@ -73,6 +73,21 @@ public sealed partial class QueryEvaluator
             dbContextCreationWatch.Stop();
             TimeSpan? dbContextCreationTime = dbContextCreationWatch.Elapsed;
 
+            // 2b. If the expression contains Find/FindAsync, rewrite key args to default(PKType)
+            // using the EF model — avoids the ArgumentException on PK type mismatch.
+            if (ContainsFindInvocation(request.Expression))
+            {
+                var rewritten = TryRewriteFindExpression(request.Expression, dbInstance);
+                if (rewritten != null)
+                    request = request with { Expression = rewritten };
+                else
+                    return Failure(
+                        "DbSet.Find() and FindAsync() require the entity's primary key type from " +
+                        "the EF model, but the model lookup failed for this DbSet. " +
+                        "Use db.YourEntities.Where(e => e.Id == id).FirstOrDefault() instead.",
+                        sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+            }
+
             // 3. Build compilation assembly set and compute eval-runner cache key.
             var compilationAssemblies = BuildCompilationAssemblySet(alcCtx);
             var asmSetHash = ComputeAssemblySetHash(
@@ -273,7 +288,6 @@ public sealed partial class QueryEvaluator
             runnerExecutionWatch.Stop();
             TimeSpan? runnerExecutionTime = runnerExecutionWatch.Elapsed;
 
-            TimeSpan? toQueryStringFallbackTime = null;
             if (capturedCommands.Count > 0)
             {
                 commands = capturedCommands;
@@ -291,65 +305,8 @@ public sealed partial class QueryEvaluator
             }
             else
             {
-                if (!IsQueryable(queryable))
-                {
-                    return Failure(
-                        $"Expression did not return an IQueryable. Got: '{queryable?.GetType().Name ?? "null"}'.",
-                        sw.Elapsed,
-                        dbContextType,
-                        alcCtx.LoadedAssemblies);
-                }
-
-                var toQueryStringStopwatch = Stopwatch.StartNew();
-                var sql = TryToQueryString(queryable, alcCtx.LoadedAssemblies);
-                toQueryStringStopwatch.Stop();
-                toQueryStringFallbackTime = toQueryStringStopwatch.Elapsed;
-                if (sql is null)
-                {
-                    return Failure(
-                        captureSkipReason ?? captureError ?? "Could not generate SQL.",
-                        sw.Elapsed,
-                        dbContextType,
-                        alcCtx.LoadedAssemblies);
-                }
-
-                commands = [new QuerySqlCommand { Sql = sql, Parameters = ParseParameters(sql) }];
-
-                if (!string.IsNullOrWhiteSpace(captureSkipReason))
-                {
-                    warnings.Add(new QueryWarning
-                    {
-                        Severity = WarningSeverity.Info,
-                        Code = "QL_CAPTURE_SKIPPED",
-                        Message = "Could not install offline connection; used ToQueryString() instead.",
-                        Suggestion = captureSkipReason,
-                    });
-                }
-                else if (!string.IsNullOrWhiteSpace(captureError))
-                {
-                    warnings.Add(new QueryWarning
-                    {
-                        Severity = WarningSeverity.Warning,
-                        Code = "QL_CAPTURE_PARTIAL",
-                        Message = "Execution capture failed during materialization; used ToQueryString() instead.",
-                        Suggestion = captureError,
-                    });
-                }
-                else
-                {
-                    warnings.Add(new QueryWarning
-                    {
-                        Severity = WarningSeverity.Warning,
-                        Code = "QL_CAPTURE_FALLBACK",
-                        Message = "Execution capture produced no SQL; fell back to ToQueryString().",
-                    });
-                }
-            }
-
-            if (!IsQueryable(queryable))
-            {
                 return Failure(
-                    $"Expression did not return an IQueryable. Got: '{queryable?.GetType().Name ?? "null"}'.",
+                    captureSkipReason ?? captureError ?? "Offline capture produced no SQL commands.",
                     sw.Elapsed,
                     dbContextType,
                     alcCtx.LoadedAssemblies);
@@ -376,8 +333,7 @@ public sealed partial class QueryEvaluator
                 roslynCompilationTime,
                 compilationRetryCount,
                 evalAssemblyLoadTime,
-                runnerExecutionTime,
-                toQueryStringFallbackTime);
+                runnerExecutionTime);
 
             return new QueryTranslationResult
             {

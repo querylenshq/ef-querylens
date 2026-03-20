@@ -53,11 +53,6 @@ public static partial class GrpcMappingExtensions
             proto.RunnerExecutionTimeTicks = runnerExecution.Ticks;
         }
 
-        if (metadata.ToQueryStringFallbackTime is { } fallbackTime)
-        {
-            proto.ToQueryStringFallbackTimeTicks = fallbackTime.Ticks;
-        }
-
         return proto;
     }
 
@@ -91,9 +86,6 @@ public static partial class GrpcMappingExtensions
                 : null,
             RunnerExecutionTime = metadata.HasRunnerExecutionTimeTicks
                 ? TimeSpan.FromTicks(metadata.RunnerExecutionTimeTicks)
-                : null,
-            ToQueryStringFallbackTime = metadata.HasToQueryStringFallbackTimeTicks
-                ? TimeSpan.FromTicks(metadata.ToQueryStringFallbackTimeTicks)
                 : null,
             HasClientEvaluation = metadata.HasClientEvaluation,
             CreationStrategy = metadata.CreationStrategy,

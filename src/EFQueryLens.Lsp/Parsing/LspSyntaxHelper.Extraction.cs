@@ -38,43 +38,12 @@ public static partial class LspSyntaxHelper
         if (targetExpression == null)
             return null;
 
-        // We need the entire chain, so we walk to the top-most invocation/member access
-        // Example: db.Orders.Where(x).Select(y) -> We want the whole outer Invocation
-        while (targetExpression.Parent is MemberAccessExpressionSyntax ||
-               targetExpression.Parent is InvocationExpressionSyntax)
+        // Walk to the topmost invocation/member access, including any terminal call
+        // (Count, ToList, FirstOrDefaultAsync, ExecuteDeleteAsync, etc.) so the engine
+        // receives the exact expression the app runs and generates the real SQL.
+        while (targetExpression.Parent is MemberAccessExpressionSyntax or InvocationExpressionSyntax)
         {
-            if (targetExpression.Parent is MemberAccessExpressionSyntax m)
-            {
-                if (TerminalMethods.Contains(m.Name.Identifier.Text))
-                {
-                    break;
-                }
-            }
-
             targetExpression = (ExpressionSyntax)targetExpression.Parent;
-        }
-
-        // Post-process: strip any trailing terminal method calls from the result.
-        // This handles hovering directly over a terminal keyword (e.g. "ToList"):
-        //   db.Orders.Where(...).ToList()  ->  db.Orders.Where(...)
-        // The while loop above only guards upward traversal; this handles the case
-        // where the starting node is already the outermost terminal invocation.
-        while (targetExpression is InvocationExpressionSyntax terminalInvocation &&
-               terminalInvocation.Expression is MemberAccessExpressionSyntax terminalAccess &&
-               TerminalMethods.Contains(terminalAccess.Name.Identifier.Text))
-        {
-            if (TryRewriteTerminalInvocation(
-                    terminalAccess.Expression,
-                    terminalAccess.Name.Identifier.Text,
-                    terminalInvocation.ArgumentList.Arguments,
-                    terminalInvocation,
-                    out var rewritten))
-            {
-                targetExpression = rewritten;
-                continue;
-            }
-
-            targetExpression = terminalAccess.Expression;
         }
 
         // Inline local IQueryable variables for non-terminal chains too, so

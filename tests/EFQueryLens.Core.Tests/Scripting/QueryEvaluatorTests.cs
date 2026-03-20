@@ -616,12 +616,33 @@ public class QueryEvaluatorTests : IDisposable
     [Fact]
     public async Task Evaluate_MissingCancellationToken_InAsyncTerminal_IsSynthesized()
     {
+        // SingleOrDefaultAsync(ct) — ct is synthesized, Task<Order?> is unwrapped by UnwrapTask,
+        // and the offline capture scope records the SQL generated during execution.
         var result = await TranslateAsync("db.Orders.SingleOrDefaultAsync(ct)");
 
-        Assert.False(result.Success);
-        Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("IQueryable", result.ErrorMessage, StringComparison.Ordinal);
-        Assert.DoesNotContain("Compilation error", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_FindCall_RewritesPkTypeAndReturnsSql()
+    {
+        // Find(someId) — key arg is rewritten to Find(default(int)) via EF model PK lookup.
+        var result = await TranslateAsync("db.Orders.Find(someId)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+    }
+
+    [Fact]
+    public async Task Evaluate_FindAsyncCall_RewritesPkTypeAndReturnsSql()
+    {
+        // FindAsync(someId) — rewritten to FindAsync(default(int), default(CancellationToken)).
+        var result = await TranslateAsync("db.Orders.FindAsync(someId)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
     }
 
     [Fact]
@@ -738,11 +759,14 @@ public sealed class C
     [Fact]
     public async Task Evaluate_NonQueryableExpression_ReturnsFailure()
     {
+        // A literal integer produces no SQL — capture records zero commands, so the
+        // engine returns a hard failure.  The old "did not return an IQueryable" guard
+        // was removed; the new message reflects that no SQL was captured at all.
         var result = await TranslateAsync("42");
 
         Assert.False(result.Success);
         Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("IQueryable", result.ErrorMessage);
+        Assert.Contains("no SQL commands", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

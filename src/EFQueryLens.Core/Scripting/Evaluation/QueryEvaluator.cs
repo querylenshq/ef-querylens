@@ -73,8 +73,7 @@ public sealed partial class QueryEvaluator
         TimeSpan? RoslynCompilation,
         int CompilationRetryCount,
         TimeSpan? EvalAssemblyLoad,
-        TimeSpan? RunnerExecution,
-        TimeSpan? ToQueryStringFallback);
+        TimeSpan? RunnerExecution);
 
     internal void InvalidateMetadataRefCache(string assemblyPath)
     {

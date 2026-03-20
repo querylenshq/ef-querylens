@@ -13,7 +13,6 @@ public sealed record TranslationMetadata
     public int? CompilationRetryCount { get; init; }
     public TimeSpan? EvalAssemblyLoadTime { get; init; }
     public TimeSpan? RunnerExecutionTime { get; init; }
-    public TimeSpan? ToQueryStringFallbackTime { get; init; }
 
     /// <summary>
     /// True when EF Core silently evaluated part of the query on the client.
