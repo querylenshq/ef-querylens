@@ -154,7 +154,7 @@ public sealed partial class QueryEvaluator
                     if (hardErrors.Count > 0)
                     {
                         return Failure(
-                            $"Compilation error: {string.Join("; ", hardErrors.Select(d => d.GetMessage()))}",
+                            $"Compilation error: {FormatHardDiagnostics(hardErrors)}",
                             sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
                     }
 
@@ -164,7 +164,7 @@ public sealed partial class QueryEvaluator
                     if (maxRetries-- <= 0)
                     {
                         return Failure(
-                            $"Compilation error (too many retries): {string.Join("; ", errors.Select(d => d.GetMessage()))}",
+                            $"Compilation error: {FormatSoftDiagnostics(errors)}",
                             sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
                     }
 
@@ -242,7 +242,7 @@ public sealed partial class QueryEvaluator
                     if (!changed)
                     {
                         return Failure(
-                            $"Compilation error: {string.Join("; ", errors.Select(d => d.GetMessage()))}",
+                            $"Compilation error: {FormatSoftDiagnostics(errors)}",
                             sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
                     }
                 }
@@ -258,7 +258,7 @@ public sealed partial class QueryEvaluator
                     if (!emitResult.Success)
                     {
                         return Failure(
-                            $"Emit error: {string.Join("; ", emitResult.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.GetMessage()))}",
+                            $"Emit error: {FormatHardDiagnostics(emitResult.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))}",
                             sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
                     }
 
