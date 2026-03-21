@@ -87,11 +87,7 @@ internal static class Program
         {
             lastActivity = DateTime.UtcNow;
 
-            var cacheKey = ComputeCacheKey(
-                request.Expression,
-                request.AssemblyPath,
-                request.DbContextTypeName ?? "",
-                request.ContextVariableName);
+            var cacheKey = ComputeCacheKey(request);
 
             if (cache.TryGetValue<QueryTranslationResult>(cacheKey, out var cached) && cached is not null)
             {
@@ -121,6 +117,36 @@ internal static class Program
 
             lastActivity = DateTime.UtcNow;
             return Results.Ok(result);
+        });
+
+        // POST /translate/warm
+        // Returns 202 immediately; starts a background translation so hover can hit cache.
+        // Uses the same inflight dict as /translate — deduplicates concurrent requests naturally.
+        app.MapPost("/translate/warm", (TranslationRequest request) =>
+        {
+            lastActivity = DateTime.UtcNow;
+            var cacheKey = ComputeCacheKey(request);
+
+            if (cache.TryGetValue<QueryTranslationResult>(cacheKey, out _))
+            {
+                // Already cached — nothing to do.
+                return Results.Accepted();
+            }
+
+            inflight.GetOrAdd(
+                cacheKey,
+                key => new Lazy<Task<QueryTranslationResult>>(
+                    () => Task.Run(async () =>
+                    {
+                        var r = await engine.TranslateAsync(request, CancellationToken.None);
+                        if (r.Success)
+                            cache.Set(key, r, TimeSpan.FromSeconds(60));
+                        inflight.TryRemove(key, out _);
+                        return r;
+                    }),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            return Results.Accepted();
         });
 
         // POST /inspect-model
@@ -270,12 +296,25 @@ internal static class Program
     }
 
     /// <summary>
-    /// Returns the first 16 hex characters of the SHA256 of the combined translation request key fields.
+    /// Returns the first 16 hex characters of the SHA256 of all <see cref="TranslationRequest"/> fields
+    /// that affect the compiled eval assembly or its stub declarations.
     /// </summary>
-    private static string ComputeCacheKey(string expression, string assemblyPath, string dbContextTypeName, string contextVariableName)
+    private static string ComputeCacheKey(TranslationRequest r)
     {
-        var raw = expression + assemblyPath + dbContextTypeName + contextVariableName;
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        var sb = new StringBuilder();
+        sb.Append(r.Expression).Append('\0');
+        sb.Append(r.AssemblyPath ?? string.Empty).Append('\0');
+        sb.Append(r.DbContextTypeName ?? string.Empty).Append('\0');
+        sb.Append(r.ContextVariableName).Append('\0');
+        foreach (var ns in r.AdditionalImports.OrderBy(x => x, StringComparer.Ordinal))
+            sb.Append(ns).Append('\0');
+        foreach (var kv in r.UsingAliases.OrderBy(x => x.Key, StringComparer.Ordinal))
+            sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
+        foreach (var st in r.UsingStaticTypes.OrderBy(x => x, StringComparer.Ordinal))
+            sb.Append(st).Append('\0');
+        foreach (var kv in r.LocalVariableTypes.OrderBy(x => x.Key, StringComparer.Ordinal))
+            sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
         return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
     }
 }

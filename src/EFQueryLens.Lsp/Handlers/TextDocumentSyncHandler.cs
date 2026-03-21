@@ -1,3 +1,4 @@
+using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 
 namespace EFQueryLens.Lsp.Handlers;
@@ -5,17 +6,20 @@ namespace EFQueryLens.Lsp.Handlers;
 internal sealed class TextDocumentSyncHandler
 {
     private readonly DocumentManager _documentManager;
+    private readonly TranslationPrewarmService? _prewarm;
 
-    public TextDocumentSyncHandler(DocumentManager documentManager)
+    public TextDocumentSyncHandler(DocumentManager documentManager, TranslationPrewarmService? prewarm = null)
     {
         _documentManager = documentManager;
+        _prewarm = prewarm;
     }
 
     public void DidOpen(DidOpenTextDocumentParams request)
     {
-        _documentManager.UpdateDocument(
-            request.TextDocument.Uri.ToString(),
-            request.TextDocument.Text ?? string.Empty);
+        var text = request.TextDocument.Text ?? string.Empty;
+        var uriString = request.TextDocument.Uri.ToString();
+        _documentManager.UpdateDocument(uriString, text);
+        _prewarm?.WarmDocument(UriToFilePath(uriString), text);
     }
 
     public void DidChange(DidChangeTextDocumentParams request)
@@ -41,6 +45,20 @@ internal sealed class TextDocumentSyncHandler
             return;
         }
 
-        _documentManager.UpdateDocument(request.TextDocument.Uri.ToString(), request.Text);
+        var uriString = request.TextDocument.Uri.ToString();
+        _documentManager.UpdateDocument(uriString, request.Text);
+        _prewarm?.WarmDocument(UriToFilePath(uriString), request.Text);
+    }
+
+    private static string UriToFilePath(string uriString)
+    {
+        try
+        {
+            return Uri.TryCreate(uriString, UriKind.Absolute, out var uri) ? uri.LocalPath : uriString;
+        }
+        catch
+        {
+            return uriString;
+        }
     }
 }

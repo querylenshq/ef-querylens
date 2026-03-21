@@ -13,6 +13,7 @@ internal interface IEngineControl
     Task PingAsync(CancellationToken ct = default);
     Task RestartAsync(CancellationToken ct = default);
     Task InvalidateCacheAsync(CancellationToken ct = default);
+    Task WarmTranslateAsync(TranslationRequest request, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -103,6 +104,19 @@ internal sealed class EngineHttpClient : IQueryLensEngine, IEngineControl
     {
         var response = await _httpClient.PostAsync("/invalidate", content: null, ct);
         response.EnsureSuccessStatusCode();
+    }
+
+    public async Task WarmTranslateAsync(TranslationRequest request, CancellationToken ct = default)
+    {
+        try
+        {
+            await _httpClient.PostAsJsonAsync("/translate/warm", request, EngineJsonOptions.Default, ct);
+            // Ignore response — 202 is success, anything else is best-effort.
+        }
+        catch
+        {
+            // Best-effort — engine may still be starting up; pre-warm is not critical.
+        }
     }
 
     // --- IAsyncDisposable ---
