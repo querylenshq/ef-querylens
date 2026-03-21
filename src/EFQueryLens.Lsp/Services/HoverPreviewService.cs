@@ -3,6 +3,10 @@ using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Lsp.Services;
 
+internal sealed record CombinedHoverResult(
+    HoverPreviewComputationResult Markdown,
+    QueryLensStructuredHoverResult Structured);
+
 internal sealed record HoverPreviewComputationResult(
     bool Success,
     string Output,

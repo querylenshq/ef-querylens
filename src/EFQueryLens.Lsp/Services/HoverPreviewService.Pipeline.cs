@@ -160,6 +160,33 @@ internal sealed partial class HoverPreviewService
         }
     }
 
+    internal async Task<CombinedHoverResult> BuildCombinedAsync(
+        string filePath,
+        string sourceText,
+        int line,
+        int character,
+        CancellationToken cancellationToken)
+    {
+        Action<string> log = message => LogDebug($"combined {message}");
+        var canonical = await BuildCanonicalAsync(
+            filePath,
+            sourceText,
+            line,
+            character,
+            cancellationToken,
+            log);
+
+        var markdown = FormatMarkdown(canonical, filePath, line, character);
+        var structured = FormatStructured(canonical, filePath);
+
+        if (markdown.Success && markdown.Status is QueryTranslationStatus.Ready)
+        {
+            LogDebug($"combined hover-ready line={line} char={character} markdownLen={markdown.Output.Length}");
+        }
+
+        return new CombinedHoverResult(markdown, structured);
+    }
+
     private async Task<QueuedTranslationResult> TranslateQueuedOrImmediateAsync(
         TranslationRequest request,
         CancellationToken cancellationToken)

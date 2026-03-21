@@ -12,13 +12,6 @@ internal sealed partial class HoverPreviewService
         int character,
         CancellationToken cancellationToken)
     {
-        static QueryLensStructuredHoverResult Fail(
-            string msg,
-            QueryTranslationStatus status = QueryTranslationStatus.Ready,
-            double avgTranslationMs = 0,
-            double lastTranslationMs = 0) =>
-            new(false, msg, [], 0, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs, lastTranslationMs);
-
         Action<string> log = message => LogDebug($"structured {message}");
         var canonical = await BuildCanonicalAsync(
             filePath,
@@ -27,6 +20,20 @@ internal sealed partial class HoverPreviewService
             character,
             cancellationToken,
             log);
+
+        return FormatStructured(canonical, filePath);
+    }
+
+    private QueryLensStructuredHoverResult FormatStructured(
+        HoverCanonicalComputationResult canonical,
+        string filePath)
+    {
+        static QueryLensStructuredHoverResult Fail(
+            string msg,
+            QueryTranslationStatus status = QueryTranslationStatus.Ready,
+            double avgTranslationMs = 0,
+            double lastTranslationMs = 0) =>
+            new(false, msg, [], 0, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs, lastTranslationMs);
 
         if (canonical.Status is not QueryTranslationStatus.Ready && canonical.Success)
         {
@@ -70,7 +77,6 @@ internal sealed partial class HoverPreviewService
             providerName: canonical.Metadata?.ProviderName,
             warnings: canonical.Warnings);
 
-        LogDebug($"structured hover-ready line={line} char={character} commands={canonical.Commands.Count}");
         return new QueryLensStructuredHoverResult(
             Success: true,
             ErrorMessage: null,
