@@ -34,22 +34,27 @@ dependencies {
 
 val bundledRuntimeOutputDir = layout.buildDirectory.dir("generated/querylens-runtime")
 
-fun resolveRuntimeBuildDir(projectName: String, requiredFileName: String): File {
+fun resolveRuntimeBuildDir(
+    projectName: String,
+    requiredFileName: String,
+): File {
     val releaseDir = projectDir.resolve("../../../src/$projectName/bin/Release/net10.0")
     val debugDir = projectDir.resolve("../../../src/$projectName/bin/Debug/net10.0")
 
-    val candidates = listOf(releaseDir, debugDir)
-        .map { it.resolve(requiredFileName) }
-        .filter { it.exists() }
+    val candidates =
+        listOf(releaseDir, debugDir)
+            .map { it.resolve(requiredFileName) }
+            .filter { it.exists() }
 
     if (candidates.isNotEmpty()) {
-        val newest = candidates.maxByOrNull { it.lastModified() }
-            ?: throw GradleException("Unable to select runtime artifact for $projectName/$requiredFileName.")
+        val newest =
+            candidates.maxByOrNull { it.lastModified() }
+                ?: throw GradleException("Unable to select runtime artifact for $projectName/$requiredFileName.")
         return newest.parentFile
     }
 
     throw GradleException(
-        "Could not find $requiredFileName for $projectName. Build $projectName first (Debug or Release, net10.0)."
+        "Could not find $requiredFileName for $projectName. Build $projectName first (Debug or Release, net10.0).",
     )
 }
 
@@ -97,7 +102,11 @@ tasks {
         environment("QUERYLENS_DEBUG", "true")
         environment("QUERYLENS_FORCE_CODELENS", "true")
         // Point at built runtime so runIde finds LSP/daemon even when sandbox layout differs from plugin root
-        val runtimeDir = layout.buildDirectory.dir("generated/querylens-runtime").get().asFile
+        val runtimeDir =
+            layout.buildDirectory
+                .dir("generated/querylens-runtime")
+                .get()
+                .asFile
         environment("QUERYLENS_LSP_DLL", runtimeDir.resolve("server/EFQueryLens.Lsp.dll").absolutePath)
         environment("QUERYLENS_DAEMON_EXE", runtimeDir.resolve("daemon/EFQueryLens.Daemon.exe").absolutePath)
         environment("QUERYLENS_DAEMON_DLL", runtimeDir.resolve("daemon/EFQueryLens.Daemon.dll").absolutePath)

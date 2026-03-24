@@ -38,6 +38,7 @@ internal sealed partial class HoverPreviewService
 {
     private readonly IQueryLensEngine _engine;
     private readonly bool _useBrowserSafeHoverActionLinks;
+    private readonly int _actionPort;
     private bool _debugEnabled;
 
     public HoverPreviewService(IQueryLensEngine engine, bool debugEnabled = false)
@@ -47,6 +48,9 @@ internal sealed partial class HoverPreviewService
             Environment.GetEnvironmentVariable("QUERYLENS_CLIENT"),
             "rider",
             StringComparison.OrdinalIgnoreCase);
+        _actionPort = int.TryParse(
+            Environment.GetEnvironmentVariable("QUERYLENS_ACTION_PORT"),
+            out var port) ? port : 0;
         _debugEnabled = debugEnabled;
     }
 

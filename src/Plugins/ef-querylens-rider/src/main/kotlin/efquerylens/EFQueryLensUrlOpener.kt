@@ -26,22 +26,19 @@ import javax.swing.JScrollPane
 import javax.swing.JTextArea
 
 class EFQueryLensUrlOpener : UrlOpener() {
-    private companion object {
-        private const val BrowserSafeHost = "efquerylens.local"
-    }
 
-    private data class StructuredStatement(
+    internal data class StructuredStatement(
         val sql: String,
         val splitLabel: String?,
     )
 
-    private data class StructuredSqlPreview(
+    internal data class StructuredSqlPreview(
         val title: String,
         val subtitle: String,
         val statusCode: Int,
         val statusText: String,
         val statusMessage: String?,
-        val translationMs: Double,
+        val avgTranslationMs: Double,
         val sqlText: String,
         val warnings: List<String>,
     )
@@ -53,39 +50,23 @@ class EFQueryLensUrlOpener : UrlOpener() {
     )
 
     override fun openUrl(browser: WebBrowser, url: String, project: Project?): Boolean {
-        if (!isQueryLensActionUrl(url)) {
-            return false
-        }
-
-        return handleQueryLensActionUrl(url, project)
-    }
-
-    internal fun handleQueryLensActionUrl(url: String, project: Project?): Boolean {
-        if (!isQueryLensActionUrl(url)) {
+        thisLogger().info("[EFQueryLens] UrlOpener.openUrl called url=${url.take(120)}")
+        if (!url.startsWith("efquerylens://", ignoreCase = true)) {
             return false
         }
 
         val uri = runCatching { URI(url) }.getOrNull() ?: return true
-        val command = extractCommand(uri) ?: return true
+        val host = uri.host?.lowercase() ?: return true
+        if (host != "copysql" && host != "opensqleditor" && host != "recalculate") return true
 
         val params = parseQueryParams(uri.rawQuery ?: "")
-        val fileUri = params["uri"]
-        if (fileUri.isNullOrBlank()) {
-            thisLogger().warn("[EFQueryLens] URL opener missing uri parameter for command=$command")
-            return true
-        }
+        val fileUri = params["uri"] ?: return true
         val line = params["line"]?.toIntOrNull() ?: 0
         val character = params["character"]?.toIntOrNull() ?: 0
 
-        val effectiveProject = resolveProject(project, fileUri)
-        if (effectiveProject == null) {
-            thisLogger().warn("[EFQueryLens] URL opener could not resolve project for command=$command uri=$fileUri")
-            return true
-        }
+        val effectiveProject = project ?: ProjectManager.getInstance().openProjects.firstOrNull() ?: return true
 
-        thisLogger().info("[EFQueryLens] URL opener command=$command uri=$fileUri line=$line char=$character")
-
-        if (command == "recalculate") {
+        if (host == "recalculate") {
             requestPreviewRecalculate(effectiveProject, fileUri, line, character)
             return true
         }
@@ -93,10 +74,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 val preview = buildStructuredPreview(effectiveProject, fileUri, line, character)
-                if (preview == null) {
-                    showStatusMessage(effectiveProject, 3, "EF QueryLens could not fetch SQL for this location. Try hovering once and retry.")
-                    return@executeOnPooledThread
-                }
+                    ?: return@executeOnPooledThread
 
                 if (preview.statusCode != 0 || preview.sqlText.isBlank()) {
                     val message = preview.statusMessage
@@ -106,92 +84,19 @@ class EFQueryLensUrlOpener : UrlOpener() {
                     return@executeOnPooledThread
                 }
 
-                when (command) {
+                when (host) {
                     "copysql" -> CopyPasteManager.getInstance().setContents(StringSelection(preview.sqlText))
                     "opensqleditor" -> openInPreviewDialog(effectiveProject, preview)
                 }
             } catch (e: Exception) {
-                thisLogger().warn("[EFQueryLens] URL opener failed for command=$command", e)
+                thisLogger().warn("[EFQueryLens] URL opener failed for host=$host", e)
             }
         }
 
         return true
     }
 
-    private fun extractCommand(uri: URI): String? {
-        val host = uri.host?.trim()?.lowercase()?.trimEnd('/')
-        val path = uri.path
-            ?.trim()
-            ?.trim('/')
-            ?.lowercase()
-            ?.trimEnd('/')
-
-        val isLegacyScheme = uri.scheme.equals("efquerylens", ignoreCase = true)
-        val raw = when {
-            isLegacyScheme && !host.isNullOrBlank() -> host
-            !path.isNullOrBlank() -> path
-            !host.isNullOrBlank() -> host
-            else -> null
-        } ?: return null
-
-        return when (raw) {
-            "copysql", "copy" -> "copysql"
-            "opensqleditor", "opensql", "open" -> "opensqleditor"
-            "recalculate", "reanalyze", "reanalyse" -> "recalculate"
-            else -> null
-        }
-    }
-
-    private fun isQueryLensActionUrl(url: String): Boolean {
-        if (url.startsWith("efquerylens://", ignoreCase = true)) {
-            return true
-        }
-
-        val uri = runCatching { URI(url) }.getOrNull() ?: return false
-        val isHttp = uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)
-        return isHttp && uri.host.equals(BrowserSafeHost, ignoreCase = true)
-    }
-
-    private fun resolveProject(project: Project?, fileUri: String): Project? {
-        if (project != null && !project.isDisposed) {
-            return project
-        }
-
-        val openProjects = ProjectManager.getInstance().openProjects.filter { !it.isDisposed }
-        if (openProjects.isEmpty()) {
-            return null
-        }
-
-        val normalizedFilePath = runCatching { URI(fileUri).path }
-            .getOrNull()
-            ?.replace('\\', '/')
-            ?.trimEnd('/')
-
-        if (!normalizedFilePath.isNullOrBlank()) {
-            val match = openProjects
-                .mapNotNull { current ->
-                    val basePath = current.basePath?.replace('\\', '/')?.trimEnd('/')
-                    if (basePath.isNullOrBlank()) {
-                        null
-                    } else {
-                        current to basePath
-                    }
-                }
-                .filter { (_, basePath) ->
-                    normalizedFilePath.startsWith(basePath, ignoreCase = true)
-                }
-                .maxByOrNull { (_, basePath) -> basePath.length }
-                ?.first
-
-            if (match != null) {
-                return match
-            }
-        }
-
-        return openProjects.firstOrNull()
-    }
-
-    private fun requestPreviewRecalculate(project: Project, fileUri: String, line: Int, character: Int) {
+    internal fun requestPreviewRecalculate(project: Project, fileUri: String, line: Int, character: Int) {
         val server = LspServerManager.getInstance(project)
             .getServersForProvider(EFQueryLensLspServerSupportProvider::class.java)
             .firstOrNull() ?: return
@@ -219,7 +124,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
         }
     }
 
-    private fun buildStructuredPreview(project: Project, fileUri: String, line: Int, character: Int): StructuredSqlPreview? {
+    internal fun buildStructuredPreview(project: Project, fileUri: String, line: Int, character: Int): StructuredSqlPreview? {
         val server = LspServerManager.getInstance(project)
             .getServersForProvider(EFQueryLensLspServerSupportProvider::class.java)
             .firstOrNull() ?: return null
@@ -244,7 +149,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun extractStructuredPreview(response: Any?, fallbackFileUri: String, fallbackLine: Int): StructuredSqlPreview? {
+    internal fun extractStructuredPreview(response: Any?, fallbackFileUri: String, fallbackLine: Int): StructuredSqlPreview? {
         val root = response as? Map<String, Any?> ?: return null
         val hover = root["hover"] as? Map<String, Any?> ?: return null
 
@@ -276,7 +181,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
                 statusCode = status,
                 statusText = toStatusText(status),
                 statusMessage = statusMessage ?: "No SQL preview available at this location.",
-                translationMs = 0.0,
+                avgTranslationMs = 0.0,
                 sqlText = "",
                 warnings = warnings,
             )
@@ -312,9 +217,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
             }
         }
 
-        val lastTranslationMs = (hover["LastTranslationMs"] as? Number)?.toDouble() ?: 0.0
         val avgTranslationMs = (hover["AvgTranslationMs"] as? Number)?.toDouble() ?: 0.0
-        val effectiveTranslationMs = if (lastTranslationMs > 0) lastTranslationMs else avgTranslationMs
 
         return StructuredSqlPreview(
             title = title,
@@ -322,7 +225,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
             statusCode = status,
             statusText = statusText,
             statusMessage = statusMessage,
-            translationMs = effectiveTranslationMs,
+            avgTranslationMs = avgTranslationMs,
             sqlText = sqlText ?: "",
             warnings = warnings,
         )
@@ -356,7 +259,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
         else -> "EF QueryLens queued this query and is still processing it."
     }
 
-    private fun showStatusMessage(project: Project, statusCode: Int, message: String) {
+    internal fun showStatusMessage(project: Project, statusCode: Int, message: String) {
         ApplicationManager.getApplication().invokeLater {
             if (statusCode == 3) {
                 com.intellij.openapi.ui.Messages.showWarningDialog(project, message, "EF QueryLens")
@@ -366,7 +269,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
         }
     }
 
-    private fun openInPreviewDialog(project: Project, preview: StructuredSqlPreview) {
+    internal fun openInPreviewDialog(project: Project, preview: StructuredSqlPreview) {
         ApplicationManager.getApplication().invokeLater {
             SqlPreviewDialog(project, preview).show()
         }
@@ -413,8 +316,8 @@ class EFQueryLensUrlOpener : UrlOpener() {
                 background = palette.background
             }
 
-            val avgText = if (preview.translationMs > 0) {
-                "SQL generation time ${preview.translationMs.toInt()} ms"
+            val avgText = if (preview.avgTranslationMs > 0) {
+                "avg ${preview.avgTranslationMs.toInt()} ms"
             } else {
                 ""
             }

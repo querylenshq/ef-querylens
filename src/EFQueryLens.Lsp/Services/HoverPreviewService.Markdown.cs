@@ -60,7 +60,8 @@ internal sealed partial class HoverPreviewService
             character,
             canonical.Metadata,
             canonical.LastTranslationMs > 0 ? canonical.LastTranslationMs : canonical.AvgTranslationMs,
-            _useBrowserSafeHoverActionLinks);
+            _useBrowserSafeHoverActionLinks,
+            _actionPort);
 
         return new HoverPreviewComputationResult(
             true,

@@ -46,7 +46,8 @@ internal sealed partial class HoverPreviewService
         int character,
         TranslationMetadata? metadata,
         double avgTranslationMs = 0,
-        bool useBrowserSafeActionLinks = false)
+        bool useBrowserSafeActionLinks = false,
+        int actionPort = 0)
     {
         var providerName = metadata?.ProviderName;
         var statements = BuildFormattedStatements(commands, providerName);
@@ -57,23 +58,27 @@ internal sealed partial class HoverPreviewService
 
         var queryParams = $"uri={Uri.EscapeDataString(uri)}&line={line}&character={character}";
         string copyUrl, openUrl, recalculateUrl;
-        if (useBrowserSafeActionLinks)
+        if (actionPort > 0)
         {
+            // Rider: use localhost HTTP links that JCEF handles natively as HTTP requests,
+            // bypassing the OS shell that would show "Get an app" for unknown URI schemes.
+            var base_ = $"http://127.0.0.1:{actionPort}/efquerylens/action";
+            copyUrl = $"{base_}?type=copysql&{queryParams}";
+            openUrl = $"{base_}?type=opensqleditor&{queryParams}";
+            recalculateUrl = $"{base_}?type=recalculate&{queryParams}";
+        }
+        else
+        {
+            // VS Code and others: efquerylens:// custom scheme handled by the extension.
             copyUrl = $"efquerylens://copysql?{queryParams}";
             openUrl = $"efquerylens://opensqleditor?{queryParams}";
             recalculateUrl = $"efquerylens://recalculate?{queryParams}";
         }
-        else
-        {
-            copyUrl = $"efquerylens://copySql?{queryParams}";
-            openUrl = $"efquerylens://openSqlEditor?{queryParams}";
-            recalculateUrl = $"efquerylens://recalculate?{queryParams}";
-        }
+
         var copyLink = $"[Copy SQL]({copyUrl})";
         var openLink = $"[Open SQL]({openUrl})";
         var recalculateLink = $"[Reanalyze]({recalculateUrl})";
 
-        // Plain Markdown only (no HTML entities) so VS Code, VS, and Rider all render the same.
         var header = $"**EF QueryLens** · {commands.Count} {statementWord}";
         var actionsRow = $"{copyLink} | {openLink} | {recalculateLink}";
         var timingLine = avgTranslationMs > 0

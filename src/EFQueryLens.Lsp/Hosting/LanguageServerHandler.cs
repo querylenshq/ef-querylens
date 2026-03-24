@@ -135,6 +135,10 @@ internal sealed partial class LanguageServerHandler
                     ["save"] = new JObject { ["includeText"] = true },
                 },
                 ["hoverProvider"] = enableLspHover,
+                ["codeLensProvider"] = new JObject
+                {
+                    ["resolveProvider"] = false
+                },
                 ["executeCommandProvider"] = new JObject
                 {
                     ["commands"] = new JArray(
