@@ -1,5 +1,7 @@
 package efquerylens
 
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.ide.CopyPasteManager
@@ -51,9 +53,34 @@ internal class EFQueryLensActionServer {
                     val line = params["line"]?.toIntOrNull() ?: 0
                     val character = params["character"]?.toIntOrNull() ?: 0
 
-                    // Respond with 204 before doing any work so JCEF does not
-                    // stay in a "loading" state waiting for the body.
-                    exchange.sendResponseHeaders(204, -1)
+                    // Respond immediately with a self-closing page.  The system
+                    // browser opens the localhost URL (JCEF hands http:// links to the
+                    // OS shell).  window.close() closes the tab in most browsers; the
+                    // styled fallback message is shown only if the browser blocks it.
+                    val body =
+                        """
+                        <html>
+                        <head>
+                        <style>
+                          body{font-family:system-ui,sans-serif;display:flex;align-items:center;
+                               justify-content:center;height:100vh;margin:0;background:#1e1e1e;color:#ccc}
+                          .msg{text-align:center;padding:2rem}
+                          .title{font-size:1.1rem;font-weight:600;color:#4ec9b0;margin-bottom:.5rem}
+                          .sub{font-size:.85rem;opacity:.7}
+                        </style>
+                        <script>window.close();</script>
+                        </head>
+                        <body>
+                          <div class="msg">
+                            <div class="title">✓ EF QueryLens action completed</div>
+                            <div class="sub">You can close this tab.</div>
+                          </div>
+                        </body>
+                        </html>
+                        """.trimIndent().toByteArray(Charsets.UTF_8)
+                    exchange.responseHeaders["Content-Type"] = listOf("text/html; charset=utf-8")
+                    exchange.sendResponseHeaders(200, body.size.toLong())
+                    exchange.responseBody.use { it.write(body) }
                     exchange.close()
 
                     thisLogger().info(
@@ -148,10 +175,21 @@ internal class EFQueryLensActionServer {
                     "copysql" -> {
                         CopyPasteManager.getInstance().setContents(StringSelection(preview.sqlText))
                         thisLogger().info("[EFQueryLens] ActionServer: copied ${preview.sqlText.length} chars to clipboard")
+                        ApplicationManager.getApplication().invokeLater {
+                            val notification =
+                                NotificationGroupManager
+                                    .getInstance()
+                                    .getNotificationGroup("EF QueryLens")
+                                    ?.createNotification(
+                                        "SQL copied to clipboard",
+                                        NotificationType.INFORMATION,
+                                    )
+                            notification?.notify(project)
+                        }
                     }
                     "opensqleditor" -> {
-                        opener.openInPreviewDialog(project, preview)
-                        thisLogger().info("[EFQueryLens] ActionServer: opened SQL preview dialog")
+                        opener.openSqlInEditor(project, preview)
+                        thisLogger().info("[EFQueryLens] ActionServer: opened SQL in editor")
                     }
                 }
             }

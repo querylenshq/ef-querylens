@@ -6,26 +6,19 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
-import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.platform.lsp.api.LspServerManager
-import com.intellij.ui.JBColor
 import org.eclipse.lsp4j.ExecuteCommandParams
-import java.awt.BorderLayout
-import java.awt.Color
-import java.awt.Dimension
-import java.awt.Font
 import java.awt.datatransfer.StringSelection
+import java.io.File
 import java.net.URI
 import java.net.URLDecoder
-import javax.swing.BorderFactory
-import javax.swing.JComponent
-import javax.swing.JLabel
-import javax.swing.JPanel
-import javax.swing.JScrollPane
-import javax.swing.JTextArea
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 class EFQueryLensUrlOpener : UrlOpener() {
     internal data class StructuredStatement(
@@ -42,12 +35,6 @@ class EFQueryLensUrlOpener : UrlOpener() {
         val avgTranslationMs: Double,
         val sqlText: String,
         val warnings: List<String>,
-    )
-
-    private data class StatusPalette(
-        val border: Color,
-        val foreground: Color,
-        val background: Color,
     )
 
     override fun openUrl(
@@ -157,7 +144,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
                         thisLogger().info("[EFQueryLens] SQL copied to clipboard (${preview.sqlText.length} chars)")
                         showCopiedNotification(project)
                     }
-                    "opensqleditor" -> openInPreviewDialog(project, preview)
+                    "opensqleditor" -> openSqlInEditor(project, preview)
                 }
             } catch (e: Exception) {
                 thisLogger().warn("[EFQueryLens] dispatchSqlAction failed for type=$type", e)
@@ -385,14 +372,53 @@ class EFQueryLensUrlOpener : UrlOpener() {
         }
     }
 
-    internal fun openInPreviewDialog(
+    /**
+     * Opens the SQL for [preview] in a new IDE editor tab, matching VS Code behaviour.
+     * A timestamped `.sql` temp file is written and then opened via [FileEditorManager]
+     * so the user gets full editor features (syntax highlighting, copy, search, etc.).
+     */
+    internal fun openSqlInEditor(
         project: Project,
         preview: StructuredSqlPreview,
     ) {
         ApplicationManager.getApplication().invokeLater {
-            SqlPreviewDialog(project, preview).show()
+            try {
+                val timestamp =
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss"))
+                val content = buildSqlFileContent(preview)
+                val tempFile = File(System.getProperty("java.io.tmpdir"), "efquery_$timestamp.sql")
+                tempFile.writeText(content, Charsets.UTF_8)
+                val virtualFile =
+                    LocalFileSystem.getInstance().refreshAndFindFileByIoFile(tempFile)
+                        ?: run {
+                            thisLogger().warn("[EFQueryLens] Could not resolve virtual file for $tempFile")
+                            return@invokeLater
+                        }
+                FileEditorManager.getInstance(project).openFile(virtualFile, true)
+                thisLogger().info("[EFQueryLens] Opened SQL in editor: ${tempFile.name}")
+            } catch (e: Exception) {
+                thisLogger().warn("[EFQueryLens] openSqlInEditor failed", e)
+            }
         }
     }
+
+    private fun buildSqlFileContent(preview: StructuredSqlPreview): String =
+        buildString {
+            appendLine("-- EF QueryLens")
+            if (preview.subtitle.isNotBlank()) {
+                // subtitle: "filepath:line · ProviderName · DbContextType"
+                val parts = preview.subtitle.split(" · ")
+                appendLine("-- Source:    ${parts.getOrElse(0) { "" }}")
+                if (parts.size > 1) appendLine("-- Provider:  ${parts[1]}")
+                if (parts.size > 2) appendLine("-- DbContext: ${parts[2]}")
+            }
+            if (preview.warnings.isNotEmpty()) {
+                appendLine("--")
+                preview.warnings.forEach { appendLine("-- Warning: $it") }
+            }
+            appendLine()
+            append(preview.sqlText)
+        }
 
     private fun parseQueryParams(query: String): Map<String, String> {
         if (query.isBlank()) return emptyMap()
@@ -407,135 +433,5 @@ class EFQueryLensUrlOpener : UrlOpener() {
                         URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
                 }
             }.toMap()
-    }
-
-    private class SqlPreviewDialog(
-        project: Project,
-        private val preview: StructuredSqlPreview,
-    ) : DialogWrapper(project, true) {
-        init {
-            title = "EF QueryLens SQL Preview"
-            setOKButtonText("Close")
-            init()
-        }
-
-        override fun createCenterPanel(): JComponent {
-            val root = JPanel(BorderLayout())
-
-            val header = JPanel(BorderLayout())
-            header.border = BorderFactory.createEmptyBorder(10, 12, 10, 12)
-
-            val titleLabel = JLabel(preview.title)
-            titleLabel.font = titleLabel.font.deriveFont(Font.BOLD)
-
-            val subtitleLabel = JLabel(preview.subtitle)
-
-            val palette = statusPalette(preview.statusCode)
-
-            val statusLabel =
-                JLabel(preview.statusText).apply {
-                    isOpaque = true
-                    border =
-                        BorderFactory.createCompoundBorder(
-                            BorderFactory.createLineBorder(palette.border),
-                            BorderFactory.createEmptyBorder(2, 8, 2, 8),
-                        )
-                    font = font.deriveFont(Font.BOLD, 10f)
-                    foreground = palette.foreground
-                    background = palette.background
-                }
-
-            val avgText =
-                if (preview.avgTranslationMs > 0) {
-                    "avg ${preview.avgTranslationMs.toInt()} ms"
-                } else {
-                    ""
-                }
-            val avgLabel = JLabel(avgText)
-
-            val metaRow = JPanel(BorderLayout())
-            metaRow.border = BorderFactory.createEmptyBorder(6, 0, 0, 0)
-            metaRow.add(statusLabel, BorderLayout.WEST)
-            if (avgText.isNotBlank()) {
-                metaRow.add(avgLabel, BorderLayout.CENTER)
-            }
-
-            val titleStack = JPanel()
-            titleStack.layout = javax.swing.BoxLayout(titleStack, javax.swing.BoxLayout.Y_AXIS)
-            titleStack.add(titleLabel)
-            titleStack.add(subtitleLabel)
-            titleStack.add(metaRow)
-
-            header.add(titleStack, BorderLayout.CENTER)
-
-            val sqlArea =
-                JTextArea(preview.sqlText).apply {
-                    isEditable = false
-                    lineWrap = false
-                    wrapStyleWord = false
-                    font = Font(Font.MONOSPACED, Font.PLAIN, 12)
-                    caretPosition = 0
-                }
-
-            root.add(header, BorderLayout.NORTH)
-            root.add(JScrollPane(sqlArea), BorderLayout.CENTER)
-
-            if (preview.warnings.isNotEmpty()) {
-                val notesPanel = JPanel(BorderLayout())
-                notesPanel.border = BorderFactory.createEmptyBorder(8, 12, 10, 12)
-
-                val notesLabel = JLabel("Notes")
-                notesLabel.font = notesLabel.font.deriveFont(Font.BOLD)
-
-                val notesArea =
-                    JTextArea(preview.warnings.joinToString("\n") { "- $it" }).apply {
-                        isEditable = false
-                        lineWrap = true
-                        wrapStyleWord = true
-                        border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
-                        background = root.background
-                    }
-
-                notesPanel.add(notesLabel, BorderLayout.NORTH)
-                notesPanel.add(notesArea, BorderLayout.CENTER)
-                root.add(notesPanel, BorderLayout.SOUTH)
-            }
-
-            root.preferredSize = Dimension(1000, 640)
-            return root
-        }
-
-        override fun createActions() = arrayOf(okAction)
-
-        private fun statusPalette(statusCode: Int): StatusPalette =
-            when (statusCode) {
-                1 ->
-                    StatusPalette(
-                        border = JBColor(Color(0x0969DA), Color(0x58A6FF)),
-                        foreground = JBColor(Color(0x0969DA), Color(0x58A6FF)),
-                        background = JBColor(Color(0xEAF2FF), Color(0x0D223A)),
-                    )
-
-                2 ->
-                    StatusPalette(
-                        border = JBColor(Color(0xBC4C00), Color(0xF2A65A)),
-                        foreground = JBColor(Color(0xBC4C00), Color(0xF2A65A)),
-                        background = JBColor(Color(0xFFF2E6), Color(0x2D1C0D)),
-                    )
-
-                3 ->
-                    StatusPalette(
-                        border = JBColor(Color(0xCF222E), Color(0xFF7B72)),
-                        foreground = JBColor(Color(0xCF222E), Color(0xFF7B72)),
-                        background = JBColor(Color(0xFFEDEF), Color(0x2D1418)),
-                    )
-
-                else ->
-                    StatusPalette(
-                        border = JBColor(Color(0x2EA043), Color(0x3FB950)),
-                        foreground = JBColor(Color(0x2EA043), Color(0x3FB950)),
-                        background = JBColor(Color(0xEAF8EE), Color(0x102015)),
-                    )
-            }
     }
 }

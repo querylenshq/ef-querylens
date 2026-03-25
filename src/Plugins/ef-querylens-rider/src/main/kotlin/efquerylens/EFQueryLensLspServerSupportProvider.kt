@@ -248,7 +248,7 @@ private class EFQueryLensClient(
         val opener = EFQueryLensUrlOpener()
         val preview = opener.extractStructuredPreview(root, fallbackFileUri, fallbackLine)
         if (preview != null) {
-            opener.openInPreviewDialog(project, preview)
+            opener.openSqlInEditor(project, preview)
         }
     }
 
