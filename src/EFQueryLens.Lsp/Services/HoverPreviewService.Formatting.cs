@@ -60,12 +60,15 @@ internal sealed partial class HoverPreviewService
         string copyUrl, openUrl, recalculateUrl;
         if (actionPort > 0)
         {
-            // Rider: use localhost HTTP links that JCEF handles natively as HTTP requests,
-            // bypassing the OS shell that would show "Get an app" for unknown URI schemes.
-            var base_ = $"http://127.0.0.1:{actionPort}/efquerylens/action";
-            copyUrl = $"{base_}?type=copysql&{queryParams}";
-            openUrl = $"{base_}?type=opensqleditor&{queryParams}";
-            recalculateUrl = $"{base_}?type=recalculate&{queryParams}";
+            // Rider: use efquerylens:// custom scheme so that IntelliJ's UrlOpener
+            // extension point intercepts the click via BrowserLauncher.open() before
+            // the OS shell sees it.  http:// links bypass UrlOpener entirely (Rider
+            // uses BrowserUtil.browse() which goes straight to the system browser).
+            // The actionPort is embedded so EFQueryLensUrlOpener can fall back to the
+            // local action server when UrlOpener is invoked without a live project.
+            copyUrl = $"efquerylens://copysql?port={actionPort}&{queryParams}";
+            openUrl = $"efquerylens://opensqleditor?port={actionPort}&{queryParams}";
+            recalculateUrl = $"efquerylens://recalculate?port={actionPort}&{queryParams}";
         }
         else
         {
