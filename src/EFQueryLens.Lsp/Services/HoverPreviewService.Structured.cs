@@ -81,7 +81,10 @@ internal sealed partial class HoverPreviewService
             warnings: canonical.Warnings,
             hasClientEvaluation: canonical.Metadata?.HasClientEvaluation ?? false,
             parameters: canonical.Commands.Count > 0
-                ? canonical.Commands.SelectMany(c => c.Parameters).ToList()
+                ? canonical.Commands.SelectMany(c => c.Parameters)
+                    .GroupBy(p => p.Name, StringComparer.Ordinal)
+                    .Select(g => g.First())
+                    .ToList()
                 : []);
 
         return new QueryLensStructuredHoverResult(
