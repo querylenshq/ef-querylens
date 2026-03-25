@@ -44,10 +44,10 @@ internal sealed partial class HoverPreviewService
     public HoverPreviewService(IQueryLensEngine engine, bool debugEnabled = false)
     {
         _engine = engine;
-        _useBrowserSafeHoverActionLinks = string.Equals(
-            Environment.GetEnvironmentVariable("QUERYLENS_CLIENT"),
-            "rider",
-            StringComparison.OrdinalIgnoreCase);
+        var client = Environment.GetEnvironmentVariable("QUERYLENS_CLIENT");
+        _useBrowserSafeHoverActionLinks =
+            string.Equals(client, "rider", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(client, "vscode", StringComparison.OrdinalIgnoreCase);
         _actionPort = int.TryParse(
             Environment.GetEnvironmentVariable("QUERYLENS_ACTION_PORT"),
             out var port) ? port : 0;
