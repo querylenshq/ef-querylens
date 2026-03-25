@@ -56,7 +56,10 @@ internal class EFQueryLensActionServer {
                     exchange.sendResponseHeaders(204, -1)
                     exchange.close()
 
-                    thisLogger().info("[EFQueryLens] ActionServer received type=$type line=$line char=$character")
+                    thisLogger().info(
+                        "[EFQueryLens] ActionServer request: type=$type line=$line char=$character " +
+                        "uri=${fileUri.takeLast(60)}"
+                    )
 
                     // Dispatch the action on a pooled thread so we never block
                     // the HTTP handler thread.
@@ -105,12 +108,21 @@ internal class EFQueryLensActionServer {
 
         when (type) {
             "copysql", "opensqleditor" -> {
+                thisLogger().info("[EFQueryLens] ActionServer: fetching structured preview for type=$type")
                 val preview = runCatching {
                     opener.buildStructuredPreview(project, fileUri, line, character)
                 }.getOrElse { e ->
                     thisLogger().warn("[EFQueryLens] ActionServer: buildStructuredPreview failed", e)
                     null
-                } ?: return
+                } ?: run {
+                    thisLogger().warn("[EFQueryLens] ActionServer: buildStructuredPreview returned null for type=$type")
+                    return
+                }
+
+                thisLogger().info(
+                    "[EFQueryLens] ActionServer: preview ready statusCode=${preview.statusCode} " +
+                    "sqlLen=${preview.sqlText.length} hasText=${preview.sqlText.isNotBlank()}"
+                )
 
                 if (preview.statusCode != 0 || preview.sqlText.isBlank()) {
                     val message = preview.statusMessage
@@ -121,12 +133,21 @@ internal class EFQueryLensActionServer {
                 }
 
                 when (type) {
-                    "copysql" -> CopyPasteManager.getInstance().setContents(StringSelection(preview.sqlText))
-                    "opensqleditor" -> opener.openInPreviewDialog(project, preview)
+                    "copysql" -> {
+                        CopyPasteManager.getInstance().setContents(StringSelection(preview.sqlText))
+                        thisLogger().info("[EFQueryLens] ActionServer: copied ${preview.sqlText.length} chars to clipboard")
+                    }
+                    "opensqleditor" -> {
+                        opener.openInPreviewDialog(project, preview)
+                        thisLogger().info("[EFQueryLens] ActionServer: opened SQL preview dialog")
+                    }
                 }
             }
 
-            "recalculate" -> opener.requestPreviewRecalculate(project, fileUri, line, character)
+            "recalculate" -> {
+                opener.requestPreviewRecalculate(project, fileUri, line, character)
+                thisLogger().info("[EFQueryLens] ActionServer: recalculate dispatched")
+            }
 
             else -> thisLogger().warn("[EFQueryLens] ActionServer: unknown action type='$type'")
         }

@@ -52,6 +52,11 @@ internal sealed partial class HoverPreviewService
             Environment.GetEnvironmentVariable("QUERYLENS_ACTION_PORT"),
             out var port) ? port : 0;
         _debugEnabled = debugEnabled;
+
+        Console.Error.WriteLine(
+            $"[QL-Hover] init: client='{Environment.GetEnvironmentVariable("QUERYLENS_CLIENT")}' " +
+            $"useBrowserSafe={_useBrowserSafeHoverActionLinks} actionPort={_actionPort} " +
+            $"linkScheme={(_actionPort > 0 ? $"http://127.0.0.1:{_actionPort}" : "efquerylens://")}");
     }
 
     internal void SetDebugEnabled(bool enabled)
