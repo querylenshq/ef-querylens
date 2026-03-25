@@ -22,6 +22,7 @@ internal sealed record QueryLensStructuredHoverResult(
     IReadOnlyList<QueryLensSqlStatement> Statements,
     int CommandCount,
     string? SourceExpression,
+    string? ExecutedExpression,
     string? DbContextType,
     string? ProviderName,
     string? SourceFile,

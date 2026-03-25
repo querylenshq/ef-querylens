@@ -33,7 +33,7 @@ internal sealed partial class HoverPreviewService
             QueryTranslationStatus status = QueryTranslationStatus.Ready,
             double avgTranslationMs = 0,
             double lastTranslationMs = 0) =>
-            new(false, msg, [], 0, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs, lastTranslationMs);
+            new(false, msg, [], 0, null, null, null, null, null, 0, [], null, null, status, msg, avgTranslationMs, lastTranslationMs);
 
         if (canonical.Status is not QueryTranslationStatus.Ready && canonical.Success)
         {
@@ -43,6 +43,7 @@ internal sealed partial class HoverPreviewService
                 Statements: [],
                 CommandCount: 0,
                 SourceExpression: canonical.SourceExpression,
+                ExecutedExpression: null,
                 DbContextType: null,
                 ProviderName: null,
                 SourceFile: filePath,
@@ -73,9 +74,15 @@ internal sealed partial class HoverPreviewService
             sourceFile: filePath,
             sourceLine: canonical.SourceLine,
             sourceExpression: canonical.SourceExpression,
+            executedExpression: canonical.ExecutedExpression,
+            efCoreVersion: canonical.Metadata?.EfCoreVersion,
             dbContextType: canonical.Metadata?.DbContextType,
             providerName: canonical.Metadata?.ProviderName,
-            warnings: canonical.Warnings);
+            warnings: canonical.Warnings,
+            hasClientEvaluation: canonical.Metadata?.HasClientEvaluation ?? false,
+            parameters: canonical.Commands.Count > 0
+                ? canonical.Commands.SelectMany(c => c.Parameters).ToList()
+                : []);
 
         return new QueryLensStructuredHoverResult(
             Success: true,
@@ -83,6 +90,7 @@ internal sealed partial class HoverPreviewService
             Statements: statements,
             CommandCount: canonical.Commands.Count,
             SourceExpression: canonical.SourceExpression,
+            ExecutedExpression: canonical.ExecutedExpression,
             DbContextType: canonical.Metadata?.DbContextType,
             ProviderName: canonical.Metadata?.ProviderName,
             SourceFile: filePath,

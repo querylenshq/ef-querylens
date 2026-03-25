@@ -20,6 +20,7 @@ public sealed partial class QueryEvaluator
         var sw = Stopwatch.StartNew();
         var compilationRetryCount = 0;
         IDbContextLease? dbContextLease = null;
+        var originalExpression = request.Expression;
 
         try
         {
@@ -99,11 +100,13 @@ public sealed partial class QueryEvaluator
             TimeSpan? metadataReferenceBuildTime;
             TimeSpan? roslynCompilationTime;
             TimeSpan? evalAssemblyLoadTime;
+            string? executedExpression;
             if (_evalRunnerCache.TryGetValue(evalCacheKey, out var cachedRunner))
             {
                 // Warm path: skip MetadataRefs, namespace scan, compile, emit, load.
                 TouchEvalRunnerCacheEntry(evalCacheKey, cachedRunner);
                 runMethod = cachedRunner.RunMethod;
+                executedExpression = cachedRunner.ExecutedExpression;
                 metadataReferenceBuildTime = TimeSpan.Zero;
                 roslynCompilationTime = TimeSpan.Zero;
                 evalAssemblyLoadTime = TimeSpan.Zero;
@@ -273,7 +276,10 @@ public sealed partial class QueryEvaluator
                 runMethod = runType.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
                     ?? throw new InvalidOperationException("Could not find Run method in __QueryLensRunner__.");
 
-                _evalRunnerCache[evalCacheKey] = new EvalRunnerEntry(evalAssembly, runMethod, GetUtcNowTicks());
+                executedExpression = string.Equals(workingExpression, originalExpression, StringComparison.Ordinal)
+                    ? null
+                    : workingExpression;
+                _evalRunnerCache[evalCacheKey] = new EvalRunnerEntry(evalAssembly, runMethod, GetUtcNowTicks(), executedExpression);
                 TrimCacheByLastAccess(_evalRunnerCache, MaxEvalRunnerCacheEntries, static e => e.LastAccessTicks);
             } // end else (eval runner cache miss)
 
@@ -342,6 +348,7 @@ public sealed partial class QueryEvaluator
                 Parameters = commands[0].Parameters,
                 Warnings = warnings,
                 Metadata = BuildMetadata(dbContextType, alcCtx.LoadedAssemblies, sw.Elapsed, creationStrategy, stageTimings),
+                ExecutedExpression = executedExpression,
             };
         }
         catch (OperationCanceledException)

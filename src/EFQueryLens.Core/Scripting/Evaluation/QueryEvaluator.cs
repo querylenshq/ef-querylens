@@ -49,7 +49,7 @@ public sealed partial class QueryEvaluator
     // Compiled + loaded eval runner cache: skip the entire Roslyn pipeline on warm hits.
     // Keys follow the pattern: "shadowAssemblyPath|timestampTicks|assemblySetHash|dbContextTypeName|requestHash"
     // Evicted whenever the ALC for a shadow assembly is released (InvalidateMetadataRefCache).
-    private sealed record EvalRunnerEntry(Assembly EvalAssembly, MethodInfo RunMethod, long LastAccessTicks);
+    private sealed record EvalRunnerEntry(Assembly EvalAssembly, MethodInfo RunMethod, long LastAccessTicks, string? ExecutedExpression = null);
     private readonly ConcurrentDictionary<string, EvalRunnerEntry> _evalRunnerCache = new(StringComparer.Ordinal);
 
     // Known namespace/type index cache keyed by assemblySetHash — the scan is expensive

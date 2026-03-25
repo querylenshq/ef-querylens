@@ -88,9 +88,13 @@ internal sealed partial class HoverPreviewService
         string sourceFile,
         int sourceLine,
         string? sourceExpression,
-        string? dbContextType,
-        string? providerName,
-        IReadOnlyList<QueryWarning>? warnings = null)
+        string? executedExpression = null,
+        string? efCoreVersion = null,
+        string? dbContextType = null,
+        string? providerName = null,
+        IReadOnlyList<QueryWarning>? warnings = null,
+        bool hasClientEvaluation = false,
+        IReadOnlyList<QueryParameter>? parameters = null)
     {
         if (string.IsNullOrWhiteSpace(rawSql))
         {
@@ -106,11 +110,14 @@ internal sealed partial class HoverPreviewService
             sb.AppendLine($"-- Source:    {sourceFile}{lineDisplay}");
         }
 
-        AppendCommentedExpression(sb, "LINQ", sourceExpression);
+        if (!string.IsNullOrWhiteSpace(efCoreVersion))
+        {
+            sb.AppendLine($"-- EF Core:   {efCoreVersion}");
+        }
 
         if (!string.IsNullOrWhiteSpace(dbContextType))
         {
-            sb.AppendLine($"-- DbContext: {dbContextType}");
+            sb.AppendLine($"-- DbContext: {ShortTypeName(dbContextType)}");
         }
 
         if (!string.IsNullOrWhiteSpace(providerName))
@@ -118,15 +125,47 @@ internal sealed partial class HoverPreviewService
             sb.AppendLine($"-- Provider:  {providerName}");
         }
 
-        if (warnings is { Count: > 0 })
+        AppendCommentedExpression(sb, "LINQ", sourceExpression);
+
+        // Only shown when EFQueryLens rewrote the expression before evaluation.
+        if (!string.IsNullOrWhiteSpace(executedExpression)
+            && !string.Equals(executedExpression, sourceExpression, StringComparison.Ordinal))
+        {
+            AppendCommentedExpression(sb, "Executed LINQ", executedExpression);
+        }
+
+        if (parameters is { Count: > 0 })
+        {
+            sb.AppendLine("-- Parameters:");
+            var nameWidth = parameters.Max(p => p.Name.Length);
+            foreach (var param in parameters)
+            {
+                var shortType = ShortTypeName(param.ClrType);
+                var valueSuffix = string.IsNullOrWhiteSpace(param.InferredValue)
+                    ? string.Empty
+                    : $" = {param.InferredValue}";
+                sb.AppendLine($"--   {param.Name.PadRight(nameWidth)}  {shortType}{valueSuffix}");
+            }
+        }
+
+        var hasNotes = (warnings is { Count: > 0 }) || hasClientEvaluation;
+        if (hasNotes)
         {
             sb.AppendLine("-- Notes:");
-            foreach (var warning in warnings)
+            if (hasClientEvaluation)
             {
-                var warningLine = string.IsNullOrWhiteSpace(warning.Suggestion)
-                    ? $"--   - {warning.Code}: {warning.Message}"
-                    : $"--   - {warning.Code}: {warning.Message} ({warning.Suggestion})";
-                sb.AppendLine(warningLine);
+                sb.AppendLine("--   ⚠ Client evaluation: EF Core evaluated part of this query in memory (silent performance risk)");
+            }
+
+            if (warnings is { Count: > 0 })
+            {
+                foreach (var warning in warnings)
+                {
+                    var warningLine = string.IsNullOrWhiteSpace(warning.Suggestion)
+                        ? $"--   - {warning.Code}: {warning.Message}"
+                        : $"--   - {warning.Code}: {warning.Message} ({warning.Suggestion})";
+                    sb.AppendLine(warningLine);
+                }
             }
         }
 
@@ -134,6 +173,9 @@ internal sealed partial class HoverPreviewService
         sb.Append(rawSql);
         return sb.ToString();
     }
+
+    private static string ShortTypeName(string? fullName) =>
+        fullName?.Split('.').LastOrDefault() ?? fullName ?? string.Empty;
 
     private static void AppendCommentedExpression(StringBuilder sb, string label, string? expression)
     {
