@@ -6,6 +6,18 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-03-26
+
+### Fixed
+- VS Code Marketplace publish: `--target` and `--packagePath` are no longer passed
+  simultaneously to `vsce publish`
+- Rider Gradle build: project paths now resolved outside `doLast` to avoid
+  Gradle configuration cache `$$implicitReceiver_Project` NPE
+- VS extension publish manifest now includes required `identity.internalName` field
+- VS Code target names correctly mapped to .NET RIDs (`darwin-arm64` → `osx-arm64`,
+  `win32-x64` → `win-x64`, etc.) in `prepareRuntime.mjs`
+- Rider plugin no longer uses `@ApiStatus.Internal` JetBrains Platform APIs
+
 ## [1.0.2] - 2026-03-26
 
 ### Fixed
