@@ -31,20 +31,23 @@ dependencies {
 
 val bundledRuntimeOutputDir = layout.buildDirectory.dir("generated/querylens-runtime")
 
-// .NET RIDs to bundle inside the plugin ZIP.
-// dotnet publish produces a native AppHost launcher per RID (framework-dependent, not self-contained),
-// so the daemon runs natively on each platform without needing `dotnet` in PATH explicitly —
-// Rider's own embedded .NET runtime is used via the AppHost.
-val daemonRids = listOf("win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64")
-
-val lspProjectPath = projectDir.resolve("../../../src/EFQueryLens.Lsp/EFQueryLens.Lsp.csproj").canonicalPath
-val daemonProjectPath = projectDir.resolve("../../../src/EFQueryLens.Daemon/EFQueryLens.Daemon.csproj").canonicalPath
-
 val bundleQueryLensRuntime by tasks.registering {
     val outputDir = bundledRuntimeOutputDir
     outputs.dir(outputDir)
 
     doLast {
+        // Resolve paths here (not at script scope) so Gradle's configuration cache
+        // does not capture a reference to the Build_gradle script object (this$0),
+        // which is null during cache deserialization and causes an NPE.
+        val lspProjectPath =
+            projectDir.resolve("../../../src/EFQueryLens.Lsp/EFQueryLens.Lsp.csproj").canonicalPath
+        val daemonProjectPath =
+            projectDir.resolve("../../../src/EFQueryLens.Daemon/EFQueryLens.Daemon.csproj").canonicalPath
+        // .NET RIDs to bundle inside the plugin ZIP.
+        // dotnet publish produces a native AppHost launcher per RID (framework-dependent, not self-contained),
+        // so the daemon runs natively on each platform without needing `dotnet` in PATH explicitly —
+        // Rider's own embedded .NET runtime is used via the AppHost.
+        val daemonRids = listOf("win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64")
         val out = outputDir.get().asFile
 
         // Project.exec {} was removed in Gradle 9; use ProcessBuilder directly.
