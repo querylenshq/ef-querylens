@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-25
+
 ### Added
 - Active plugin support across VS Code, Rider, and Visual Studio
 - Marketplace-oriented plugin README pages for VS Code and Visual Studio
