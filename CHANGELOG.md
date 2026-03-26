@@ -6,6 +6,17 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-03-26
+
+### Fixed
+- Rider plugin: split `dotnetPublish` arguments onto separate lines to satisfy ktlint `argument-list-wrapping` rule (ktlint 14.2.0+)
+- Rider plugin: removed deprecated `kotlin.incremental.useClasspathSnapshot` Gradle property
+- LSP project: bumped `Microsoft.CodeAnalysis.CSharp.Workspaces` to 5.3.0 to resolve NU1107 version conflict with Core
+
+### Changed
+- Rider plugin now publishes to the stable JetBrains Marketplace channel (was: preview)
+- Dependency updates: Kotlin 2.2.0 → 2.3.20, ktlint plugin 14.1.0 → 14.2.0, `Microsoft.CodeAnalysis.CSharp` 5.0.0 → 5.3.0, various GitHub Actions versions
+
 ## [1.0.3] - 2026-03-26
 
 ### Fixed
