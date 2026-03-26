@@ -46,7 +46,9 @@ jobs:
         # Updates package.json version without creating a git commit or tag.
         # vsce package reads the version from package.json, so this is how we
         # keep the published version in sync with the git tag.
-        run: npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version
+        # --allow-same-version prevents a non-zero exit when package.json already
+        # carries the release version (e.g. after a local /release run).
+        run: npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version --allow-same-version
 
       - name: Copy changelog into extension directory
         # vsce reads CHANGELOG.md from the extension root and surfaces it on the
