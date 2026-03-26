@@ -72,10 +72,11 @@ jobs:
         working-directory: src/Plugins/ef-querylens-vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        # --target is already embedded in the VSIX manifest from the package step;
+        # passing it again alongside --packagePath (-i) is an error in vsce.
         run: |
           npx --yes @vscode/vsce publish \
             --pre-release \
-            --target ${{ matrix.target }} \
             -i ef-querylens-vscode-${{ matrix.target }}.vsix \
             --pat "$VSCE_PAT"
 
