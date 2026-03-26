@@ -158,7 +158,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ef-querylens-visualstudio
-          path: src/Plugins/ef-querylens-visualstudio/EFQueryLens.VisualStudio/bin/Release/net472/*.vsix
+          path: src/Plugins/ef-querylens-visualstudio/EFQueryLens.VisualStudio/bin/Release/*.vsix
 
   release:
     runs-on: ubuntu-latest
