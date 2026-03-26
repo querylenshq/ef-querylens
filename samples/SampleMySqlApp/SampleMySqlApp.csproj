@@ -7,7 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="EntityFrameworkCore.Projectables" Version="5.0.2" />
+    <!-- Projectables 5.0.2's net10.0 dependency group requires Microsoft.EntityFrameworkCore >= 10.0.0,
+         but Pomelo 9.0.0 only pins Relational (not the main EFCore package) so NuGet would resolve
+         EFCore core/abstractions to 10.x while Relational stays at 9.x → MissingMethodException.
+         Stay on Projectables 4.0.0 (requires EFCore >= 8.0.0, compatible with EFCore 9)
+         until Pomelo 10.x is released. -->
+    <PackageReference Include="EntityFrameworkCore.Projectables" Version="4.0.0" />
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0">
       <PrivateAssets>all</PrivateAssets>
