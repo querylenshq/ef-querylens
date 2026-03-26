@@ -163,9 +163,11 @@ jobs:
             Select-Object -First 1
           if (-not $vsixPublisher) { throw "VsixPublisher.exe not found via vswhere" }
           $vsix = Get-Item "src\Plugins\ef-querylens-visualstudio\EFQueryLens.VisualStudio\bin\Release\net472\*.vsix"
+          $manifest = Resolve-Path "src\Plugins\ef-querylens-visualstudio\publishManifest.json"
           Write-Host "Publishing $($vsix.FullName)"
           & $vsixPublisher publish `
             -payload $vsix.FullName `
+            -publishManifest $manifest `
             -personalAccessToken $env:VS_MARKETPLACE_PAT `
             -ignoreWarnings "VSIXValidatorWarning01,VSIXValidatorWarning02"
 
