@@ -10,7 +10,7 @@
         <d:GettingStartedGuide>https://github.com/querylenshq/ef-querylens/blob/main/docs/getting-started.md</d:GettingStartedGuide>
         <Icon>icon.png</Icon>
         <PreviewImage>preview.png</PreviewImage>
-        <Tags>EF Core, Entity Framework, SQL, LINQ, C#, Productivity</Tags>
+        <Tags>EF Core;Entity Framework;SQL;LINQ;CSharp;Productivity</Tags>
         <Preview>false</Preview>
     </Metadata>
     <Installation ExtensionType="VSSDK+VisualStudio.Extensibility">

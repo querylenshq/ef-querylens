@@ -23,7 +23,7 @@
     "csharp"
   ],
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.110.0"
   },
   "categories": [
     "Formatters",
