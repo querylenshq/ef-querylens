@@ -4,6 +4,7 @@
   "identity": {
     "internalName": "EFQueryLensVS"
   },
+  "overview": "README.md",
   "priceCategory": "free",
   "publisher": "EFQueryLens",
   "private": false,
