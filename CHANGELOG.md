@@ -6,6 +6,15 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-03-28
+
+### Fixed
+- VS Code action links (Copy SQL, Open SQL, Reanalyze) restored — now use `efquerylens://` scheme directly instead of the removed HTTP action server
+
+### Changed
+- Removed HTTP action server entirely; Rider uses Alt+Enter intention actions via LSP, VS Code uses `efquerylens://` URI scheme
+- README: live version badges for all three marketplaces (Rider plugin now approved on JetBrains Marketplace)
+
 ## [1.0.8] - 2026-03-28
 
 ### Fixed
