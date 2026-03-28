@@ -357,9 +357,8 @@ public sealed partial class QueryEvaluator
         }
         catch (Exception ex)
         {
-            var msg = ex is TargetInvocationException { InnerException: { } inner }
-                ? inner.ToString()
-                : ex.Message;
+            var unwrapped = ex is TargetInvocationException { InnerException: { } inner } ? inner : ex;
+            var msg = unwrapped is TargetInvocationException ? unwrapped.ToString() : unwrapped.Message;
 
             if (msg.Contains("does not have a type mapping assigned", StringComparison.OrdinalIgnoreCase))
             {
@@ -367,6 +366,17 @@ public sealed partial class QueryEvaluator
                        "This often happens with provider-specific value types (e.g. Pgvector.Vector for pgvector, " +
                        "NetTopologySuite.Geometries.Point for spatial). Ensure the variable is typed explicitly in " +
                        "the hovered expression, or assign it from a typed entity property.";
+            }
+            else if (unwrapped is MissingMethodException ||
+                     msg.Contains("Method not found", StringComparison.OrdinalIgnoreCase))
+            {
+                msg += "\n\nHint: A method expected by one EF Core assembly was not found in another. " +
+                       "This is usually an intra-project version conflict — for example, the EF Core base package " +
+                       "and a provider package (SQL Server, Pomelo, Npgsql) resolved to different major or minor " +
+                       "versions in your project output. " +
+                       "Check that all Microsoft.EntityFrameworkCore.* and provider package references in your " +
+                       "project target the same version, and that no transitive dependency is pulling in a " +
+                       "mismatched version.";
             }
 
             return Failure(msg, sw.Elapsed, null, null);

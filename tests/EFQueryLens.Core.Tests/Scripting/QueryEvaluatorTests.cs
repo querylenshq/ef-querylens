@@ -134,6 +134,40 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         Assert.Equal("Microsoft.EntityFrameworkCore.SqlServer", result.Metadata.ProviderName);
     }
 
+    /// <summary>
+    /// Regression test for: "Method not found: TranslateExecuteUpdate".
+    /// The SQL Server sample triggers a MissingMethodException due to an EF Core
+    /// version mismatch between the loaded assemblies and the QueryLens runtime.
+    /// The evaluator must catch this gracefully and return a failure result with
+    /// a user-friendly hint — not an unhandled exception.
+    /// </summary>
+    [Fact]
+    public async Task Evaluate_SqlServerSample_MissingMethodException_ReturnsGracefulFailureWithHint()
+    {
+        using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+        var evaluator = new QueryEvaluator();
+
+        var result = await evaluator.EvaluateAsync(
+            sqlAlcCtx,
+            new TranslationRequest
+            {
+                AssemblyPath = sqlAlcCtx.AssemblyPath,
+                Expression = "db.Customers",
+                DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
+            });
+
+        // Must not throw — the evaluator should return a failure result.
+        Assert.False(result.Success);
+        Assert.NotNull(result.ErrorMessage);
+
+        // The raw technical exception message must be present so the user can see what went wrong.
+        Assert.Contains("Method not found", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+        // A friendly hint about the intra-project EF Core version conflict must be appended.
+        Assert.Contains("intra-project version conflict", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("provider package", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Evaluate_SimpleDbSet_PopulatesCommandsList()
     {

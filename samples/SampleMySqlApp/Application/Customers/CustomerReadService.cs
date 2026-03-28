@@ -177,6 +177,14 @@ public sealed class CustomerReadService
         Expression<Func<Order, TResult>> expression,
         CancellationToken ct)
     {
+
+        var customers = await _dbContext.Customers
+        .Where(c => c.IsNotDeleted)
+        .Include(c => c.Orders.Where(o => o.IsNotDeleted && o.Total >= 100))
+        .ToListAsync(ct);
+
+
+        
         var page = Math.Max(request.Page, 1);
         var pageSize = Math.Clamp(request.PageSize, 1, 200);
 
