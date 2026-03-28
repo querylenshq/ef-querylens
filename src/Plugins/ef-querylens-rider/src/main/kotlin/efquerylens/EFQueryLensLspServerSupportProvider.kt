@@ -25,23 +25,6 @@ import kotlin.io.path.name
 import kotlin.io.path.pathString
 
 class EFQueryLensLspServerSupportProvider : LspServerSupportProvider {
-    companion object {
-        private const val ACTION_SERVER_WAIT_MS_DEFAULT = 2000L
-
-        /**
-         * Singleton action server shared across all projects in this IDE session.
-         * Started lazily on first file open; lives for the IDE session lifetime.
-         */
-        private val actionServer: EFQueryLensActionServer by lazy {
-            EFQueryLensActionServer().also { it.start() }
-        }
-
-        private fun actionServerWaitMs(): Long {
-            val raw = System.getenv("QUERYLENS_ACTION_PORT_WAIT_MS")
-            return raw?.toLongOrNull()?.takeIf { it > 0 } ?: ACTION_SERVER_WAIT_MS_DEFAULT
-        }
-    }
-
     override fun fileOpened(
         project: Project,
         file: VirtualFile,
@@ -53,34 +36,11 @@ class EFQueryLensLspServerSupportProvider : LspServerSupportProvider {
             return
         }
 
-        // Ensure the action server is running and ready before creating the
-        // LSP server descriptor so the action port can be passed as an env var.
-        val actionPort = ensureActionServerStarted(project)
-        logInfo(project, "[EFQueryLens] ActionServer port=$actionPort")
-
         logInfo(project, "[EFQueryLens] Ensuring LSP server is started for '${file.path}'")
-        serverStarter.ensureServerStarted(EFQueryLensServerDescriptor(project, actionPort))
+        serverStarter.ensureServerStarted(EFQueryLensServerDescriptor(project))
     }
 
     private fun isSupported(file: VirtualFile): Boolean = file.extension.equals("cs", ignoreCase = true)
-
-    private fun ensureActionServerStarted(project: Project): Int {
-        actionServer.start()
-
-        val waitMs = actionServerWaitMs()
-        val deadline = System.currentTimeMillis() + waitMs
-        var currentPort = actionServer.port
-        while (currentPort <= 0 && System.currentTimeMillis() < deadline) {
-            Thread.sleep(10)
-            currentPort = actionServer.port
-        }
-
-        if (currentPort <= 0) {
-            logWarn(project, "[EFQueryLens] ActionServer port unavailable after ${waitMs}ms; hover action links will be omitted")
-        }
-
-        return currentPort
-    }
 
     private fun logInfo(
         project: Project,
@@ -104,7 +64,6 @@ class EFQueryLensLspServerSupportProvider : LspServerSupportProvider {
 
 private class EFQueryLensServerDescriptor(
     private val hostProject: Project,
-    private val actionPort: Int = 0,
 ) : ProjectWideLspServerDescriptor(hostProject, "EF QueryLens") {
     private companion object {
         private const val PLUGIN_ID_VALUE = "dev.efquerylens"
@@ -226,10 +185,6 @@ private class EFQueryLensServerDescriptor(
 
         resolvePackagedDaemonExecutable()?.let { withEnvironment("QUERYLENS_DAEMON_EXE", it.absolutePathString()) }
         resolvePackagedDaemonAssembly()?.let { withEnvironment("QUERYLENS_DAEMON_DLL", it.absolutePathString()) }
-
-        if (actionPort > 0) {
-            withEnvironment("QUERYLENS_ACTION_PORT", actionPort.toString())
-        }
 
         return this
     }

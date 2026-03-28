@@ -13,7 +13,6 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.JBPopupListener
 import com.intellij.openapi.ui.popup.LightweightWindowEvent
@@ -57,15 +56,8 @@ class EFQueryLensUrlOpener : UrlOpener() {
         // Rider calls BrowserLauncher.open() for unknown URI schemes, which invokes
         // this UrlOpener before the OS shell sees it — so we handle the action here
         // and return true to prevent any browser window from opening.
-        // (http:// links bypass UrlOpener: Rider uses BrowserUtil.browse() directly.)
         if (!url.startsWith("efquerylens://", ignoreCase = true)) {
-            // Also intercept our own localhost URLs as a safety net for when the
-            // system browser already opened (e.g. older cached hover markdown).
-            return if (url.startsWith("http://127.0.0.1", ignoreCase = true)) {
-                handleActionUrl(url, project)
-            } else {
-                false
-            }
+            return false
         }
 
         val uri = runCatching { URI(url) }.getOrNull() ?: return true
@@ -99,37 +91,6 @@ class EFQueryLensUrlOpener : UrlOpener() {
             "copysql", "opensqleditor" -> dispatchSqlAction(type, project, fileUri, line, character)
             else -> thisLogger().warn("[EFQueryLens] executeAction: unknown action type='$type'")
         }
-    }
-
-    /**
-     * Safety-net for `http://127.0.0.1:{port}/efquerylens/action?…` URLs that reach
-     * the browser (e.g. from stale cached hover markdown using the old http scheme).
-     * Only matches our own action-server path; unrelated localhost URLs fall through.
-     */
-    private fun handleActionUrl(
-        url: String,
-        project: Project?,
-    ): Boolean {
-        val uri = runCatching { URI(url) }.getOrNull() ?: return false
-        if (uri.path != "/efquerylens/action") return false
-
-        val params = parseQueryParams(uri.rawQuery ?: "")
-        val type = params["type"] ?: return false
-        val fileUri = params["uri"] ?: return false
-        val line = params["line"]?.toIntOrNull() ?: 0
-        val character = params["character"]?.toIntOrNull() ?: 0
-
-        thisLogger().info("[EFQueryLens] UrlOpener intercepted http-localhost action type=$type line=$line char=$character")
-
-        val effectiveProject = project ?: ProjectManager.getInstance().openProjects.firstOrNull() ?: return false
-
-        if (type == "recalculate" || type == "copysql" || type == "opensqleditor") {
-            executeAction(type, effectiveProject, fileUri, line, character)
-            return true
-        }
-
-        thisLogger().warn("[EFQueryLens] UrlOpener: unknown action type='$type'")
-        return false
     }
 
     private fun dispatchSqlAction(
