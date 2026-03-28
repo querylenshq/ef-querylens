@@ -9,26 +9,6 @@ public sealed partial class QueryEvaluator
     private static readonly ConcurrentDictionary<string, (string ProviderName, string EfCoreVersion)>
         SProviderMetadataCache = new(StringComparer.Ordinal);
 
-    private static bool ShouldWarnExpressionPartialRisk(
-        string expression,
-        IReadOnlyList<QuerySqlCommand> commands)
-    {
-        if (string.IsNullOrWhiteSpace(expression))
-            return false;
-
-        // Warn whenever the expression has nested materialization inside a projection,
-        // regardless of how many commands were captured. Multiple commands means the split
-        // queries were captured, but the warning is still informative about the query shape.
-        var hasSelect = expression.Contains(".Select(", StringComparison.OrdinalIgnoreCase);
-        if (!hasSelect)
-            return false;
-
-        return expression.Contains(".ToList(", StringComparison.OrdinalIgnoreCase)
-            || expression.Contains(".ToArray(", StringComparison.OrdinalIgnoreCase)
-            || expression.Contains(".ToDictionary(", StringComparison.OrdinalIgnoreCase)
-            || expression.Contains(".ToLookup(", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static void AddWarningIfMissing(List<QueryWarning> warnings, QueryWarning warning)
     {
         if (warnings.Any(w => string.Equals(w.Code, warning.Code, StringComparison.OrdinalIgnoreCase)))
