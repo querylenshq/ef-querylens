@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-03-28
+
+### Fixed
+- VS Code Marketplace: removed `"preview": true` flag so the extension no longer shows the Preview badge
+
 ## [1.0.7] - 2026-03-28
 
 ### Added

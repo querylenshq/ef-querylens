@@ -3,8 +3,8 @@
   "displayName": "EF QueryLens",
   "description": "Preview your EF Core SQL in real time, without leaving your IDE.",
   "icon": "icon.png",
-  "preview": true,
-  "version": "1.0.7",
+  "preview": false,
+  "version": "1.0.8",
   "publisher": "EFQueryLens",
   "license": "MIT",
   "repository": {
