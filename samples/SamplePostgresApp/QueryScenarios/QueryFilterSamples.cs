@@ -29,11 +29,12 @@ public sealed class QueryFilterSamples
     /// Global filter is applied automatically.
     /// Hover to see WHERE NOT is_deleted AND is_active in the generated SQL.
     /// </summary>
-    public IQueryable<string> ActiveCustomerNames()
+    public List<string> ActiveCustomerNames()
     {
         return _db.Customers
             .OrderBy(c => c.Name)
-            .Select(c => c.Name);
+            .Select(c => c.Name)
+            .ToList();
     }
 
     /// <summary>
