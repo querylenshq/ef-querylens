@@ -54,33 +54,79 @@ internal sealed partial class HoverPreviewService
         var statementWord = commands.Count == 1 ? "query" : "queries";
         var warningLines = BuildWarningLines(warnings);
 
+        var isRiderClient = string.Equals(
+            Environment.GetEnvironmentVariable("QUERYLENS_CLIENT"),
+            "rider",
+            StringComparison.OrdinalIgnoreCase);
+
         string? actionLinks = null;
-        if (_useBrowserSafeHoverActionLinks && !string.IsNullOrWhiteSpace(filePath))
+        if (_useBrowserSafeHoverActionLinks && !isRiderClient && !string.IsNullOrWhiteSpace(filePath))
         {
             try
             {
                 var fileUri = Uri.EscapeDataString(new Uri(filePath).AbsoluteUri);
-                actionLinks =
-                    $"[Copy SQL](efquerylens://copysql?uri={fileUri}&line={line}&character={character})" +
-                    $" | [Open SQL](efquerylens://opensql?uri={fileUri}&line={line}&character={character})" +
-                    $" | [Reanalyze](efquerylens://recalculate?uri={fileUri}&line={line}&character={character})";
+                if (_actionPort > 0)
+                {
+                    var actionBaseUrl = $"http://127.0.0.1:{_actionPort}/efquerylens/action";
+                    actionLinks =
+                        $"[Copy SQL]({actionBaseUrl}?type=copysql&uri={fileUri}&line={line}&character={character})" +
+                        $" | [Open SQL]({actionBaseUrl}?type=opensqleditor&uri={fileUri}&line={line}&character={character})" +
+                        $" | [Reanalyze]({actionBaseUrl}?type=recalculate&uri={fileUri}&line={line}&character={character})";
+                }
             }
             catch { /* skip links if path is unparseable */ }
         }
 
+        var emittedScheme = actionLinks is null
+            ? "none"
+            : actionLinks.Contains("http://127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                ? "http-local"
+                : "efquerylens";
+        var actionLinksPreview = actionLinks is null
+            ? ""
+            : actionLinks[..Math.Min(actionLinks.Length, 140)];
+        LogDebug(
+            actionLinks is null
+                ? $"hover-action-links omitted line={line} char={character} browserSafe={_useBrowserSafeHoverActionLinks} actionPort={_actionPort}"
+                : $"hover-action-links emitted line={line} char={character} browserSafe={_useBrowserSafeHoverActionLinks} actionPort={_actionPort} scheme={emittedScheme} preview='{actionLinksPreview}'");
+
         var header = actionLinks is null
             ? $"**EF QueryLens** · {commands.Count} {statementWord}"
             : $"**EF QueryLens** · {commands.Count} {statementWord} {actionLinks}";
+
+        var riderHintLine = isRiderClient
+            ? "\n\n*Actions available via Alt+Enter (EF QueryLens Actions...)*"
+            : string.Empty;
 
         var timingLine = avgTranslationMs > 0
             ? $"\n\n*SQL generation time {avgTranslationMs:0} ms*"
             : string.Empty;
 
         var body = warningLines.Count == 0
-            ? $"{header}\n\n```sql\n{sql}\n```{timingLine}"
-            : $"{header}\n\n```sql\n{sql}\n```\n\n**Notes**\n{string.Join("\n", warningLines.Select(w => $"- {w}"))}{timingLine}";
+            ? $"{header}\n\n```sql\n{sql}\n```{timingLine}{riderHintLine}"
+            : $"{header}\n\n```sql\n{sql}\n```\n\n**Notes**\n{string.Join("\n", warningLines.Select(w => $"- {w}"))}{timingLine}{riderHintLine}";
+
+        // Final safety-net rewrite: if any legacy efquerylens:// links leak into
+        // markdown, normalize them to localhost action-server URLs for Rider/VSCode.
+        if (_useBrowserSafeHoverActionLinks && _actionPort > 0)
+        {
+            body = RewriteLegacyActionLinks(body, _actionPort);
+            var containsLegacyScheme = body.Contains("efquerylens://", StringComparison.OrdinalIgnoreCase);
+            var containsLocalhostActions = body.Contains("http://127.0.0.1", StringComparison.OrdinalIgnoreCase);
+            LogDebug($"hover-markdown-final line={line} char={character} legacyScheme={containsLegacyScheme} localhost={containsLocalhostActions}");
+        }
 
         return body;
+    }
+
+    private static string RewriteLegacyActionLinks(string markdown, int actionPort)
+    {
+        var actionBaseUrl = $"http://127.0.0.1:{actionPort}/efquerylens/action";
+        return markdown
+            .Replace("efquerylens://copysql?", $"{actionBaseUrl}?type=copysql&", StringComparison.OrdinalIgnoreCase)
+            .Replace("efquerylens://opensql?", $"{actionBaseUrl}?type=opensqleditor&", StringComparison.OrdinalIgnoreCase)
+            .Replace("efquerylens://opensqleditor?", $"{actionBaseUrl}?type=opensqleditor&", StringComparison.OrdinalIgnoreCase)
+            .Replace("efquerylens://recalculate?", $"{actionBaseUrl}?type=recalculate&", StringComparison.OrdinalIgnoreCase);
     }
 
 

@@ -10,7 +10,18 @@
         <platform.lsp.serverSupportProvider implementation="efquerylens.EFQueryLensLspServerSupportProvider" />
         <toolWindow id="EF QueryLens" factoryClass="efquerylens.EFQueryLensLogToolWindowFactory" anchor="bottom" />
         <notificationGroup id="EF QueryLens" displayType="BALLOON" isLogByDefault="false" />
-        <platform.backend.documentation.linkHandler implementation="efquerylens.EFQueryLensDocumentationLinkHandler" />
+        <intentionAction>
+            <className>efquerylens.EFQueryLensCopySqlIntentionAction</className>
+            <category>EF QueryLens</category>
+        </intentionAction>
+        <intentionAction>
+            <className>efquerylens.EFQueryLensOpenSqlIntentionAction</className>
+            <category>EF QueryLens</category>
+        </intentionAction>
+        <intentionAction>
+            <className>efquerylens.EFQueryLensReanalyzeIntentionAction</className>
+            <category>EF QueryLens</category>
+        </intentionAction>
     </extensions>
 
     <extensions defaultExtensionNs="org.jetbrains">
@@ -23,7 +34,6 @@
                 class="efquerylens.EFQueryLensShowToolWindowAction"
                 text="Show EF QueryLens"
                 description="Open the EF QueryLens log tool window">
-            <add-to-group group-id="ViewMenu" anchor="last"/>
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
     </actions>

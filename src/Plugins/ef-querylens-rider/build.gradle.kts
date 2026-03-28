@@ -53,6 +53,26 @@ val bundleQueryLensRuntime by tasks.registering {
     val outputDir = bundledRuntimeOutputDir
     outputs.dir(outputDir)
 
+    val lspSourceDir = projectDir.resolve("../../../src/EFQueryLens.Lsp")
+    val daemonSourceDir = projectDir.resolve("../../../src/EFQueryLens.Daemon")
+    val coreSourceDir = projectDir.resolve("../../../src/EFQueryLens.Core")
+
+    // Ensure runtime rebundles whenever backend source/config changes.
+    inputs.files(
+        fileTree(lspSourceDir) {
+            include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
+        },
+        fileTree(daemonSourceDir) {
+            include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
+        },
+        fileTree(coreSourceDir) {
+            include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
+        },
+        projectDir.resolve("../../../Directory.Build.props"),
+        projectDir.resolve("../../../global.json"),
+        projectDir.resolve("../../../nuget.config"),
+    )
+
     // Compute these as plain Strings at configuration time, captured by doLast.
     val lspCsprojPath = projectDir.resolve("../../../src/EFQueryLens.Lsp/EFQueryLens.Lsp.csproj").canonicalPath
     val daemonCsprojPath = projectDir.resolve("../../../src/EFQueryLens.Daemon/EFQueryLens.Daemon.csproj").canonicalPath

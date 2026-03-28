@@ -81,15 +81,24 @@ class EFQueryLensUrlOpener : UrlOpener() {
 
         val effectiveProject = project ?: ProjectManager.getInstance().openProjects.firstOrNull() ?: return true
 
-        if (host == "recalculate") {
-            requestPreviewRecalculate(effectiveProject, fileUri, line, character)
-            return true
-        }
-
         // Normalise "opensql" (hover link scheme) → "opensqleditor" (action dispatch key)
         val actionType = if (host == "opensql") "opensqleditor" else host
-        dispatchSqlAction(actionType, effectiveProject, fileUri, line, character)
+        executeAction(actionType, effectiveProject, fileUri, line, character)
         return true
+    }
+
+    internal fun executeAction(
+        type: String,
+        project: Project,
+        fileUri: String,
+        line: Int,
+        character: Int,
+    ) {
+        when (type) {
+            "recalculate" -> requestPreviewRecalculate(project, fileUri, line, character)
+            "copysql", "opensqleditor" -> dispatchSqlAction(type, project, fileUri, line, character)
+            else -> thisLogger().warn("[EFQueryLens] executeAction: unknown action type='$type'")
+        }
     }
 
     /**
@@ -114,13 +123,8 @@ class EFQueryLensUrlOpener : UrlOpener() {
 
         val effectiveProject = project ?: ProjectManager.getInstance().openProjects.firstOrNull() ?: return false
 
-        if (type == "recalculate") {
-            requestPreviewRecalculate(effectiveProject, fileUri, line, character)
-            return true
-        }
-
-        if (type == "copysql" || type == "opensqleditor") {
-            dispatchSqlAction(type, effectiveProject, fileUri, line, character)
+        if (type == "recalculate" || type == "copysql" || type == "opensqleditor") {
+            executeAction(type, effectiveProject, fileUri, line, character)
             return true
         }
 

@@ -37,6 +37,8 @@ internal sealed record QueryLensStructuredHoverResult(
 
 internal sealed partial class HoverPreviewService
 {
+    private const string HoverBuildMarker = "2026-03-26-rider-linkfix-r2";
+
     private readonly IQueryLensEngine _engine;
     private readonly bool _useBrowserSafeHoverActionLinks;
     private readonly int _actionPort;
@@ -57,7 +59,8 @@ internal sealed partial class HoverPreviewService
         Console.Error.WriteLine(
             $"[QL-Hover] init: client='{Environment.GetEnvironmentVariable("QUERYLENS_CLIENT")}' " +
             $"useBrowserSafe={_useBrowserSafeHoverActionLinks} actionPort={_actionPort} " +
-            $"linkScheme={(_actionPort > 0 ? $"http://127.0.0.1:{_actionPort}" : "efquerylens://")}");
+            $"linkScheme={(_actionPort > 0 ? $"http://127.0.0.1:{_actionPort}" : "efquerylens://")} " +
+            $"build={HoverBuildMarker}");
     }
 
     internal void SetDebugEnabled(bool enabled)
