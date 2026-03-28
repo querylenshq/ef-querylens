@@ -122,7 +122,7 @@ The connection string is never opened — it only tells EF Core which provider d
 **2. Build the solution**
 
 ```bash
-dotnet build EFQueryLens.slnx
+dotnet build
 ```
 
 **3. Install the extension**
