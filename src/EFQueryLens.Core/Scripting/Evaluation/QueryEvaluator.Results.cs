@@ -16,11 +16,24 @@ public sealed partial class QueryEvaluator
         if (string.IsNullOrWhiteSpace(expression))
             return false;
 
-        // Warn whenever the expression has nested materialization inside a projection,
-        // regardless of how many commands were captured. Multiple commands means the split
-        // queries were captured, but the warning is still informative about the query shape.
+        // Only warn when the query shape can genuinely produce child-collection SQL commands
+        // that the offline interceptor might not capture.  The two real triggers are:
+        //
+        //   1. EF actually emitted more than one SQL command (split-query or multi-table
+        //      materialisation that we already captured — warn to note the preview shows all).
+        //   2. The expression contains .Include(, which is the main driver of split queries /
+        //      extra round-trips for collection navigations.
+        //
+        // A plain .Select(c => c.Name).ToList() on a scalar projection never generates a
+        // second command and should not raise this warning.
+        if (commands.Count > 1)
+            return true;
+
         var hasSelect = expression.Contains(".Select(", StringComparison.OrdinalIgnoreCase);
-        if (!hasSelect)
+        var hasInclude = expression.Contains(".Include(", StringComparison.OrdinalIgnoreCase)
+                      || expression.Contains(".ThenInclude(", StringComparison.OrdinalIgnoreCase);
+
+        if (!hasSelect || !hasInclude)
             return false;
 
         return expression.Contains(".ToList(", StringComparison.OrdinalIgnoreCase)
