@@ -357,9 +357,8 @@ public sealed partial class QueryEvaluator
         }
         catch (Exception ex)
         {
-            var msg = ex is TargetInvocationException { InnerException: { } inner }
-                ? inner.ToString()
-                : ex.Message;
+            var unwrapped = ex is TargetInvocationException { InnerException: { } inner } ? inner : ex;
+            var msg = unwrapped is TargetInvocationException ? unwrapped.ToString() : unwrapped.Message;
 
             if (msg.Contains("does not have a type mapping assigned", StringComparison.OrdinalIgnoreCase))
             {
@@ -367,6 +366,14 @@ public sealed partial class QueryEvaluator
                        "This often happens with provider-specific value types (e.g. Pgvector.Vector for pgvector, " +
                        "NetTopologySuite.Geometries.Point for spatial). Ensure the variable is typed explicitly in " +
                        "the hovered expression, or assign it from a typed entity property.";
+            }
+            else if (unwrapped is MissingMethodException ||
+                     msg.Contains("Method not found", StringComparison.OrdinalIgnoreCase))
+            {
+                msg += "\n\nHint: This is usually caused by an EF Core version mismatch. " +
+                       "The EF Core assemblies loaded from your project are not binary-compatible with the " +
+                       "version EF QueryLens was built against. " +
+                       "Ensure your project's EF Core packages are up to date.";
             }
 
             return Failure(msg, sw.Elapsed, null, null);
