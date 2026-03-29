@@ -10,48 +10,49 @@ internal sealed partial class HoverHandler
     private const int CacheMaxEntries = 2_000;
     private const int CacheTargetEntries = 1_600;
 
-    private bool TryGetCachedHover(string cacheKey, out Hover? hover)
+    /// <summary>
+    /// Looks up the primary position/fingerprint cache.
+    /// Returns <c>true</c> for both <see cref="QueryTranslationStatus.Ready"/> and
+    /// <see cref="QueryTranslationStatus.InQueue"/> entries so callers can render the
+    /// appropriate status message immediately without re-triggering computation.
+    /// </summary>
+    private bool TryGetCachedEntry(string cacheKey, out CachedEntry? entry)
     {
-        hover = null;
+        entry = null;
         if (_hoverCacheTtlMs <= 0) return false;
         if (!_hoverCache.TryGetValue(cacheKey, out var cached)) return false;
         if (IsExpired(cached)) { _hoverCache.TryRemove(cacheKey, out _); return false; }
-        hover = cached.Hover;
+        entry = cached;
         return true;
     }
 
-    private bool TryGetSemanticCachedHover(string semanticKey, out Hover? hover)
+    /// <summary>
+    /// Looks up the semantic (expression-normalised) cache. Only returns
+    /// <see cref="QueryTranslationStatus.Ready"/> entries — <c>InQueue</c> placeholders
+    /// are intentionally excluded so they don't suppress real results at other cursor
+    /// positions within the same chain.
+    /// </summary>
+    private bool TryGetSemanticCachedEntry(string semanticKey, out CachedEntry? entry)
     {
-        hover = null;
+        entry = null;
         if (_hoverCacheTtlMs <= 0) return false;
         if (!_semanticHoverCache.TryGetValue(semanticKey, out var cached)) return false;
         if (IsExpired(cached)) { _semanticHoverCache.TryRemove(semanticKey, out _); return false; }
-        hover = cached.Hover;
-        return hover is not null;
-    }
-
-    private bool TryGetCachedStructured(string cacheKey, out QueryLensStructuredHoverResult? result)
-    {
-        result = null;
-        if (_hoverCacheTtlMs <= 0) return false;
-        if (!_hoverCache.TryGetValue(cacheKey, out var cached)) return false;
-        if (IsExpired(cached)) { _hoverCache.TryRemove(cacheKey, out _); return false; }
-        result = cached.Structured;
+        if (cached.Status is not QueryTranslationStatus.Ready) return false;
+        entry = cached;
         return true;
     }
 
-    private bool TryGetSemanticCachedStructured(string semanticKey, out QueryLensStructuredHoverResult? result)
+    private bool IsExpired(CachedEntry entry)
     {
-        result = null;
-        if (_hoverCacheTtlMs <= 0) return false;
-        if (!_semanticHoverCache.TryGetValue(semanticKey, out var cached)) return false;
-        if (IsExpired(cached)) { _semanticHoverCache.TryRemove(semanticKey, out _); return false; }
-        result = cached.Structured;
-        return result is not null;
-    }
+        // InQueue placeholders use a shorter TTL so a stale "computing..." message
+        // doesn't linger if the background task silently failed or was never started.
+        var ttlMs = entry.Status is QueryTranslationStatus.InQueue
+            ? _inQueueCacheTtlMs
+            : _hoverCacheTtlMs;
 
-    private bool IsExpired(CachedEntry entry) =>
-        entry.CreatedAtTicks + TimeSpan.FromMilliseconds(_hoverCacheTtlMs).Ticks <= DateTime.UtcNow.Ticks;
+        return entry.CreatedAtTicks + TimeSpan.FromMilliseconds(ttlMs).Ticks <= DateTime.UtcNow.Ticks;
+    }
 
     private async Task<string?> GetSourceTextAsync(string documentUri, string filePath, CancellationToken cancellationToken)
     {
@@ -132,15 +133,24 @@ internal sealed partial class HoverHandler
 
     private void CacheEntry(string cacheKey, ComputedEntry entry, SemanticHoverContext? semanticContext)
     {
-        if (_hoverCacheTtlMs <= 0 || entry.Status is not QueryTranslationStatus.Ready)
+        if (_hoverCacheTtlMs <= 0) return;
+
+        // Store Ready and InQueue entries. All other statuses (errors, DaemonUnavailable, etc.)
+        // are not cached — each hover retries independently for those.
+        if (entry.Status is not (QueryTranslationStatus.Ready or QueryTranslationStatus.InQueue))
         {
             return;
         }
 
-        var cached = new CachedEntry(DateTime.UtcNow.Ticks, entry.Hover, entry.Structured);
+        var cached = new CachedEntry(DateTime.UtcNow.Ticks, entry.Hover, entry.Structured, entry.Status);
         _hoverCache[cacheKey] = cached;
 
-        if (semanticContext is not null && (entry.Hover is not null || entry.Structured is not null))
+        // InQueue placeholders go only to the primary cache — never the semantic cache.
+        // The semantic cache is exclusively for cross-position deduplication of real results,
+        // and an InQueue entry there would suppress valid results at adjacent cursor positions.
+        if (entry.Status is QueryTranslationStatus.Ready
+            && semanticContext is not null
+            && (entry.Hover is not null || entry.Structured is not null))
         {
             _semanticHoverCache[semanticContext.SemanticKey] = cached;
         }
@@ -195,7 +205,11 @@ internal sealed partial class HoverHandler
         Console.Error.WriteLine($"[QL-Hover] {message}");
     }
 
-    private sealed record CachedEntry(long CreatedAtTicks, Hover? Hover, QueryLensStructuredHoverResult? Structured);
+    private sealed record CachedEntry(
+        long CreatedAtTicks,
+        Hover? Hover,
+        QueryLensStructuredHoverResult? Structured,
+        QueryTranslationStatus Status = QueryTranslationStatus.Ready);
 
     private readonly record struct ComputedEntry(Hover? Hover, QueryLensStructuredHoverResult? Structured, QueryTranslationStatus Status);
 }

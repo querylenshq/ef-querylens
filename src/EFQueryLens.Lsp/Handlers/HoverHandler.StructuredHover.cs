@@ -27,21 +27,18 @@ internal sealed partial class HoverHandler
         var effectiveCharacter = context.EffectiveCharacter;
         var cacheKey = context.CacheKey;
 
-        if (TryGetCachedStructured(cacheKey, out var cachedResult))
+        if (TryGetCachedEntry(cacheKey, out var cachedEntry))
         {
-            LogHoverDebug($"structured-hover-cache-hit line={effectiveLine} char={effectiveCharacter}");
-            return cachedResult;
+            LogHoverDebug($"structured-hover-cache-hit status={cachedEntry!.Status} line={effectiveLine} char={effectiveCharacter}");
+            return cachedEntry.Structured;
         }
 
         if (semanticContext is not null
-            && _hoverCacheTtlMs > 0
-            && _semanticHoverCache.TryGetValue(semanticContext.SemanticKey, out var semEntry)
-            && !IsExpired(semEntry)
-            && semEntry.Structured is not null)
+            && TryGetSemanticCachedEntry(semanticContext.SemanticKey, out var semEntry))
         {
             LogHoverDebug($"structured-hover-semantic-cache-hit line={effectiveLine} char={effectiveCharacter}");
-            _hoverCache.TryAdd(cacheKey, semEntry);
-            return semEntry.Structured;
+            _hoverCache.TryAdd(cacheKey, semEntry!);
+            return semEntry!.Structured;
         }
 
         if (semanticContext is not null)
