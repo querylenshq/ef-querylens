@@ -87,9 +87,13 @@ internal sealed partial class HoverHandler
     {
         if (_hoverCacheTtlMs <= 0) return;
 
-        // Store Ready and InQueue entries. All other statuses (errors, DaemonUnavailable, etc.)
-        // are not cached — each hover retries independently for those.
-        if (entry.Status is not (QueryTranslationStatus.Ready or QueryTranslationStatus.InQueue))
+        // Store statuses that should replace an InQueue placeholder in the primary cache.
+        // Keep the semantic cache Ready-only (below) so cross-position dedupe only uses
+        // finalized results.
+        if (entry.Status is not (QueryTranslationStatus.Ready
+            or QueryTranslationStatus.InQueue
+            or QueryTranslationStatus.Starting
+            or QueryTranslationStatus.DaemonUnavailable))
         {
             return;
         }

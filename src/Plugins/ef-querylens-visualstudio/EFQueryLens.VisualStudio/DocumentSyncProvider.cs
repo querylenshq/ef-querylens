@@ -6,8 +6,6 @@ namespace EFQueryLens.VisualStudio;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
-using System.IO;
-using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
@@ -22,7 +20,8 @@ using Microsoft.VisualStudio.Utilities;
 [TextViewRole(PredefinedTextViewRoles.Document)]
 internal sealed class DocumentSyncProvider : IWpfTextViewCreationListener
 {
-    private readonly Dictionary<string, DocumentSyncBuffer> _syncedBuffers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TrackedSyncBuffer> _syncedBuffers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<IWpfTextView, string> _viewToFile = new();
     private static readonly object SyncLock = new();
 
     public void TextViewCreated(IWpfTextView textView)
@@ -38,18 +37,64 @@ internal sealed class DocumentSyncProvider : IWpfTextViewCreationListener
         if (string.IsNullOrWhiteSpace(filePath) || !filePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             return;
 
+        textView.Closed += OnTextViewClosed;
+
         lock (SyncLock)
         {
-            if (_syncedBuffers.ContainsKey(filePath))
+            _viewToFile[textView] = filePath;
+
+            if (_syncedBuffers.TryGetValue(filePath, out var tracked))
+            {
+                tracked.RefCount++;
                 return;
+            }
 
             var syncBuffer = new DocumentSyncBuffer(filePath, buffer);
-            _syncedBuffers[filePath] = syncBuffer;
+            _syncedBuffers[filePath] = new TrackedSyncBuffer(syncBuffer, refCount: 1);
 
             // Send initial didOpen notification with current buffer content
             var sourceText = buffer.CurrentSnapshot.GetText();
             QueryLensLanguageClient.NotifyDocumentOpened(filePath, sourceText);
         }
+    }
+
+    private void OnTextViewClosed(object? sender, EventArgs e)
+    {
+        if (sender is not IWpfTextView view)
+            return;
+
+        view.Closed -= OnTextViewClosed;
+
+        lock (SyncLock)
+        {
+            if (!_viewToFile.TryGetValue(view, out var filePath))
+                return;
+
+            _viewToFile.Remove(view);
+
+            if (!_syncedBuffers.TryGetValue(filePath, out var tracked))
+                return;
+
+            tracked.RefCount--;
+            if (tracked.RefCount > 0)
+                return;
+
+            _syncedBuffers.Remove(filePath);
+            tracked.Buffer.Dispose();
+        }
+    }
+
+    private sealed class TrackedSyncBuffer
+    {
+        internal TrackedSyncBuffer(DocumentSyncBuffer buffer, int refCount)
+        {
+            Buffer = buffer;
+            RefCount = refCount;
+        }
+
+        internal DocumentSyncBuffer Buffer { get; }
+
+        internal int RefCount { get; set; }
     }
 
     private sealed class DocumentSyncBuffer : IDisposable

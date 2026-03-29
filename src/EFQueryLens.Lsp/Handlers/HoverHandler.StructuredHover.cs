@@ -40,6 +40,20 @@ internal sealed partial class HoverHandler
             return semEntry!.Structured;
         }
 
+        // Cache-disabled mode: compute immediately so structured hover can still
+        // return SQL/status when hoverCacheTtlMs is configured to 0.
+        if (_hoverCacheTtlMs <= 0)
+        {
+            var computed = await ComputeCombinedAsync(
+                filePath,
+                sourceText,
+                effectiveLine,
+                effectiveCharacter,
+                cancellationToken);
+
+            return computed.Structured;
+        }
+
         // Cache miss — return InQueue immediately and compute in background.
         // BackgroundComputeAndCacheAsync (defined in MarkdownHover.cs) handles both
         // hover and structured formats in a single engine call.

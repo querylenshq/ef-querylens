@@ -40,6 +40,20 @@ internal sealed partial class HoverHandler
             return semEntry!.Hover;
         }
 
+        // Cache-disabled mode: compute immediately so users do not get a perpetual
+        // "computing" placeholder when hoverCacheTtlMs is configured to 0.
+        if (_hoverCacheTtlMs <= 0)
+        {
+            var computed = await ComputeCombinedAsync(
+                filePath,
+                sourceText,
+                effectiveLine,
+                effectiveCharacter,
+                cancellationToken);
+
+            return computed.Hover;
+        }
+
         // Cache miss — return InQueue immediately and compute in background.
         // TryCacheEntryInQueue uses TryAdd so only one concurrent hover wins the race
         // and starts the background task; others read the InQueue entry next hover.
