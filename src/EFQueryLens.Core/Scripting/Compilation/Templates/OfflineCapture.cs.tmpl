@@ -22,6 +22,18 @@ internal static class __QueryLensOfflineCapture__
 
             var alc = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(dbContext.GetType().Assembly);
             var assemblies = alc is null ? Enumerable.Empty<Assembly>() : alc.Assemblies;
+
+            // Build a provider-specific DbParameter factory so type mappings that hard-cast
+            // DbParameter to their provider type (e.g. NpgsqlParameter) don't throw.
+            Func<DbParameter>? paramFactory = null;
+            var npgsqlAsm = assemblies.FirstOrDefault(a => a.GetName().Name == "Npgsql");
+            if (npgsqlAsm != null)
+            {
+                var npgsqlParamType = npgsqlAsm.GetType("Npgsql.NpgsqlParameter");
+                if (npgsqlParamType != null)
+                    paramFactory = () => (DbParameter)Activator.CreateInstance(npgsqlParamType)!;
+            }
+
             var relAsm = assemblies.FirstOrDefault(a => a.GetName().Name == "Microsoft.EntityFrameworkCore.Relational");
             if (relAsm is null)
             {
@@ -65,9 +77,13 @@ internal static class __QueryLensOfflineCapture__
                 var existingConn = getConnMethod.Invoke(null, new[] { database });
                 if (existingConn?.GetType() == typeof(__QueryLensOfflineDbConnection__))
                     return true;
+                // Different ALC's offline connection — its _openedCount may be stuck > 0 if
+                // a previous run threw before CloseAsync.  Reset it so SetDbConnection succeeds.
+                if (existingConn?.GetType().Name == "__QueryLensOfflineDbConnection__")
+                    TryResetRelationalOpenCount(database, relAsm);
             }
 
-            var offlineConn = new __QueryLensOfflineDbConnection__();
+            var offlineConn = new __QueryLensOfflineDbConnection__(paramFactory);
             var paramCount = setMethod.GetParameters().Length;
             var args = paramCount >= 3
                 ? new object?[] { database, offlineConn, true }
@@ -80,5 +96,37 @@ internal static class __QueryLensOfflineCapture__
             skipReason = $"SetDbConnection failed: {(ex is TargetInvocationException tie ? tie.InnerException?.Message : ex.Message)}";
             return false;
         }
+    }
+
+    // Resets EF Core RelationalConnection._openedCount to 0 so that SetDbConnection can
+    // replace a stale offline connection left open by a previous run that threw.
+    private static void TryResetRelationalOpenCount(object database, Assembly relAsm)
+    {
+        try
+        {
+            // DatabaseFacade implements IInfrastructure<IServiceProvider> — use it to get
+            // the IRelationalConnection service without hard-referencing EF Core types.
+            var infraType = database.GetType().GetInterfaces()
+                .FirstOrDefault(i => i.IsGenericType && i.Name.StartsWith("IInfrastructure"));
+            if (infraType is null) return;
+            var instanceProp = infraType.GetProperty("Instance");
+            if (instanceProp is null) return;
+            var sp = instanceProp.GetValue(database) as IServiceProvider;
+            if (sp is null) return;
+
+            var relConnType = relAsm.GetType("Microsoft.EntityFrameworkCore.Storage.IRelationalConnection");
+            if (relConnType is null) return;
+            var relConn = sp.GetService(relConnType);
+            if (relConn is null) return;
+
+            var type = relConn.GetType();
+            while (type is not null)
+            {
+                var field = type.GetField("_openedCount", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (field is not null) { field.SetValue(relConn, 0); return; }
+                type = type.BaseType;
+            }
+        }
+        catch { }
     }
 }
