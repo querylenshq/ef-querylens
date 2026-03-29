@@ -92,6 +92,16 @@ internal sealed partial class HoverHandler
                 cancellationToken);
         }
 
+        return BuildComputedFromCombined(combined);
+    }
+
+    /// <summary>
+    /// Converts a <see cref="CombinedHoverResult"/> into a <see cref="ComputedEntry"/> by
+    /// applying the "Could not extract" normalisation rules.  Shared by
+    /// <see cref="ComputeCombinedAsync"/> and <see cref="StorePrewarmedEntry"/>.
+    /// </summary>
+    private static ComputedEntry BuildComputedFromCombined(CombinedHoverResult combined)
+    {
         Hover? hover = null;
         if (combined.Markdown.Success
             || !combined.Markdown.Output.StartsWith("Could not extract a LINQ query expression", StringComparison.OrdinalIgnoreCase))
