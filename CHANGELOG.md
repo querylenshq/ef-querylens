@@ -6,6 +6,13 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-03-30
+
+### Fixed
+- SQL Server paging queries no longer fail when a local variable is declared with a ternary initializer (e.g. `var pageSize = request.PageSize > 0 ? request.PageSize : DefaultPageSize`). The LSP type extractor now recursively inspects both branches of a `ConditionalExpressionSyntax` to infer the correct type, so `pageSize` is correctly resolved as `int` instead of falling back to runtime reflection.
+- Runtime type inference no longer picks up provider-internal types (e.g. `Microsoft.Data.SqlClient.SNIHandle`) when reflecting over method signatures. A new `IsInternalProviderType()` filter blocks non-public types from provider assemblies across all six type-inference paths in stub synthesis.
+- DbContext instances that resolve their connection string via `UseSqlServer("Name=ConnectionName")` or `UseMySql("Name=ConnectionName")` no longer throw "named connection string not found" during offline evaluation. A fake `IServiceProvider` and `IConfiguration` are now provided during factory execution so `OnConfiguring` can resolve named connection strings without requiring a real host environment.
+
 ## [1.0.10] - 2026-03-29
 
 ### Fixed
