@@ -182,6 +182,10 @@ public sealed partial class QueryEvaluator
                     compilationRetryCount++;
 
                     LogDebug($"compile-retry iteration={compilationRetryCount} errorCount={errors.Count}");
+                    foreach (var err in errors.Take(10))
+                    {
+                        LogDebug($"  diagnostic id={err.Id} msg={err.GetMessage()}");
+                    }
 
                     var missingNames = errors
                         .Where(d => d.Id == "CS0103")
@@ -221,24 +225,43 @@ public sealed partial class QueryEvaluator
                     // Two cases:
                     //  • Top-level type   → parent is a namespace → emit "using Ns;"
                     //  • Nested type      → parent is a class     → emit "using static EnclosingType;"
-                    foreach (var typeName in errors
+                    var cs0246Types = errors
                         .Where(d => d.Id is "CS0246" or "CS0234")
                         .Select(d => TryExtractTypeNameFromCS0246(d))
                         .Where(n => !string.IsNullOrWhiteSpace(n))
-                        .Distinct(StringComparer.Ordinal))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList();
+
+                    LogDebug($"compile-retry cs0246-types={string.Join(",", cs0246Types)}");
+
+                    foreach (var typeName in cs0246Types)
                     {
-                        foreach (var parent in FindNamespacesForSimpleName(typeName!, knownTypes))
+                        var parents = FindNamespacesForSimpleName(typeName!, knownTypes).ToList();
+                        LogDebug($"compile-retry type-lookup name={typeName} found-parents={string.Join(",", parents)}");
+
+                        if (parents.Count == 0)
+                        {
+                            LogDebug($"compile-retry type-not-in-known-types name={typeName}");
+                        }
+
+                        foreach (var parent in parents)
                         {
                             if (IsResolvableNamespace(parent, knownNamespaces))
                             {
                                 if (synthesizedUsingNamespaces.Add(parent))
+                                {
+                                    LogDebug($"compile-retry using-namespace added={parent}");
                                     changed = true;
+                                }
                             }
                             else if (IsResolvableType(parent, knownTypes))
                             {
                                 // Nested type — bring it into scope with "using static EnclosingType"
                                 if (synthesizedUsingStaticTypes.Add(parent))
+                                {
+                                    LogDebug($"compile-retry using-static added={parent}");
                                     changed = true;
+                                }
                             }
                         }
                     }
@@ -333,6 +356,7 @@ public sealed partial class QueryEvaluator
                         // If the only remaining errors are metadata accessibility errors
                         // (CS0122 from internal types in indirect assembly dependencies),
                         // retrying will never help — proceed to emit.
+                        LogDebug($"compile-retry iteration={compilationRetryCount} no-changes-made");
                         if (errors.All(e => e.Id == "CS0122"))
                             break;
 
