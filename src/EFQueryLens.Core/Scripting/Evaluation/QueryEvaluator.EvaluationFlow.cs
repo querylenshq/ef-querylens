@@ -192,7 +192,11 @@ public sealed partial class QueryEvaluator
                         if (stubs.Any(s => s.Contains($" {n} ") || s.Contains($" {n};")))
                             continue;
 
-                        stubs.Add(BuildStubDeclaration(n!, rootId, workingRequest, dbContextType));
+                        var stub = BuildStubDeclaration(n!, rootId, workingRequest, dbContextType);
+                        if (string.IsNullOrWhiteSpace(stub))
+                            continue;
+
+                        stubs.Add(stub);
                         changed = true;
                     }
 
@@ -249,7 +253,14 @@ public sealed partial class QueryEvaluator
                         if (oldStub is null)
                             continue;
 
-                        var typedStub = BuildStubFromTypeName(expectedType, argName);
+                        var typedStub = BuildStubFromTypeName(expectedType, argName, dbContextType, workingRequest.UsingAliases);
+                        if (string.IsNullOrWhiteSpace(typedStub))
+                        {
+                            stubs.Remove(oldStub);
+                            changed = true;
+                            continue;
+                        }
+
                         if (string.Equals(oldStub, typedStub, StringComparison.Ordinal))
                             continue;
 

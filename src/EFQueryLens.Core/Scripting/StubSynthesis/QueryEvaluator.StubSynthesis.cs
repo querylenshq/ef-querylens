@@ -18,7 +18,10 @@ public sealed partial class QueryEvaluator
         // Use LSP-provided authoritative type when available — skip heuristics entirely.
         if (request.LocalVariableTypes.TryGetValue(name, out var knownTypeName)
             && !string.IsNullOrWhiteSpace(knownTypeName))
-            return BuildStubFromTypeName(knownTypeName, name);
+        {
+            var knownTypeStub = BuildStubFromTypeName(knownTypeName, name, dbContextType, request.UsingAliases);
+            return string.IsNullOrWhiteSpace(knownTypeStub) ? string.Empty : knownTypeStub;
+        }
 
         // Gridify placeholders must win over generic member-access synthesis.
         // `query` is commonly used both as IGridifyQuery and as `query.Page` / `query.PageSize`.
@@ -42,6 +45,9 @@ public sealed partial class QueryEvaluator
         inferred ??= InferComparisonOperandType(name, request.Expression, dbContextType);
         if (inferred is not null)
         {
+            if (IsStaticClassType(inferred))
+                return string.Empty;
+
             var tn = ToCSharpTypeName(inferred);
             var value = BuildScalarPlaceholderExpression(inferred);
             return $"{tn} {name} = {value};";
@@ -81,8 +87,16 @@ public sealed partial class QueryEvaluator
         return $"object {name} = default;";
     }
 
-    private static string BuildStubFromTypeName(string typeName, string varName)
+    private static string BuildStubFromTypeName(
+        string typeName,
+        string varName,
+        Type dbContextType,
+        IReadOnlyDictionary<string, string>? usingAliases = null)
     {
+        var resolvedType = TryResolveStubType(typeName, dbContextType, usingAliases);
+        if (IsStaticClassType(resolvedType))
+            return string.Empty;
+
         return typeName.Trim() switch
         {
             "int" or "Int32" or "System.Int32" => $"int {varName} = 0;",
@@ -128,6 +142,35 @@ public sealed partial class QueryEvaluator
             var tn => $"var {varName} = ({tn.TrimEnd('?')})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({tn.TrimEnd('?')}));",
         };
     }
+
+    private static Type? TryResolveStubType(
+        string typeName,
+        Type dbContextType,
+        IReadOnlyDictionary<string, string>? usingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(typeName))
+            return null;
+
+        var normalized = typeName.Trim().TrimEnd('?');
+        normalized = normalized.Replace("global::", string.Empty, StringComparison.Ordinal);
+
+        var aliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var resolved = ResolveTypeFromName(normalized, dbContextType, aliases);
+        if (resolved is not null)
+            return resolved;
+
+        resolved = Type.GetType(normalized, throwOnError: false, ignoreCase: false);
+        if (resolved is not null)
+            return resolved;
+
+        if (!normalized.Contains('.', StringComparison.Ordinal))
+            return Type.GetType($"System.{normalized}", throwOnError: false, ignoreCase: false);
+
+        return null;
+    }
+
+    private static bool IsStaticClassType(Type? type)
+        => type is not null && type.IsAbstract && type.IsSealed && !type.IsValueType;
 
     private static bool TryExtractCollectionElementType(string typeName, out string elementType)
     {

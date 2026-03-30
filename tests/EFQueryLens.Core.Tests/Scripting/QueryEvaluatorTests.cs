@@ -631,6 +631,50 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
     }
 
     [Fact]
+    public void BuildStubDeclaration_LocalVariableStaticType_SkipsStubGeneration()
+    {
+        var stub = BuildStubDeclarationForRequestForTest(
+            missingName: "Math",
+            expression: "db.Orders.Skip(Math.Max(page, 1)).Take(pageSize)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Math"] = "System.Math"
+            });
+
+        Assert.Equal(string.Empty, stub);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_LocalVariableAliasToStaticType_SkipsStubGeneration()
+    {
+        var stub = BuildStubDeclarationForRequestForTest(
+            missingName: "mathHelper",
+            expression: "db.Orders.Skip(pageSize)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["mathHelper"] = "MathAlias"
+            },
+            usingAliases: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["MathAlias"] = "System.Math"
+            });
+
+        Assert.Equal(string.Empty, stub);
+    }
+
+    [Fact]
+    public async Task Evaluate_PagingWithMathCall_DoesNotSurfaceStaticTypeCompilationErrors()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip(Math.Max(pageSize * pageIndex, 0)).Take(pageSize).Select(expression)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("Cannot declare a variable of static type 'Math'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Cannot convert to static type 'Math'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Evaluate_MissingPagingVariables_InSkipTakeArithmetic_AreSynthesizedAsNumeric()
     {
         var result = await TranslateAsync(
@@ -1210,12 +1254,21 @@ public sealed class C
     }
 
     private string BuildStubDeclarationForTest(string missingName, string expression)
+        => BuildStubDeclarationForRequestForTest(missingName, expression);
+
+    private string BuildStubDeclarationForRequestForTest(
+        string missingName,
+        string expression,
+        IReadOnlyDictionary<string, string>? localVariableTypes = null,
+        IReadOnlyDictionary<string, string>? usingAliases = null)
     {
         var dbContextType = _alcCtx.FindDbContextType(null, expression);
         var request = new TranslationRequest
         {
             AssemblyPath = _alcCtx.AssemblyPath,
             Expression = expression,
+            LocalVariableTypes = localVariableTypes ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            UsingAliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal),
         };
 
         var method = typeof(QueryEvaluator).GetMethod(
@@ -1228,7 +1281,7 @@ public sealed class C
             null,
             [missingName, "db", request, dbContextType]) as string;
 
-        Assert.False(string.IsNullOrWhiteSpace(stub));
+        Assert.NotNull(stub);
         return stub!;
     }
 
