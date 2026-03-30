@@ -181,6 +181,8 @@ public sealed partial class QueryEvaluator
 
                     compilationRetryCount++;
 
+                    LogDebug($"compile-retry iteration={compilationRetryCount} errorCount={errors.Count}");
+
                     var missingNames = errors
                         .Where(d => d.Id == "CS0103")
                         .Select(TryExtractMissingIdentifierFromDiagnostic)
@@ -192,6 +194,8 @@ public sealed partial class QueryEvaluator
 
                     var changed = false;
 
+                    LogDebug($"compile-retry cs0103-missing-names={string.Join(",", missingNames)}");
+
                     var rootId = TryExtractRootIdentifier(workingRequest.Expression);
                     foreach (var n in missingNames)
                     {
@@ -202,6 +206,7 @@ public sealed partial class QueryEvaluator
                         if (string.IsNullOrWhiteSpace(stub))
                             continue;
 
+                        LogDebug($"compile-retry stub-added name={n} stub={stub.Trim()}");
                         stubs.Add(stub);
                         changed = true;
                     }

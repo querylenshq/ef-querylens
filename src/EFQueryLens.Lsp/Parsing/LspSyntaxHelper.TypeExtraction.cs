@@ -119,7 +119,12 @@ public static partial class LspSyntaxHelper
             // Skip parameters whose declared type contains an open generic type parameter name.
             if (openTypeParams is not null &&
                 openTypeParams.Any(tp => typeName.Contains(tp, StringComparison.Ordinal)))
+            {
+                // Log: parameter skipped due to open generic type reference
+                System.Diagnostics.Debug.WriteLine(
+                    $"[LspSyntaxHelper] skip-param name={paramName} type={typeName} contains-open-generic");
                 continue;
+            }
 
             result[paramName] = typeName;
         }

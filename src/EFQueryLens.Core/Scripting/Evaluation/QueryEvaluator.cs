@@ -64,6 +64,9 @@ public sealed partial class QueryEvaluator
     private readonly ConcurrentDictionary<string, NamespaceTypeIndexEntry>
         _namespaceTypeIndexCache = new(StringComparer.Ordinal);
 
+    private readonly bool _debugEnabled = 
+        EFQueryLens.Core.Common.EnvironmentVariableParser.ReadBool("QUERYLENS_DEBUG", fallback: false);
+
     internal sealed record EvaluationStageTimings(
         TimeSpan? ContextResolution,
         TimeSpan? DbContextCreation,
@@ -107,6 +110,16 @@ public sealed partial class QueryEvaluator
             sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(sb.ToString())))[..16];
+    }
+
+    private void LogDebug(string message)
+    {
+        if (!_debugEnabled)
+        {
+            return;
+        }
+
+        Console.Error.WriteLine($"[QL-Eval] {message}");
     }
 
     private (HashSet<string> Namespaces, HashSet<string> Types) GetOrBuildNamespaceTypeIndex(

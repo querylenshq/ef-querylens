@@ -84,6 +84,13 @@ public sealed partial class QueryEvaluator
             ? string.Empty
             : string.Join(Environment.NewLine, stubs.Select(static stub => $"        {stub}"));
 
+        // Log: final stubs before compilation
+        if (stubs.Count > 0)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[QL-Eval] eval-stubs count={stubs.Count} stubs={{{string.Join(";", stubs.Select(s => s.Trim()))}}}" );
+        }
+
         var renderedRunner = EvalSourceTemplateCatalog.Render(
             EvalSourceTemplateCatalog.Runner,
             new Dictionary<string, string>(StringComparer.Ordinal)
