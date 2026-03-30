@@ -311,6 +311,48 @@ public class TypeExtractionTests
         Assert.Equal("System.Guid", typeName);
     }
 
+    [Fact]
+    public void ExtractLocalVariableTypes_VarWithConditionalIntLiterals_IsInferredAsInt()
+    {
+        var source = """
+            var count = true ? 5 : 10;
+            _ = count;
+            """;
+
+        var types = Extract(source, "_ = count;");
+
+        Assert.True(types.TryGetValue("count", out var typeName));
+        Assert.Equal("int", typeName);
+    }
+
+    [Fact]
+    public void ExtractLocalVariableTypes_VarWithConditionalStringLiterals_IsInferredAsString()
+    {
+        var source = """
+            var name = true ? "hello" : "world";
+            _ = name;
+            """;
+
+        var types = Extract(source, "_ = name;");
+
+        Assert.True(types.TryGetValue("name", out var typeName));
+        Assert.Equal("string", typeName);
+    }
+
+    [Fact]
+    public void ExtractLocalVariableTypes_VarWithConditionalCastAndLiteral_IsInferredFromCast()
+    {
+        var source = """
+            var value = true ? (long)5 : 10;
+            _ = value;
+            """;
+
+        var types = Extract(source, "_ = value;");
+
+        Assert.True(types.TryGetValue("value", out var typeName));
+        Assert.Equal("long", typeName);
+    }
+
     // ─── Static utility class initializers ───────────────────────────────────
 
     [Fact]

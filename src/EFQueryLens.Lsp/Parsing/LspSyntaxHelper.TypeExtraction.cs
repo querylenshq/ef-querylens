@@ -162,6 +162,11 @@ public static partial class LspSyntaxHelper
 
             // new() — target type unknown without semantic model
             ImplicitObjectCreationExpressionSyntax => null,
+            
+            // condition ? trueExpr : falseExpr — infer from true branch (should match false)
+            ConditionalExpressionSyntax conditional 
+                => TryInferTypeFromInitializer(conditional.WhenTrue) 
+                   ?? TryInferTypeFromInitializer(conditional.WhenFalse),
 
             // 5, 5L, 5.0f, "str", true, false, ...
             LiteralExpressionSyntax literal => literal.Kind() switch

@@ -133,7 +133,22 @@ public sealed partial class QueryEvaluator
                 var includeGridifyFallbackExtensions = false;
                 var maxRetries = 5;
                 CSharpCompilation compilation;
+                var lastSrc = string.Empty;
                 var roslynCompilationWatch = Stopwatch.StartNew();
+
+                string DumpSrcToTemp()
+                {
+                    try
+                    {
+                        var path = Path.Combine(Path.GetTempPath(), $"ql_eval_{Guid.NewGuid():N}.cs");
+                        File.WriteAllText(path, lastSrc);
+                        return path;
+                    }
+                    catch
+                    {
+                        return "(could not write temp file)";
+                    }
+                }
 
                 while (true)
                 {
@@ -150,6 +165,7 @@ public sealed partial class QueryEvaluator
                         synthesizedUsingStaticTypes,
                         synthesizedUsingNamespaces,
                         includeGridifyFallbackExtensions);
+                    lastSrc = src;
                     compilation = BuildCompilation(src, refs);
                     var errors = compilation.GetDiagnostics()
                         .Where(d => d.Severity == DiagnosticSeverity.Error)
@@ -164,9 +180,11 @@ public sealed partial class QueryEvaluator
                         or "CS0122")).ToList();
                     if (hardErrors.Count > 0)
                     {
+                        var rawHardDetail = string.Join("; ", hardErrors.Take(10).Select(e => $"{e.Id}: {e.GetMessage()}"));
                         return Failure(
                             $"Compilation error: {FormatHardDiagnostics(hardErrors)}",
-                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies,
+                            diagnosticDetail: $"{rawHardDetail} | src={DumpSrcToTemp()}");
                     }
 
                     if (errors.Count == 0)
@@ -174,14 +192,11 @@ public sealed partial class QueryEvaluator
 
                     if (maxRetries-- <= 0)
                     {
-                        // Always-on failure log: emit raw diagnostic set so production issues
-                        // can be diagnosed from LSP output without needing QUERYLENS_DEBUG.
-                        Console.Error.WriteLine(
-                            $"[QL-Eval] compile-failed retries-exhausted errorCount={errors.Count} " +
-                            $"diagnostics={string.Join("; ", errors.Take(10).Select(e => $"{e.Id}:{e.GetMessage()}"))}");
+                        var rawDetail = string.Join("; ", errors.Take(10).Select(e => $"{e.Id}: {e.GetMessage()}"));
                         return Failure(
                             $"Compilation error: {FormatSoftDiagnostics(errors)}",
-                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies,
+                            diagnosticDetail: $"{rawDetail} | src={DumpSrcToTemp()}");
                     }
 
                     compilationRetryCount++;
@@ -365,9 +380,11 @@ public sealed partial class QueryEvaluator
                         if (errors.All(e => e.Id == "CS0122"))
                             break;
 
+                        var rawNoChangeDetail = string.Join("; ", errors.Take(10).Select(e => $"{e.Id}: {e.GetMessage()}"));
                         return Failure(
                             $"Compilation error: {FormatSoftDiagnostics(errors)}",
-                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies,
+                            diagnosticDetail: $"{rawNoChangeDetail} | src={DumpSrcToTemp()}");
                     }
                 }
                 roslynCompilationWatch.Stop();
@@ -381,9 +398,12 @@ public sealed partial class QueryEvaluator
                     var emitResult = compilation.Emit(ms);
                     if (!emitResult.Success)
                     {
+                        var emitErrors = emitResult.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+                        var rawEmitDetail = string.Join("; ", emitErrors.Take(10).Select(e => $"{e.Id}: {e.GetMessage()}"));
                         return Failure(
-                            $"Emit error: {FormatHardDiagnostics(emitResult.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))}",
-                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies);
+                            $"Emit error: {FormatHardDiagnostics(emitErrors)}",
+                            sw.Elapsed, dbContextType, alcCtx.LoadedAssemblies,
+                            diagnosticDetail: $"{rawEmitDetail} | src={DumpSrcToTemp()}");
                     }
 
                     ms.Position = 0;

@@ -7,6 +7,29 @@ namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {
+    /// <summary>
+    /// Filters out internal/provider types that should not be used as stub types.
+    /// Examples: Microsoft.Data.SqlClient.SNIHandle, Npgsql internals, etc.
+    /// </summary>
+    private static bool IsInternalProviderType(Type? t)
+    {
+        if (t == null) return false;
+        
+        var namespaceName = t.Namespace ?? string.Empty;
+        var typeName = t.Name ?? string.Empty;
+        var asm = t.Assembly?.GetName().Name ?? string.Empty;
+        
+        // Internal types are typically not public and from provider assemblies
+        if (!t.IsPublic && (asm.Contains("SqlClient") || asm.Contains("Npgsql") || asm.Contains("Pomelo")))
+            return true;
+        
+        // Explicitly blocked provider-internal types
+        if (namespaceName == "Microsoft.Data.SqlClient" && typeName == "SNIHandle")
+            return true;
+        
+        return false;
+    }
+
     private static bool LooksLikeTypeOrNamespacePrefix(
         string id, string expression, IReadOnlyDictionary<string, string> aliases)
     {
@@ -23,13 +46,15 @@ public sealed partial class QueryEvaluator
             + $@"(?<!\w){Regex.Escape(v)}\s*(?:==|!=|>|<|>=|<=)\s*\w+\.(\w+)";
         var m = Regex.Match(expr, pattern);
         if (!m.Success) return null;
-        return FindEntityPropertyType(ctx, m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value);
+        var propType = FindEntityPropertyType(ctx, m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value);
+        return IsInternalProviderType(propType) ? null : propType;
     }
 
     private static Type? InferContainsElementType(string v, string expr, Type ctx)
     {
         var m = Regex.Match(expr, $@"(?<!\w){Regex.Escape(v)}\s*\.\s*Contains\s*\(\s*\w+\s*\.\s*(\w+)");
-        return m.Success ? FindEntityPropertyType(ctx, m.Groups[1].Value) : null;
+        var elemType = m.Success ? FindEntityPropertyType(ctx, m.Groups[1].Value) : null;
+        return IsInternalProviderType(elemType) ? null : elemType;
     }
 
     private static Type? InferSelectEntityType(string v, string expr, Type ctx)
@@ -38,8 +63,9 @@ public sealed partial class QueryEvaluator
         var m = Regex.Match(expr, @"^\s*[A-Za-z_][A-Za-z0-9_]*\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)");
         if (!m.Success) return null;
         var prop = ctx.GetProperty(m.Groups[1].Value);
-        return prop?.PropertyType.IsGenericType == true
+        var selType = prop?.PropertyType.IsGenericType == true
             ? prop.PropertyType.GetGenericArguments().FirstOrDefault() : null;
+        return IsInternalProviderType(selType) ? null : selType;
     }
 
     private static Type? InferWhereEntityType(string v, string expr, Type ctx)
@@ -48,8 +74,9 @@ public sealed partial class QueryEvaluator
         var m = Regex.Match(expr, @"^\s*[A-Za-z_][A-Za-z0-9_]*\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)");
         if (!m.Success) return null;
         var prop = ctx.GetProperty(m.Groups[1].Value);
-        return prop?.PropertyType.IsGenericType == true
+        var whereType = prop?.PropertyType.IsGenericType == true
             ? prop.PropertyType.GetGenericArguments().FirstOrDefault() : null;
+        return IsInternalProviderType(whereType) ? null : whereType;
     }
 
     private static Type? InferMethodArgumentType(string variableName, string expression, Type dbContextType)
@@ -93,7 +120,7 @@ public sealed partial class QueryEvaluator
                 && !string.Equals(methodName, "Equals", StringComparison.Ordinal))
             {
                 var fromSignature = TryInferTypeFromMethodSignature(methodName, argumentIndex, dbContextType);
-                if (fromSignature is not null)
+                if (fromSignature is not null && !IsInternalProviderType(fromSignature))
                     return fromSignature;
                 continue;
             }
@@ -129,7 +156,7 @@ public sealed partial class QueryEvaluator
                 && string.Equals(leftIdentifier, variableName, StringComparison.Ordinal))
             {
                 var inferredFromRight = InferOperandType(binary.Right, dbContextType);
-                if (inferredFromRight is not null)
+                if (inferredFromRight is not null && !IsInternalProviderType(inferredFromRight))
                     return inferredFromRight;
             }
 
@@ -137,7 +164,7 @@ public sealed partial class QueryEvaluator
                 && string.Equals(rightIdentifier, variableName, StringComparison.Ordinal))
             {
                 var inferredFromLeft = InferOperandType(binary.Left, dbContextType);
-                if (inferredFromLeft is not null)
+                if (inferredFromLeft is not null && !IsInternalProviderType(inferredFromLeft))
                     return inferredFromLeft;
             }
         }
@@ -174,7 +201,10 @@ public sealed partial class QueryEvaluator
                 return InferOperandType(prefix.Operand, dbContextType);
 
             case MemberAccessExpressionSyntax memberAccess:
-                return FindEntityPropertyType(dbContextType, memberAccess.Name.Identifier.ValueText);
+            {
+                var propType = FindEntityPropertyType(dbContextType, memberAccess.Name.Identifier.ValueText);
+                return IsInternalProviderType(propType) ? null : propType;
+            }
 
             case InvocationExpressionSyntax invocation
                 when invocation.Expression is MemberAccessExpressionSyntax invokedMember:
@@ -232,6 +262,10 @@ public sealed partial class QueryEvaluator
 
                     var paramType = parameters[argumentIndex].ParameterType;
                     if (paramType.IsGenericParameter || paramType == typeof(object))
+                        continue;
+                    
+                    // Skip internal/provider types that should not be used as stubs
+                    if (IsInternalProviderType(paramType))
                         continue;
 
                     candidates.Add(paramType);

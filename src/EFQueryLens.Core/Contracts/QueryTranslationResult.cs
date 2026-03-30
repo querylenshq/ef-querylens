@@ -8,6 +8,14 @@ public record QueryTranslationResult
     public IReadOnlyList<QueryParameter> Parameters { get; init; } = [];
     public IReadOnlyList<QueryWarning> Warnings { get; init; } = [];
     public string? ErrorMessage { get; init; }
+
+    /// <summary>
+    /// Raw Roslyn diagnostic detail for failed compilations — id and full message for each
+    /// error, semicolon-separated. Always populated on compilation failure regardless of
+    /// debug settings. Null on runtime or non-compilation failures.
+    /// </summary>
+    public string? DiagnosticDetail { get; init; }
+
     public TranslationMetadata Metadata { get; init; } = null!;
 
     /// <summary>

@@ -139,6 +139,8 @@ internal sealed partial class HoverPreviewService
             if (!translation.Success)
             {
                 log($"translate-error line={line} char={character} message={translation.ErrorMessage}");
+                if (!string.IsNullOrWhiteSpace(translation.DiagnosticDetail))
+                    log($"translate-error-detail line={line} char={character} detail={translation.DiagnosticDetail}");
                 return Fail(translation.ErrorMessage ?? "Translation failed.", sourceLine);
             }
 

@@ -21,11 +21,13 @@ public sealed partial class QueryEvaluator
         string message,
         TimeSpan elapsed,
         Type? dbContextType,
-        IEnumerable<Assembly>? userAssemblies) =>
+        IEnumerable<Assembly>? userAssemblies,
+        string? diagnosticDetail = null) =>
         new()
         {
             Success = false,
             ErrorMessage = message,
+            DiagnosticDetail = diagnosticDetail,
             Metadata = BuildMetadata(dbContextType, userAssemblies, elapsed),
         };
 
