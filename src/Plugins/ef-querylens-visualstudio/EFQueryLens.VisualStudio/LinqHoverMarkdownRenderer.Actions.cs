@@ -7,11 +7,11 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Media;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Threading;
 
 internal static partial class LinqHoverMarkdownRenderer
 {
@@ -164,17 +164,23 @@ internal static partial class LinqHoverMarkdownRenderer
             if (host == "recalculate"
                 && TryExtractHoverCommandArgs(uri, out var documentUri, out var line, out var character))
             {
-                JoinableTask recalculateTask = ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
+                _ = Task.Run(async delegate
                 {
-                    var result = await QueryLensLanguageClient.RequestPreviewRecalculateAsync(
-                        documentUri,
-                        line,
-                        character,
-                        default);
+                    try
+                    {
+                        var result = await QueryLensLanguageClient.RequestPreviewRecalculateAsync(
+                            documentUri,
+                            line,
+                            character,
+                            default);
 
-                    Log($"hover-recalculate-link success={result.Success} message={TruncateForLog(result.Message, 180)}");
+                        Log($"hover-recalculate-link success={result.Success} message={TruncateForLog(result.Message, 180)}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"hover-recalculate-link exception={ex.GetType().Name} message={TruncateForLog(ex.Message, 180)}");
+                    }
                 });
-                recalculateTask.FileAndForget("efquerylens/LinqHoverMarkdownRenderer/Recalculate");
 
                 return;
             }
