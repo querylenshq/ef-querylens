@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using SampleSqlServerApp.Application.Abstractions;
 using SampleSqlServerApp.Domain.Entities;
 using SampleSqlServerApp.Domain.Enums;
+using TypeEntity = SampleSqlServerApp.Domain.Entities.Type;
 
 namespace SampleSqlServerApp.Infrastructure.Persistence;
 
@@ -9,6 +10,7 @@ public class SqlServerAppDbContext : DbContext, ISqlServerAppDbContext
 {
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Order> Orders => Set<Order>();
+    public DbSet<TypeEntity> Types => Set<TypeEntity>();
 
     public SqlServerAppDbContext(DbContextOptions<SqlServerAppDbContext> options)
         : base(options)
@@ -46,6 +48,14 @@ public class SqlServerAppDbContext : DbContext, ISqlServerAppDbContext
                 .WithMany(c => c.Orders)
                 .HasForeignKey(x => x.CustomerId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TypeEntity>(b =>
+        {
+            b.ToTable("Types");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Name).HasMaxLength(200);
+            b.Property(x => x.IsDeleted).HasDefaultValue(false);
         });
     }
 }

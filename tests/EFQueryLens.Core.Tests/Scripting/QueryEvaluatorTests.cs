@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.IO;
 using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting;
@@ -1149,6 +1150,63 @@ public sealed class C
         Assert.NotNull(cs1503);
         var expected = QueryEvaluator.TryExtractExpectedTypeFromCS1503(cs1503!);
         Assert.Equal("string?", expected);
+    }
+
+    [Fact]
+    public void EmbeddedTemplate_FakeDbDataReader_QualifiesSystemType()
+    {
+        var assembly = typeof(QueryEvaluator).Assembly;
+        var resourceName = assembly.GetManifestResourceNames()
+            .FirstOrDefault(name =>
+                name.EndsWith(".Scripting.Compilation.Templates.FakeDbDataReader.cs.tmpl", StringComparison.Ordinal));
+
+        Assert.False(string.IsNullOrWhiteSpace(resourceName));
+
+        using var stream = assembly.GetManifestResourceStream(resourceName!);
+        Assert.NotNull(stream);
+        using var reader = new StreamReader(stream!);
+        var template = reader.ReadToEnd();
+
+        Assert.Contains("public override global::System.Type GetFieldType", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("public override Type GetFieldType", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildEvalSource_UsesQualifiedSystemTypeInGeneratedReader()
+    {
+        var dbContextType = _alcCtx.FindDbContextType("MySqlAppDbContext");
+        var request = new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            Expression = "db.Orders",
+            ContextVariableName = "db",
+            AdditionalImports = [],
+            UsingAliases = new Dictionary<string, string>(StringComparer.Ordinal),
+            UsingStaticTypes = [],
+        };
+
+        var buildEvalSourceMethod = typeof(QueryEvaluator).GetMethod(
+            "BuildEvalSource",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(buildEvalSourceMethod);
+
+        var source = buildEvalSourceMethod!.Invoke(
+            null,
+            [
+                dbContextType,
+                request,
+                Array.Empty<string>(),
+                new HashSet<string>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                false,
+            ]) as string;
+
+        Assert.False(string.IsNullOrWhiteSpace(source));
+        Assert.Contains("public override global::System.Type GetFieldType", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("public override Type GetFieldType", source, StringComparison.Ordinal);
     }
 
     private string BuildStubDeclarationForTest(string missingName, string expression)

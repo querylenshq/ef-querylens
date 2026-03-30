@@ -306,6 +306,7 @@ public sealed class CustomerReadService
 
         var revenue = GetRevenueByCustomerQuery(utcNow.Date.AddDays(-30));
         var activeHighValueCustomers = GetCustomersWithRecentOrderQuery(utcNow.Date.AddDays(-14), 200);
+        var activeTypes = GetActiveTypesQuery();
         var customersWithRecentOrdersSplit = _dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .Include(c => c.Orders.Where(o => o.IsNotDeleted && o.CreatedUtc >= utcNow.Date.AddDays(-30)))
@@ -326,9 +327,18 @@ public sealed class CustomerReadService
             ("GetPagedOrdersAsync<TResult>", pagedOrders),
             ("Revenue aggregation", revenue),
             ("Correlated subquery (Any + Average)", activeHighValueCustomers),
+            ("Entity named Type", activeTypes),
             ("Split query trigger (Customers + recent Orders include)", customersWithRecentOrdersSplit),
             ("Split query trigger (Customers + high-value Orders include)", customersWithHighValueOrdersSplit)
         ];
+    }
+
+    public IQueryable<TypeSummaryDto> GetActiveTypesQuery()
+    {
+        return _dbContext.Types
+            .Where(t => !t.IsDeleted)
+            .OrderBy(t => t.Name)
+            .Select(t => new TypeSummaryDto(t.Id, t.Name));
     }
 
     public IQueryable<CustomerRevenueDto> GetRevenueByCustomerQuery(DateTime fromUtc)
@@ -383,4 +393,5 @@ public sealed class CustomerReadService
     public sealed record OrderListItemDto(int OrderId, Guid CustomerId, decimal Total, OrderStatus Status, DateTime CreatedUtc);
     public sealed record CustomerRevenueDto(Guid CustomerId, string CustomerName, int OrderCount, decimal Revenue, decimal AverageOrderValue);
     public sealed record CustomerHealthDto(Guid CustomerId, string CustomerName, int TotalOrders, decimal AverageOrderValue);
+    public sealed record TypeSummaryDto(int TypeId, string TypeName);
 }
