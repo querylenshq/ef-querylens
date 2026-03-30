@@ -1,9 +1,10 @@
+using Microsoft.EntityFrameworkCore;
 using SampleSqlServerApp.Domain.Entities;
 
 namespace SampleSqlServerApp.Application.Abstractions;
 
 public interface ISqlServerAppDbContext
 {
-    IQueryable<Customer> Customers { get; }
-    IQueryable<Order> Orders { get; }
+    DbSet<Customer> Customers { get;  }
+    DbSet<Order> Orders { get;  }
 }

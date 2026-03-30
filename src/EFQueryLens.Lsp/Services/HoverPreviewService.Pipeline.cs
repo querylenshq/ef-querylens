@@ -73,12 +73,13 @@ internal sealed partial class HoverPreviewService
         }
 
         var usingContext = LspSyntaxHelper.ExtractUsingContext(sourceText);
+        var additionalImports = BuildAdditionalImports(usingContext.Imports);
         var localVariableTypes = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition(sourceText, line, character);
         log($"extract-local-types line={line} char={character} count={localVariableTypes.Count} vars={string.Join(",", localVariableTypes.Keys)}");
-        // Factory declaration is authoritative (T in IQueryLensDbContextFactory<T> is always concrete).
-        // Fall back to the declared type of the context variable for projects without a factory.
-        var dbContextTypeName = AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly)
-            ?? LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName);
+        // In multi-DbContext projects, the declared type of the context variable is the
+        // best local signal. Fall back to factory discovery for factory-only setups.
+        var dbContextTypeName = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName)
+            ?? AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly);
 
         try
         {
@@ -91,7 +92,7 @@ internal sealed partial class HoverPreviewService
                 Expression = expression,
                 ContextVariableName = contextVariableName,
                 DbContextTypeName = dbContextTypeName,
-                AdditionalImports = usingContext.Imports.ToArray(),
+                AdditionalImports = additionalImports,
                 UsingAliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
                 UsingStaticTypes = usingContext.StaticTypes.ToArray(),
                 LocalVariableTypes = localVariableTypes,
@@ -213,5 +214,28 @@ internal sealed partial class HoverPreviewService
             LastTranslationMs = lastTranslationMs,
             Result = result,
         };
+    }
+
+    private static IReadOnlyList<string> BuildAdditionalImports(IEnumerable<string> extractedImports)
+    {
+        var imports = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var import in extractedImports)
+        {
+            if (!string.IsNullOrWhiteSpace(import) && seen.Add(import))
+            {
+                imports.Add(import);
+            }
+        }
+
+        // Hover compilation can miss implicit/global usings from the project.
+        // Ensure LINQ extension methods remain in scope for common query shapes.
+        if (seen.Add("System.Linq"))
+        {
+            imports.Add("System.Linq");
+        }
+
+        return imports;
     }
 }

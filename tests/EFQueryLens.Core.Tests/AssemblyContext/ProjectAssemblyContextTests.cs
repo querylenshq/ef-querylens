@@ -152,6 +152,18 @@ public class ProjectAssemblyContextTests
     // ─── FindDbContextTypes ───────────────────────────────────────────────────
 
     [Fact]
+    public void FindDbContextTypes_SampleSqlServerApp_FindsBothDbContextTypes()
+    {
+        using var ctx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+
+        var types = ctx.FindDbContextTypes();
+
+        Assert.Equal(2, types.Count);
+        Assert.Contains(types, t => t.Name == "SqlServerAppDbContext");
+        Assert.Contains(types, t => t.Name == "SqlServerReportingDbContext");
+    }
+
+    [Fact]
     public void FindDbContextTypes_SampleMySqlApp_FindsExpectedContexts()
     {
         var dll = GetSampleMySqlAppDll();
@@ -225,6 +237,26 @@ public class ProjectAssemblyContextTests
     }
 
     [Fact]
+    public void FindDbContextType_InterfaceSimpleName_Resolves()
+    {
+        using var ctx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+
+        var type = ctx.FindDbContextType("ISqlServerAppDbContext");
+
+        Assert.Equal("SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext", type.FullName);
+    }
+
+    [Fact]
+    public void FindDbContextType_InterfaceFullyQualifiedName_Resolves()
+    {
+        using var ctx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+
+        var type = ctx.FindDbContextType("SampleSqlServerApp.Application.Abstractions.ISqlServerAppDbContext");
+
+        Assert.Equal("SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext", type.FullName);
+    }
+
+    [Fact]
     public void FindDbContextType_UnknownName_ThrowsInvalidOperationException()
     {
         var dll = GetSampleMySqlAppDll();
@@ -234,6 +266,18 @@ public class ProjectAssemblyContextTests
             () => ctx.FindDbContextType("NoSuchContext"));
 
         Assert.Contains("NoSuchContext", ex.Message);
+        Assert.Contains("Available", ex.Message);
+    }
+
+    [Fact]
+    public void FindDbContextType_UnknownInterface_ThrowsInvalidOperationException()
+    {
+        using var ctx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ctx.FindDbContextType("INoSuchDbContext"));
+
+        Assert.Contains("INoSuchDbContext", ex.Message);
         Assert.Contains("Available", ex.Message);
     }
 

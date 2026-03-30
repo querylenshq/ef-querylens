@@ -128,12 +128,48 @@ public sealed partial class ProjectAssemblyContext
                 "Specify --context to disambiguate.");
         }
 
-        // Match on simple name or fully-qualified name.
+        // Match on concrete DbContext simple/FQ name first for backwards compatibility.
         var nameMatch = all.FirstOrDefault(t =>
             string.Equals(t.Name, typeName, StringComparison.Ordinal) ||
             string.Equals(t.FullName, typeName, StringComparison.Ordinal));
 
-        return nameMatch ?? throw new InvalidOperationException(
+        if (nameMatch is not null)
+            return nameMatch;
+
+        // If no concrete type matched, treat the provided name as a potential interface
+        // implemented by one or more DbContext classes (common with DI abstractions).
+        var interfaceMatches = all.Where(t =>
+                t.GetInterfaces().Any(i =>
+                    string.Equals(i.Name, typeName, StringComparison.Ordinal) ||
+                    string.Equals(i.FullName, typeName, StringComparison.Ordinal)))
+            .ToList();
+
+        if (interfaceMatches.Count == 1)
+            return interfaceMatches[0];
+
+        if (interfaceMatches.Count > 1)
+        {
+            if (expressionHint is not null)
+            {
+                var dbSetName = ExtractFirstPropertyAccess(expressionHint);
+                if (dbSetName is not null)
+                {
+                    var hintMatch = interfaceMatches.FirstOrDefault(t =>
+                        t.GetProperties().Any(p => string.Equals(p.Name, dbSetName, StringComparison.Ordinal)));
+
+                    if (hintMatch is not null)
+                        return hintMatch;
+                }
+            }
+
+            throw new DbContextDiscoveryException(
+                DbContextDiscoveryFailureKind.MultipleDbContextsFound,
+                $"Multiple DbContext types implement interface '{typeName}' in '{Path.GetFileName(AssemblyPath)}': " +
+                $"{string.Join(", ", interfaceMatches.Select(t => t.FullName))}. " +
+                "Specify --context with a concrete DbContext type name to disambiguate.");
+        }
+
+        throw new InvalidOperationException(
             $"DbContext type '{typeName}' not found in '{Path.GetFileName(AssemblyPath)}'. " +
             $"Available: {string.Join(", ", all.Select(t => t.FullName))}");
     }

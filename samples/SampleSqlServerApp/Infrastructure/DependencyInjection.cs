@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SampleSqlServerApp.Application.Abstractions;
+using SampleSqlServerApp.Application.Reporting;
 using SampleSqlServerApp.Infrastructure.Persistence;
 
 namespace SampleSqlServerApp.Infrastructure;
@@ -14,14 +15,24 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("SampleSqlServer")
             ?? throw new InvalidOperationException("Connection string 'SampleSqlServer' is missing.");
 
-        services.AddDbContext<Persistence.SqlServerAppDbContext>(options =>
+        services.AddDbContext<SqlServerAppDbContext>(options =>
             options
                 .UseSqlServer(
                     connectionString,
                     sqlServer => sqlServer.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
                 .UseProjectables());
 
-        services.AddScoped<ISqlServerAppDbContext>(sp => sp.GetRequiredService<Persistence.SqlServerAppDbContext>());
+        services.AddScoped<ISqlServerAppDbContext>(sp => sp.GetRequiredService<SqlServerAppDbContext>());
+
+        services.AddDbContext<SqlServerReportingDbContext>(options =>
+            options
+                .UseSqlServer(
+                    connectionString,
+                    sqlServer => sqlServer.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
+                .UseProjectables());
+
+  
+
         return services;
     }
 }

@@ -174,6 +174,40 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         Assert.Contains("provider package", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Verifies that the evaluator can resolve and use <c>SqlServerReportingDbContext</c>
+    /// independently of <c>SqlServerAppDbContext</c> — the core multi-DbContext scenario.
+    /// Uses the same bimodal assertion as the primary SqlServer test to tolerate provider drift.
+    /// </summary>
+    [Fact]
+    public async Task Evaluate_SqlServerSample_ReportingContext_CustomerDirectory_ReturnsSql()
+    {
+        using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+        var evaluator = new QueryEvaluator();
+
+        var result = await evaluator.EvaluateAsync(
+            sqlAlcCtx,
+            new TranslationRequest
+            {
+                AssemblyPath = sqlAlcCtx.AssemblyPath,
+                Expression = "db.CustomerDirectory",
+                DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerReportingDbContext",
+            });
+
+        if (result.Success)
+        {
+            // Aligned package/runtime graph: translation succeeds against the reporting context.
+            Assert.NotNull(result.Sql);
+            Assert.Contains("Customers", result.Sql, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("Microsoft.EntityFrameworkCore.SqlServer", result.Metadata.ProviderName);
+            return;
+        }
+
+        // Drifted graph: must fail gracefully — same diagnostics expected as primary context.
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("Method not found", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Evaluate_SimpleDbSet_PopulatesCommandsList()
     {
@@ -211,6 +245,18 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
+    }
+
+    [Fact]
+    public async Task Evaluate_InterfaceDbContextName_Resolves()
+    {
+        var result = await TranslateAsync(
+            "db.Users",
+            dbContextTypeName: "SampleMySqlApp.Application.Abstractions.IMySqlAppDbContext");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.Contains("MySql", result.Metadata.ProviderName, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

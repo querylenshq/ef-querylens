@@ -48,14 +48,15 @@ internal sealed partial class HoverHandler
                           ?? $"no-assembly|{Path.GetFullPath(filePath)}";
 
         var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
-        var dbContextType = (!string.IsNullOrWhiteSpace(targetAssembly)
-                             && !targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal))
+        var factoryDbContextType = (!string.IsNullOrWhiteSpace(targetAssembly)
+                                    && !targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal))
             ? AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly)
             : null;
 
         if (TryFindContainingChain(sourceText, line, character, out var containingChain))
         {
-            dbContextType ??= LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, containingChain.ContextVariableName);
+            var dbContextType = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, containingChain.ContextVariableName)
+                                ?? factoryDbContextType;
             semanticContext = new SemanticHoverContext(
                 SemanticKey: $"{fingerprint}|{dbContextType ?? string.Empty}|{NormalizeWhitespace(containingChain.Expression)}",
                 EffectiveLine: containingChain.Line,
@@ -71,9 +72,10 @@ internal sealed partial class HoverHandler
             return false;
         }
 
-        dbContextType ??= LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName);
+        var dbContextTypeFallback = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName)
+                                    ?? factoryDbContextType;
         semanticContext = new SemanticHoverContext(
-            SemanticKey: $"{fingerprint}|{dbContextType ?? string.Empty}|{NormalizeWhitespace(expression)}",
+            SemanticKey: $"{fingerprint}|{dbContextTypeFallback ?? string.Empty}|{NormalizeWhitespace(expression)}",
             EffectiveLine: line,
             EffectiveCharacter: character);
         return true;

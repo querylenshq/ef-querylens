@@ -10,9 +10,6 @@ public class SqlServerAppDbContext : DbContext, ISqlServerAppDbContext
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Order> Orders => Set<Order>();
 
-    IQueryable<Customer> ISqlServerAppDbContext.Customers => Customers.AsNoTracking();
-    IQueryable<Order> ISqlServerAppDbContext.Orders => Orders.AsNoTracking();
-
     public SqlServerAppDbContext(DbContextOptions<SqlServerAppDbContext> options)
         : base(options)
     {
