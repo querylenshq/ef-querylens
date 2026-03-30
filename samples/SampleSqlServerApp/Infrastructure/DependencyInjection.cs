@@ -12,13 +12,10 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        var connectionString = configuration.GetConnectionString("SampleSqlServer")
-            ?? throw new InvalidOperationException("Connection string 'SampleSqlServer' is missing.");
-
         services.AddDbContext<SqlServerAppDbContext>(options =>
             options
                 .UseSqlServer(
-                    connectionString,
+                    "Name=MainConnection",
                     sqlServer => sqlServer.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
                 .UseProjectables());
 
@@ -27,7 +24,7 @@ public static class DependencyInjection
         services.AddDbContext<SqlServerReportingDbContext>(options =>
             options
                 .UseSqlServer(
-                    connectionString,
+                    "Name=MainConnection",
                     sqlServer => sqlServer.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
                 .UseProjectables());
 

@@ -45,6 +45,20 @@ public sealed class CustomerReadService
             .Select(expression);
     }
 
+    public async Task<TResult?> GetCustomerByNameAsync<TResult>(
+        string name,
+        Expression<Func<Customer, TResult>> expression,
+        CancellationToken ct)
+    {
+        var normalizedName = name.Trim();
+        return await _dbContext
+            .Customers
+            .Where(c => c.IsNotDeleted)
+            .Where(c => c.Name == normalizedName)
+            .Select(expression)
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task<IReadOnlyList<TResult>> GetCustomersAsync<TResult>(
         CustomerQueryRequest request,
         Expression<Func<Customer, TResult>> expression,

@@ -37,6 +37,24 @@ app.MapGet("/api/customers/{customerId:guid}",
 		return customer is null ? Results.NotFound() : Results.Ok(customer);
 	});
 
+app.MapGet("/api/customers/by-name/{name}",
+	async (string name, CustomerReadService service, CancellationToken ct) =>
+	{
+		var customer = await service.GetCustomerByNameAsync(
+			name,
+			c => new CustomerDetailsResponse
+			{
+				CustomerId = c.CustomerId,
+				Name = c.Name,
+				Email = c.Email,
+				IsActive = c.IsActive,
+				TotalOrders = c.Orders.Count(o => o.IsNotDeleted)
+			},
+			ct);
+
+		return customer is null ? Results.NotFound() : Results.Ok(customer);
+	});
+
 app.MapGet("/api/customers",
 	async (
 		string? searchTerm,
