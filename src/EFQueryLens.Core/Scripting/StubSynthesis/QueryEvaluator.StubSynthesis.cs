@@ -97,11 +97,16 @@ public sealed partial class QueryEvaluator
         Type dbContextType,
         IReadOnlyDictionary<string, string>? usingAliases = null)
     {
-        var resolvedType = TryResolveStubType(typeName, dbContextType, usingAliases);
+        // Guard against unresolved/unknown types represented as "?" or similar markers.
+        var normalizedTypeName = typeName.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedTypeName) || normalizedTypeName == "?")
+            return string.Empty;
+
+        var resolvedType = TryResolveStubType(normalizedTypeName, dbContextType, usingAliases);
         if (IsStaticClassType(resolvedType))
             return string.Empty;
 
-        return typeName.Trim() switch
+        return normalizedTypeName switch
         {
             "int" or "Int32" or "System.Int32" => $"int {varName} = 0;",
             "long" or "Int64" or "System.Int64" => $"long {varName} = 0L;",

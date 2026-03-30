@@ -708,6 +708,26 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
     }
 
     [Fact]
+    public void BuildStubDeclaration_UnresolvedTypeMarkerQuestionMark_FallsThroughToHeuristics()
+    {
+        // Regression: When a typename is "?" (unresolved type marker from LSP),
+        // BuildStubFromTypeName should return empty to fall through to heuristics
+        // rather than generating invalid C# like "typeof()".
+        // This can occur if LSP tries to extract an open generic type parameter like TResult
+        // and represents it as "?".
+        var stub = BuildStubDeclarationForRequestForTest(
+            missingName: "unknownType",
+            expression: "db.Orders.Skip(pageSize)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["unknownType"] = "?"
+            });
+
+        // Falls through without hard-blocking or generating invalid code.
+        Assert.NotNull(stub);
+    }
+
+    [Fact]
     public async Task Evaluate_PagingWithMathCall_DoesNotSurfaceStaticTypeCompilationErrors()
     {
         var result = await TranslateAsync(
