@@ -6,7 +6,10 @@ using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using EvalSourceBuilder = EFQueryLens.Core.Scripting.Evaluation.EvalSourceBuilder;
+using ImportResolver = EFQueryLens.Core.Scripting.Evaluation.ImportResolver;
 using QueryEvaluator = EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator;
+using StubSynthesizer = EFQueryLens.Core.Scripting.Evaluation.StubSynthesizer;
 
 namespace EFQueryLens.Core.Tests.Scripting;
 
@@ -130,9 +133,9 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
             UsingAliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal),
         };
 
-        var method = typeof(QueryEvaluator).GetMethod(
+        var method = typeof(StubSynthesizer).GetMethod(
             "BuildStubDeclaration",
-            BindingFlags.NonPublic | BindingFlags.Static);
+            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
 
         Assert.NotNull(method);
 
@@ -163,7 +166,7 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
 
     private static bool InvokeHasMissingGridifyTypeErrors(IReadOnlyList<Diagnostic> errors)
     {
-        var method = typeof(QueryEvaluator).GetMethod(
+        var method = typeof(StubSynthesizer).GetMethod(
             "HasMissingGridifyTypeErrors",
             BindingFlags.NonPublic | BindingFlags.Static);
 
@@ -178,9 +181,9 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         CSharpCompilation compilation,
         IReadOnlyList<Assembly> assemblies)
     {
-        var method = typeof(QueryEvaluator).GetMethod(
+        var method = typeof(ImportResolver).GetMethod(
             "InferMissingExtensionStaticImports",
-            BindingFlags.NonPublic | BindingFlags.Static);
+            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
 
         Assert.NotNull(method);
 
@@ -190,23 +193,23 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
 
     private static bool InvokeShouldDumpGeneratedSource(QueryEvaluator evaluator)
     {
-        var method = typeof(QueryEvaluator).GetMethod(
-            "ShouldDumpGeneratedSource",
+        var field = typeof(QueryEvaluator).GetField(
+            "_dumpSourceEnabled",
             BindingFlags.NonPublic | BindingFlags.Instance);
 
-        Assert.NotNull(method);
-        var value = method!.Invoke(evaluator, null);
+        Assert.NotNull(field);
+        var value = field!.GetValue(evaluator);
         return Assert.IsType<bool>(value);
     }
 
-    private static string InvokeDumpGeneratedSourceToTemp(QueryEvaluator evaluator, string source)
+    private static string InvokeDumpGeneratedSourceToTemp(string source)
     {
         var method = typeof(QueryEvaluator).GetMethod(
             "DumpGeneratedSourceToTemp",
-            BindingFlags.NonPublic | BindingFlags.Instance);
+            BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.NotNull(method);
-        var value = method!.Invoke(evaluator, [source]);
+        var value = method!.Invoke(null, [source]);
         return Assert.IsType<string>(value);
     }
 }

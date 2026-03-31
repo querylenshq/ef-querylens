@@ -166,63 +166,109 @@ public static partial class AssemblyResolver
         string libraryAssemblyName,
         ref string debugLog)
     {
-        var libraryCsprojName = Path.GetFileName(libraryCsprojPath);
-
-        // Step 4a: Walk up to find the .sln or .slnx file (.sln preferred when both exist)
-        var slnDir = Path.GetDirectoryName(libraryCsprojPath);
-        string? slnFile = null;
-        bool isSlnx = false;
-
-        while (!string.IsNullOrEmpty(slnDir))
-        {
-            var slnFiles = Directory.GetFiles(slnDir, "*.sln");
-            if (slnFiles.Length > 0)
-            {
-                slnFile = slnFiles.First();
-                debugLog += $"  -> Found solution: {Path.GetFileName(slnFile)}\n";
-                break;
-            }
-
-            var slnxFiles = Directory.GetFiles(slnDir, "*.slnx");
-            if (slnxFiles.Length > 0)
-            {
-                slnFile = slnxFiles.First();
-                isSlnx = true;
-                debugLog += $"  -> Found solution (slnx): {Path.GetFileName(slnFile)}\n";
-                break;
-            }
-
-            slnDir = Directory.GetParent(slnDir)?.FullName;
-        }
-
-        if (slnFile is null)
+        if (!TryFindNearestSolution(libraryCsprojPath, ref debugLog, out var slnFile, out var isSlnx)
+            || slnFile is null)
         {
             debugLog += "  -> EXCEPTION: No .sln or .slnx file found.\n";
             return null;
         }
 
-        // Step 4b: Parse the .sln / .slnx to extract project paths
-        List<string> projectEntries;
-        if (isSlnx)
-        {
-            projectEntries = ParseSlnxProjectPaths(slnFile, libraryCsprojPath, ref debugLog);
-        }
-        else
-        {
-            var slnContent = File.ReadAllText(slnFile);
-            projectEntries = SlnProjectRegex().Matches(slnContent)
-                .Select(m => Path.GetFullPath(
-                    Path.Combine(Path.GetDirectoryName(slnFile)!, m.Groups[1].Value)))
-                .Where(p => File.Exists(p) && !string.Equals(p,
-                    Path.GetFullPath(libraryCsprojPath), StringComparison.OrdinalIgnoreCase))
-                .ToList();
-        }
+        var projectEntries = GetSolutionProjectEntries(
+            slnFile,
+            isSlnx,
+            libraryCsprojPath,
+            ref debugLog);
 
         debugLog += $"  -> Found {projectEntries.Count} other projects in solution\n";
 
         // Step 4c: Find executable projects in the solution. We do not require a direct
         // ProjectReference here because many host apps reference the target library
         // transitively (e.g. UI -> Infrastructure -> Application).
+        var candidates = FindExecutableHostCandidates(projectEntries, ref debugLog);
+
+        if (candidates.Count == 0)
+        {
+            debugLog += "  -> EXCEPTION: No executable project references this library.\n";
+            return null;
+        }
+
+        // Step 4d: Among candidates, find one whose output contains the library DLL.
+        // Prefer projects that explicitly contain a QueryLensDbContextFactory source file
+        // (the user set them up as the QueryLens host) over projects that are merely
+        // referencing the library for other purposes (e.g. data-migration workers).
+        // Within the same tier, the most recently built DLL wins.
+        var scored = ScoreHostCandidates(candidates, libraryAssemblyName, ref debugLog);
+        var bestDll = SelectBestHostAssemblyPath(scored);
+
+        if (bestDll is not null)
+        {
+            debugLog += $"  -> Selected host assembly: {bestDll}\n";
+        }
+        else
+        {
+            debugLog += "  -> EXCEPTION: No candidate host project has a built bin folder containing the library.\n";
+        }
+
+        return bestDll;
+    }
+
+    private static bool TryFindNearestSolution(
+        string libraryCsprojPath,
+        ref string debugLog,
+        out string? solutionPath,
+        out bool isSlnx)
+    {
+        var slnDir = Path.GetDirectoryName(libraryCsprojPath);
+        solutionPath = null;
+        isSlnx = false;
+
+        while (!string.IsNullOrEmpty(slnDir))
+        {
+            var slnFiles = Directory.GetFiles(slnDir, "*.sln");
+            if (slnFiles.Length > 0)
+            {
+                solutionPath = slnFiles.First();
+                debugLog += $"  -> Found solution: {Path.GetFileName(solutionPath)}\n";
+                return true;
+            }
+
+            var slnxFiles = Directory.GetFiles(slnDir, "*.slnx");
+            if (slnxFiles.Length > 0)
+            {
+                solutionPath = slnxFiles.First();
+                isSlnx = true;
+                debugLog += $"  -> Found solution (slnx): {Path.GetFileName(solutionPath)}\n";
+                return true;
+            }
+
+            slnDir = Directory.GetParent(slnDir)?.FullName;
+        }
+
+        return false;
+    }
+
+    private static List<string> GetSolutionProjectEntries(
+        string solutionPath,
+        bool isSlnx,
+        string libraryCsprojPath,
+        ref string debugLog)
+    {
+        if (isSlnx)
+            return ParseSlnxProjectPaths(solutionPath, libraryCsprojPath, ref debugLog);
+
+        var slnContent = File.ReadAllText(solutionPath);
+        return SlnProjectRegex().Matches(slnContent)
+            .Select(m => Path.GetFullPath(
+                Path.Combine(Path.GetDirectoryName(solutionPath)!, m.Groups[1].Value)))
+            .Where(p => File.Exists(p) && !string.Equals(p,
+                Path.GetFullPath(libraryCsprojPath), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private static List<(string CsprojPath, string AssemblyName)> FindExecutableHostCandidates(
+        IReadOnlyList<string> projectEntries,
+        ref string debugLog)
+    {
         var candidates = new List<(string CsprojPath, string AssemblyName)>();
 
         foreach (var projPath in projectEntries)
@@ -230,7 +276,6 @@ public static partial class AssemblyResolver
             try
             {
                 var content = File.ReadAllText(projPath);
-
                 if (!IsExecutableProject(content))
                     continue;
 
@@ -248,17 +293,14 @@ public static partial class AssemblyResolver
             }
         }
 
-        if (candidates.Count == 0)
-        {
-            debugLog += "  -> EXCEPTION: No executable project references this library.\n";
-            return null;
-        }
+        return candidates;
+    }
 
-        // Step 4d: Among candidates, find one whose output contains the library DLL.
-        // Prefer projects that explicitly contain a QueryLensDbContextFactory source file
-        // (the user set them up as the QueryLens host) over projects that are merely
-        // referencing the library for other purposes (e.g. data-migration workers).
-        // Within the same tier, the most recently built DLL wins.
+    private static List<CandidateAssembly> ScoreHostCandidates(
+        IReadOnlyList<(string CsprojPath, string AssemblyName)> candidates,
+        string libraryAssemblyName,
+        ref string debugLog)
+    {
         var scored = new List<CandidateAssembly>();
 
         foreach (var (csprojPath, exeAssemblyName) in candidates)
@@ -303,7 +345,12 @@ public static partial class AssemblyResolver
             }
         }
 
-        var bestDll = scored
+        return scored;
+    }
+
+    private static string? SelectBestHostAssemblyPath(IReadOnlyList<CandidateAssembly> scored)
+    {
+        return scored
             .GroupBy(x => x.DllPath, StringComparer.OrdinalIgnoreCase)
             .Select(g => g
                 .OrderByDescending(x => x.HasFactory ? 1 : 0)
@@ -317,17 +364,6 @@ public static partial class AssemblyResolver
             .ThenByDescending(x => x.TimestampUtc)
             .Select(x => x.DllPath)
             .FirstOrDefault();
-
-        if (bestDll is not null)
-        {
-            debugLog += $"  -> Selected host assembly: {bestDll}\n";
-        }
-        else
-        {
-            debugLog += "  -> EXCEPTION: No candidate host project has a built bin folder containing the library.\n";
-        }
-
-        return bestDll;
     }
 
     /// <summary>

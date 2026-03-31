@@ -67,16 +67,43 @@ internal static class RunnerGenerator
         var runMethod = BuildRunMethod(
             contextVarName, contextTypeFullName, expressionNode, stubs, useAsync);
         var helpers = useAsync ? ParseMethods(AsyncHelpersSource) : ParseMethods(SyncHelpersSource);
+        var allMembers = new[] { runMethod }.Concat(helpers).ToList();
 
-        return SyntaxFactory
-            .ClassDeclaration("__QueryLensRunner__")
-            .WithModifiers(
-                SyntaxFactory.TokenList(
-                    SyntaxFactory.Token(SyntaxKind.PublicKeyword),
-                    SyntaxFactory.Token(SyntaxKind.StaticKeyword)))
-            .WithMembers(
-                SyntaxFactory.List<MemberDeclarationSyntax>(
-                    new[] { runMethod }.Concat(helpers)));
+        var classDecl = SyntaxFactory.ClassDeclaration("__QueryLensRunner__");
+        classDecl = AddPublicStaticModifiers(classDecl);
+        classDecl = classDecl.WithMembers(SyntaxFactory.List<MemberDeclarationSyntax>(allMembers));
+        return classDecl;
+    }
+
+    /// <summary>
+    /// Adds public static modifiers to a class declaration.
+    /// </summary>
+    private static ClassDeclarationSyntax AddPublicStaticModifiers(ClassDeclarationSyntax classDecl)
+    {
+        return classDecl.WithModifiers(SyntaxFactory.TokenList(
+            SyntaxFactory.Token(SyntaxKind.PublicKeyword),
+            SyntaxFactory.Token(SyntaxKind.StaticKeyword)));
+    }
+
+    /// <summary>
+    /// Adds public static modifiers to a method declaration.
+    /// </summary>
+    private static MethodDeclarationSyntax AddPublicStaticModifiers(MethodDeclarationSyntax method)
+    {
+        return method.WithModifiers(SyntaxFactory.TokenList(
+            SyntaxFactory.Token(SyntaxKind.PublicKeyword),
+            SyntaxFactory.Token(SyntaxKind.StaticKeyword)));
+    }
+
+    /// <summary>
+    /// Adds public static async modifiers to a method declaration.
+    /// </summary>
+    private static MethodDeclarationSyntax AddPublicStaticAsyncModifiers(MethodDeclarationSyntax method)
+    {
+        return method.WithModifiers(SyntaxFactory.TokenList(
+            SyntaxFactory.Token(SyntaxKind.PublicKeyword),
+            SyntaxFactory.Token(SyntaxKind.StaticKeyword),
+            SyntaxFactory.Token(SyntaxKind.AsyncKeyword)));
     }
 
     // ─── Main run method ─────────────────────────────────────────────────────
@@ -92,32 +119,41 @@ internal static class RunnerGenerator
             contextVarName, contextTypeFullName, expressionNode, stubs, useAsync);
 
         if (useAsync)
-        {
-            return SyntaxFactory
-                .MethodDeclaration(
-                    SyntaxFactory.ParseTypeName("System.Threading.Tasks.Task<object?>"),
-                    SyntaxFactory.Identifier("RunAsync"))
-                .WithModifiers(
-                    SyntaxFactory.TokenList(
-                        SyntaxFactory.Token(SyntaxKind.PublicKeyword),
-                        SyntaxFactory.Token(SyntaxKind.StaticKeyword),
-                        SyntaxFactory.Token(SyntaxKind.AsyncKeyword)))
-                .WithParameterList(
-                    SyntaxFactory.ParseParameterList(
-                        "(object __ctx__, System.Threading.CancellationToken ct = default)"))
-                .WithBody(body);
-        }
+            return BuildAsyncRunMethod(body);
 
-        return SyntaxFactory
+        return BuildSyncRunMethod(body);
+    }
+
+    /// <summary>
+    /// Builds the async Run method: public static async Task&lt;object?&gt; RunAsync(object __ctx__, CancellationToken ct = default)
+    /// </summary>
+    private static MethodDeclarationSyntax BuildAsyncRunMethod(BlockSyntax body)
+    {
+        var method = SyntaxFactory
+            .MethodDeclaration(
+                SyntaxFactory.ParseTypeName("System.Threading.Tasks.Task<object?>"),
+                SyntaxFactory.Identifier("RunAsync"))
+            .WithParameterList(
+                SyntaxFactory.ParseParameterList(
+                    "(object __ctx__, System.Threading.CancellationToken ct = default)"))
+            .WithBody(body);
+
+        return AddPublicStaticAsyncModifiers(method);
+    }
+
+    /// <summary>
+    /// Builds the sync Run method: public static object? Run(object __ctx__)
+    /// </summary>
+    private static MethodDeclarationSyntax BuildSyncRunMethod(BlockSyntax body)
+    {
+        var method = SyntaxFactory
             .MethodDeclaration(
                 SyntaxFactory.ParseTypeName("object?"),
                 SyntaxFactory.Identifier("Run"))
-            .WithModifiers(
-                SyntaxFactory.TokenList(
-                    SyntaxFactory.Token(SyntaxKind.PublicKeyword),
-                    SyntaxFactory.Token(SyntaxKind.StaticKeyword)))
             .WithParameterList(SyntaxFactory.ParseParameterList("(object __ctx__)"))
             .WithBody(body);
+
+        return AddPublicStaticModifiers(method);
     }
 
     private static BlockSyntax BuildRunBody(
@@ -168,30 +204,55 @@ internal static class RunnerGenerator
     {
         var tryStmts = new List<StatementSyntax>();
 
-        // __query = (object?)({expressionNode});
-        // The expression node is embedded directly — the core value of the SyntaxFactory approach.
-        var cast = SyntaxFactory.CastExpression(
-            SyntaxFactory.NullableType(
-                SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.ObjectKeyword))),
-            SyntaxFactory.ParenthesizedExpression(expressionNode));
+        // Build the cast to object? and assign to __query
+        var queryAssignment = BuildQueryAssignment(expressionNode);
+        tryStmts.Add(queryAssignment);
 
-        tryStmts.Add(
-            SyntaxFactory.ExpressionStatement(
-                SyntaxFactory.AssignmentExpression(
-                    SyntaxKind.SimpleAssignmentExpression,
-                    SyntaxFactory.IdentifierName("__query"),
-                    cast)));
-
+        // Unwrap Task if needed
         tryStmts.Add(
             useAsync
                 ? Parse("__query = await UnwrapTaskAsync(__query, ct).ConfigureAwait(false);")
                 : Parse("__query = UnwrapTask(__query);"));
 
+        // Enumerate queryable if capture is installed
         tryStmts.Add(Parse(
             "if (__captureInstalled && __query is System.Collections.IEnumerable __enumerable)" +
             " EnumerateQueryable(__enumerable);"));
 
-        var catchClause = SyntaxFactory
+        var tryBlock = SyntaxFactory.Block(tryStmts);
+        var catchClause = BuildExceptionCatchClause();
+        var finallyClause = BuildFinallyClause();
+
+        return SyntaxFactory
+            .TryStatement()
+            .WithBlock(tryBlock)
+            .WithCatches(SyntaxFactory.SingletonList(catchClause))
+            .WithFinally(finallyClause);
+    }
+
+    /// <summary>
+    /// Builds the assignment statement: __query = (object?)({expressionNode});
+    /// </summary>
+    private static ExpressionStatementSyntax BuildQueryAssignment(ExpressionSyntax expressionNode)
+    {
+        var cast = SyntaxFactory.CastExpression(
+            SyntaxFactory.NullableType(
+                SyntaxFactory.PredefinedType(SyntaxFactory.Token(SyntaxKind.ObjectKeyword))),
+            SyntaxFactory.ParenthesizedExpression(expressionNode));
+
+        return SyntaxFactory.ExpressionStatement(
+            SyntaxFactory.AssignmentExpression(
+                SyntaxKind.SimpleAssignmentExpression,
+                SyntaxFactory.IdentifierName("__query"),
+                cast));
+    }
+
+    /// <summary>
+    /// Builds the exception catch clause that captures error details.
+    /// </summary>
+    private static CatchClauseSyntax BuildExceptionCatchClause()
+    {
+        return SyntaxFactory
             .CatchClause()
             .WithDeclaration(
                 SyntaxFactory
@@ -200,16 +261,16 @@ internal static class RunnerGenerator
             .WithBlock(
                 SyntaxFactory.Block(
                     Parse("""__captureError = ex.GetType().Name + ": " + ex.Message;""")));
+    }
 
-        var finallyClause = SyntaxFactory.FinallyClause(
+    /// <summary>
+    /// Builds the finally clause that captures the commands from the scope.
+    /// </summary>
+    private static FinallyClauseSyntax BuildFinallyClause()
+    {
+        return SyntaxFactory.FinallyClause(
             SyntaxFactory.Block(
                 Parse("if (__captureInstalled) __captured = __scope!.GetCommands();")));
-
-        return SyntaxFactory
-            .TryStatement()
-            .WithBlock(SyntaxFactory.Block(tryStmts))
-            .WithCatches(SyntaxFactory.SingletonList(catchClause))
-            .WithFinally(finallyClause);
     }
 
     // ─── Static helper methods ────────────────────────────────────────────────

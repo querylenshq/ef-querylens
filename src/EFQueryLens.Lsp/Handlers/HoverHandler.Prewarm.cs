@@ -24,7 +24,7 @@ internal sealed partial class HoverHandler
         int character,
         CombinedHoverResult combined)
     {
-        if (_hoverCacheTtlMs <= 0) return;
+        if (!IsCacheEnabled()) return;
 
         var computed = BuildComputedFromCombined(combined);
 

@@ -36,13 +36,13 @@ internal sealed partial class HoverHandler
             && TryGetSemanticCachedEntry(semanticContext.SemanticKey, out var semEntry))
         {
             LogHoverDebug($"hover-semantic-cache-hit line={effectiveLine} char={effectiveCharacter}");
-            _hoverCache.TryAdd(cacheKey, semEntry!);
+            TryPromoteSemanticToPrimaryCache(cacheKey, semEntry!);
             return semEntry!.Hover;
         }
 
         // Cache-disabled mode: compute immediately so users do not get a perpetual
         // "computing" placeholder when hoverCacheTtlMs is configured to 0.
-        if (_hoverCacheTtlMs <= 0)
+        if (!IsCacheEnabled())
         {
             var computed = await ComputeCombinedAsync(
                 filePath,
@@ -162,7 +162,7 @@ internal sealed partial class HoverHandler
         {
             // Evict the InQueue placeholder so the next hover re-triggers computation
             // rather than showing "computing..." indefinitely.
-            _hoverCache.TryRemove(cacheKey, out _);
+            RemovePrimaryCacheEntry(cacheKey);
             LogHoverDebug($"bg-compute-failed key={cacheKey} type={ex.GetType().Name} message={ex.Message}");
         }
     }

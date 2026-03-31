@@ -36,13 +36,13 @@ internal sealed partial class HoverHandler
             && TryGetSemanticCachedEntry(semanticContext.SemanticKey, out var semEntry))
         {
             LogHoverDebug($"structured-hover-semantic-cache-hit line={effectiveLine} char={effectiveCharacter}");
-            _hoverCache.TryAdd(cacheKey, semEntry!);
+            TryPromoteSemanticToPrimaryCache(cacheKey, semEntry!);
             return semEntry!.Structured;
         }
 
         // Cache-disabled mode: compute immediately so structured hover can still
         // return SQL/status when hoverCacheTtlMs is configured to 0.
-        if (_hoverCacheTtlMs <= 0)
+        if (!IsCacheEnabled())
         {
             var computed = await ComputeCombinedAsync(
                 filePath,

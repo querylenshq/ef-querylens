@@ -94,6 +94,25 @@ public sealed partial class ProjectAssemblyContext
                 DbContextDiscoveryFailureKind.NoDbContextFound,
                 $"No DbContext subclass found in '{assemblyFileName}'.");
 
+        var inputs = BuildResolutionInputs(all, typeName, expressionHint, resolutionSnapshot);
+        var resolved = TryResolveByHints(inputs, typeName, resolutionSnapshot, assemblyFileName);
+        if (resolved is not null)
+            return resolved;
+
+        if (typeName is null)
+            return ResolveAutoDiscovery(all, inputs.ExpressionMatches, assemblyFileName);
+
+        throw new InvalidOperationException(
+            $"DbContext type '{typeName}' not found in '{assemblyFileName}'. " +
+            $"Available: {string.Join(", ", all.Select(t => t.FullName))}");
+    }
+
+    private static DbContextResolutionInputs BuildResolutionInputs(
+        IReadOnlyList<Type> all,
+        string? typeName,
+        string? expressionHint,
+        DbContextResolutionSnapshot? resolutionSnapshot)
+    {
         var dbSetName = expressionHint is null ? null : ExtractFirstPropertyAccess(expressionHint);
         var expressionMatches = string.IsNullOrWhiteSpace(dbSetName)
             ? []
@@ -104,37 +123,51 @@ public sealed partial class ProjectAssemblyContext
         var factoryMatches = MatchDbContextCandidates(all, resolutionSnapshot?.FactoryTypeName);
         var factoryCandidateMatches = MatchDbContextCandidates(all, resolutionSnapshot?.FactoryCandidateTypeNames);
 
-        var resolved = TryResolveDeclaredFactoryConflict(
+        return new DbContextResolutionInputs(
+            dbSetName,
             expressionMatches,
+            explicitMatches,
             declaredMatches,
             factoryMatches,
+            factoryCandidateMatches);
+    }
+
+    private static Type? TryResolveByHints(
+        DbContextResolutionInputs inputs,
+        string? typeName,
+        DbContextResolutionSnapshot? resolutionSnapshot,
+        string assemblyFileName)
+    {
+        var resolved = TryResolveDeclaredFactoryConflict(
+            inputs.ExpressionMatches,
+            inputs.DeclaredMatches,
+            inputs.FactoryMatches,
             assemblyFileName);
         if (resolved is not null)
             return resolved;
 
-        resolved = TryResolveFactoryHint(expressionMatches, factoryMatches, dbSetName);
+        resolved = TryResolveFactoryHint(inputs.ExpressionMatches, inputs.FactoryMatches, inputs.DbSetName);
         if (resolved is not null)
             return resolved;
 
-        resolved = TryResolveExplicitHint(typeName, expressionMatches, explicitMatches, assemblyFileName, dbSetName);
+        resolved = TryResolveExplicitHint(typeName, inputs.ExpressionMatches, inputs.ExplicitMatches, assemblyFileName, inputs.DbSetName);
         if (resolved is not null)
             return resolved;
 
-        resolved = TryResolveDeclaredHint(expressionMatches, declaredMatches, factoryCandidateMatches, resolutionSnapshot, assemblyFileName);
+        resolved = TryResolveDeclaredHint(inputs.ExpressionMatches, inputs.DeclaredMatches, inputs.FactoryCandidateMatches, resolutionSnapshot, assemblyFileName);
         if (resolved is not null)
             return resolved;
 
-        resolved = TryResolveFactoryCandidateHint(expressionMatches, factoryCandidateMatches, assemblyFileName);
-        if (resolved is not null)
-            return resolved;
-
-        if (typeName is null)
-            return ResolveAutoDiscovery(all, expressionMatches, assemblyFileName);
-
-        throw new InvalidOperationException(
-            $"DbContext type '{typeName}' not found in '{assemblyFileName}'. " +
-            $"Available: {string.Join(", ", all.Select(t => t.FullName))}");
+        return TryResolveFactoryCandidateHint(inputs.ExpressionMatches, inputs.FactoryCandidateMatches, assemblyFileName);
     }
+
+    private sealed record DbContextResolutionInputs(
+        string? DbSetName,
+        IReadOnlyList<Type> ExpressionMatches,
+        IReadOnlyList<Type> ExplicitMatches,
+        IReadOnlyList<Type> DeclaredMatches,
+        IReadOnlyList<Type> FactoryMatches,
+        IReadOnlyList<Type> FactoryCandidateMatches);
 
     private static Type? TryResolveDeclaredFactoryConflict(
         IReadOnlyList<Type> expressionMatches,

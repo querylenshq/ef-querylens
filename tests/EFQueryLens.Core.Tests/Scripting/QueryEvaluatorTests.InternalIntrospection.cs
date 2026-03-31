@@ -4,6 +4,8 @@ using System.Text.RegularExpressions;
 using EFQueryLens.Core.Contracts;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using EvalSourceBuilder = EFQueryLens.Core.Scripting.Evaluation.EvalSourceBuilder;
+using ImportResolver = EFQueryLens.Core.Scripting.Evaluation.ImportResolver;
 using QueryEvaluator = EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator;
 
 namespace EFQueryLens.Core.Tests.Scripting;
@@ -36,7 +38,7 @@ public partial class QueryEvaluatorTests
             $"Types searched: {allTypes.Count}. " +
             "The stale net10.0 DLL may predate the type's addition.");
 
-        var parents = QueryEvaluator.FindNamespacesForSimpleName("CustomerRevenueDto", allTypes).ToList();
+        var parents = ImportResolver.FindNamespacesForSimpleName("CustomerRevenueDto", allTypes).ToList();
         Assert.NotEmpty(parents);
         Assert.Contains(parents, p => p.Contains("CustomerReadService", StringComparison.Ordinal));
     }
@@ -51,7 +53,7 @@ public partial class QueryEvaluatorTests
             "System.String",
         };
 
-        var result = QueryEvaluator.FindNamespacesForSimpleName("CustomerRevenueDto", knownTypes).ToList();
+        var result = ImportResolver.FindNamespacesForSimpleName("CustomerRevenueDto", knownTypes).ToList();
 
         Assert.Single(result);
         Assert.Equal("SampleMySqlApp.Application.Customers", result[0]);
@@ -119,9 +121,9 @@ public partial class QueryEvaluatorTests
             UsingStaticTypes = [],
         };
 
-        var buildEvalSourceMethod = typeof(QueryEvaluator).GetMethod(
+        var buildEvalSourceMethod = typeof(EvalSourceBuilder).GetMethod(
             "BuildEvalSource",
-            BindingFlags.NonPublic | BindingFlags.Static);
+            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
 
         Assert.NotNull(buildEvalSourceMethod);
 
@@ -163,9 +165,9 @@ public partial class QueryEvaluatorTests
             UsingStaticTypes = ["System.Math", "System.Math"],
         };
 
-        var buildEvalSourceMethod = typeof(QueryEvaluator).GetMethod(
+        var buildEvalSourceMethod = typeof(EvalSourceBuilder).GetMethod(
             "BuildEvalSource",
-            BindingFlags.NonPublic | BindingFlags.Static);
+            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
 
         Assert.NotNull(buildEvalSourceMethod);
 
@@ -232,10 +234,9 @@ public partial class QueryEvaluatorTests
     [Fact]
     public void DumpGeneratedSourceToTemp_WritesTimestampedFile()
     {
-        var evaluator = new QueryEvaluator();
         var source = "public sealed class __QueryLensRunner__ { }";
 
-        var path = InvokeDumpGeneratedSourceToTemp(evaluator, source);
+        var path = InvokeDumpGeneratedSourceToTemp(source);
 
         try
         {
@@ -252,5 +253,137 @@ public partial class QueryEvaluatorTests
                 File.Delete(path);
             }
         }
+    }
+
+    [Fact]
+    public void ComputeRequestHash_Changes_WhenUsingContextSnapshotChanges()
+    {
+        var baseRequest = new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            Expression = "db.Orders.Where(o => o.Id > minId)",
+            ContextVariableName = "db",
+            AdditionalImports = ["System.Linq"],
+            UsingAliases = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Ent"] = "SampleMySqlApp.Domain.Entities",
+            },
+            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["minId"] = "int",
+            },
+            UsingContextSnapshot = new UsingContextSnapshot
+            {
+                Imports = ["System.Linq", "SampleMySqlApp.Domain.Entities"],
+                Aliases = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Ent"] = "SampleMySqlApp.Domain.Entities",
+                },
+                StaticTypes = ["System.Math"],
+            },
+        };
+
+        var changedSnapshotRequest = baseRequest with
+        {
+            UsingContextSnapshot = new UsingContextSnapshot
+            {
+                Imports = ["System.Linq", "SampleMySqlApp.Application.Customers"],
+                Aliases = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Ent"] = "SampleMySqlApp.Domain.Entities",
+                },
+                StaticTypes = ["System.Math"],
+            },
+        };
+
+        var baseHash = InvokeComputeRequestHash(baseRequest);
+        var changedHash = InvokeComputeRequestHash(changedSnapshotRequest);
+
+        Assert.NotEqual(baseHash, changedHash);
+    }
+
+    [Fact]
+    public void ComputeRequestHash_Changes_WhenExpressionMetadataChanges()
+    {
+        var baseRequest = new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            Expression = "db.Orders.Where(o => o.Id > 0)",
+            ContextVariableName = "db",
+            ExpressionMetadata = new ParsedExpressionMetadata
+            {
+                ExpressionType = "Invocation",
+                SourceLine = 10,
+                SourceCharacter = 5,
+                Confidence = 1.0,
+            },
+        };
+
+        var movedExpressionRequest = baseRequest with
+        {
+            ExpressionMetadata = baseRequest.ExpressionMetadata with
+            {
+                SourceLine = 11,
+            },
+        };
+
+        var baseHash = InvokeComputeRequestHash(baseRequest);
+        var movedHash = InvokeComputeRequestHash(movedExpressionRequest);
+
+        Assert.NotEqual(baseHash, movedHash);
+    }
+
+    [Fact]
+    public void ComputeRequestHash_IsStable_WhenAliasInputOrderDiffers()
+    {
+        var requestA = new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            Expression = "db.Orders",
+            ContextVariableName = "db",
+            UsingAliases = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["B"] = "Namespace.B",
+                ["A"] = "Namespace.A",
+            },
+            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["z"] = "int",
+                ["a"] = "int",
+            },
+        };
+
+        var requestB = new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            Expression = "db.Orders",
+            ContextVariableName = "db",
+            UsingAliases = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["A"] = "Namespace.A",
+                ["B"] = "Namespace.B",
+            },
+            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["a"] = "int",
+                ["z"] = "int",
+            },
+        };
+
+        var hashA = InvokeComputeRequestHash(requestA);
+        var hashB = InvokeComputeRequestHash(requestB);
+
+        Assert.Equal(hashA, hashB);
+    }
+
+    private static string InvokeComputeRequestHash(TranslationRequest request)
+    {
+        var method = typeof(QueryEvaluator).GetMethod(
+            "ComputeRequestHash",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        var value = method!.Invoke(null, [request]);
+        return Assert.IsType<string>(value);
     }
 }
