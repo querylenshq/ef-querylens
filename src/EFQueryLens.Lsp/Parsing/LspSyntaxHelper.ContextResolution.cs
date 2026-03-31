@@ -1,3 +1,4 @@
+using EFQueryLens.Core.Contracts;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -79,4 +80,115 @@ public static partial class LspSyntaxHelper
     /// Strips nullable-reference-type annotations (<c>?</c>) — they have no CLR distinction.
     /// </summary>
     private static string NormalizeDbContextTypeName(string typeName) => typeName.TrimEnd('?');
+
+    internal static DbContextResolutionSnapshot? BuildDbContextResolutionSnapshot(
+        string sourceText,
+        string contextVariableName,
+        IReadOnlyList<string>? factoryCandidateTypeNames)
+    {
+        var declaredTypeName = TryResolveDbContextTypeName(sourceText, contextVariableName);
+        var normalizedFactoryCandidates = (factoryCandidateTypeNames ?? [])
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(NormalizeDbContextTypeName)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var factoryTypeName = normalizedFactoryCandidates.Length == 1
+            ? normalizedFactoryCandidates[0]
+            : null;
+
+        if (declaredTypeName is null && factoryTypeName is null && normalizedFactoryCandidates.Length == 0)
+            return null;
+
+        return new DbContextResolutionSnapshot
+        {
+            DeclaredTypeName = declaredTypeName,
+            FactoryTypeName = factoryTypeName,
+            FactoryCandidateTypeNames = normalizedFactoryCandidates,
+            ResolutionSource = BuildResolutionSource(declaredTypeName, factoryTypeName, normalizedFactoryCandidates),
+            Confidence = ComputeResolutionConfidence(declaredTypeName, factoryTypeName, normalizedFactoryCandidates),
+        };
+    }
+
+    internal static string? GetPreferredDbContextTypeName(DbContextResolutionSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName))
+            return snapshot.DeclaredTypeName;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+            return snapshot.FactoryTypeName;
+
+        return snapshot.FactoryCandidateTypeNames.Count == 1
+            ? snapshot.FactoryCandidateTypeNames[0]
+            : null;
+    }
+
+    internal static string GetDbContextResolutionCacheToken(DbContextResolutionSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName))
+            return snapshot.DeclaredTypeName;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+            return snapshot.FactoryTypeName;
+
+        if (snapshot.FactoryCandidateTypeNames.Count == 0)
+            return string.Empty;
+
+        return string.Join(";", snapshot.FactoryCandidateTypeNames.Order(StringComparer.Ordinal));
+    }
+
+    private static string BuildResolutionSource(
+        string? declaredTypeName,
+        string? factoryTypeName,
+        IReadOnlyList<string> factoryCandidateTypeNames)
+    {
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && !string.IsNullOrWhiteSpace(factoryTypeName))
+        {
+            return string.Equals(declaredTypeName, factoryTypeName, StringComparison.Ordinal)
+                ? "declared+factory"
+                : "declared+factory-mismatch";
+        }
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && factoryCandidateTypeNames.Count > 1)
+            return "declared+factory-candidates";
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName))
+            return "declared";
+
+        if (!string.IsNullOrWhiteSpace(factoryTypeName))
+            return "factory";
+
+        return factoryCandidateTypeNames.Count > 1 ? "factory-candidates" : "unknown";
+    }
+
+    private static double ComputeResolutionConfidence(
+        string? declaredTypeName,
+        string? factoryTypeName,
+        IReadOnlyList<string> factoryCandidateTypeNames)
+    {
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && !string.IsNullOrWhiteSpace(factoryTypeName))
+        {
+            return string.Equals(declaredTypeName, factoryTypeName, StringComparison.Ordinal)
+                ? 1.0
+                : 0.4;
+        }
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && factoryCandidateTypeNames.Count > 1)
+            return factoryCandidateTypeNames.Contains(declaredTypeName, StringComparer.Ordinal) ? 0.9 : 0.6;
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName))
+            return 0.9;
+
+        if (!string.IsNullOrWhiteSpace(factoryTypeName))
+            return 0.85;
+
+        return factoryCandidateTypeNames.Count > 1 ? 0.5 : 0.0;
+    }
 }

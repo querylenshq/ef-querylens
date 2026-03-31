@@ -10,7 +10,7 @@ public static partial class LspSyntaxHelper
 {
     public static string? TryExtractLinqExpression(string sourceText, int line, int character,
         out string? contextVariableName,
-        IReadOnlyList<SyntaxNode>? additionalRoots = null)
+        ProjectSourceIndex? sourceIndex = null)
     {
         contextVariableName = null;
 
@@ -69,7 +69,7 @@ public static partial class LspSyntaxHelper
                     position,
                     out var synthesizedExpression,
                     out var synthesizedContextVariableName,
-                    additionalRoots))
+                        sourceIndex))
             {
                 contextVariableName = synthesizedContextVariableName;
                 return synthesizedExpression;

@@ -48,34 +48,40 @@ internal sealed partial class HoverHandler
                           ?? $"no-assembly|{Path.GetFullPath(filePath)}";
 
         var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
-        var factoryDbContextType = (!string.IsNullOrWhiteSpace(targetAssembly)
-                                    && !targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal))
-            ? AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly)
-            : null;
+        var factoryDbContextCandidates = (!string.IsNullOrWhiteSpace(targetAssembly)
+                                         && !targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal))
+            ? AssemblyResolver.TryExtractDbContextTypeNamesFromFactories(targetAssembly)
+            : [];
 
         if (TryFindContainingChain(sourceText, line, character, out var containingChain))
         {
-            var dbContextType = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, containingChain.ContextVariableName)
-                                ?? factoryDbContextType;
+            var resolution = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
+                sourceText,
+                containingChain.ContextVariableName,
+                factoryDbContextCandidates);
+            var dbContextTypeToken = LspSyntaxHelper.GetDbContextResolutionCacheToken(resolution);
             semanticContext = new SemanticHoverContext(
-                SemanticKey: $"{fingerprint}|{dbContextType ?? string.Empty}|{NormalizeWhitespace(containingChain.Expression)}",
+                SemanticKey: $"{fingerprint}|{dbContextTypeToken}|{NormalizeWhitespace(containingChain.Expression)}",
                 EffectiveLine: containingChain.Line,
                 EffectiveCharacter: containingChain.Character);
             return true;
         }
 
-        var siblingRoots = ProjectSourceHelper.GetSiblingRoots(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, siblingRoots);
+        var sourceIndex = ProjectSourceHelper.GetProjectIndex(filePath);
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, sourceIndex);
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
             return false;
         }
 
-        var dbContextTypeFallback = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName)
-                                    ?? factoryDbContextType;
+        var fallbackResolution = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
+            sourceText,
+            contextVariableName,
+            factoryDbContextCandidates);
+        var fallbackDbContextToken = LspSyntaxHelper.GetDbContextResolutionCacheToken(fallbackResolution);
         semanticContext = new SemanticHoverContext(
-            SemanticKey: $"{fingerprint}|{dbContextTypeFallback ?? string.Empty}|{NormalizeWhitespace(expression)}",
+            SemanticKey: $"{fingerprint}|{fallbackDbContextToken}|{NormalizeWhitespace(expression)}",
             EffectiveLine: line,
             EffectiveCharacter: character);
         return true;

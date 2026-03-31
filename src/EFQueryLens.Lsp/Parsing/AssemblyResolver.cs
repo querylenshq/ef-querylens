@@ -73,6 +73,48 @@ public static partial class AssemblyResolver
     }
 
     /// <summary>
+    /// Returns the absolute directories of projects directly referenced via
+    /// <c>&lt;ProjectReference Include="…" /&gt;</c> in the .csproj found in
+    /// <paramref name="projectDir"/>. Only one level deep (direct references only).
+    /// </summary>
+    public static IReadOnlyList<string> TryGetProjectReferenceDirs(string projectDir)
+    {
+        var csprojFiles = Directory.GetFiles(projectDir, "*.csproj")
+            .Where(f => !f.Contains("Backup", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (csprojFiles.Length == 0)
+            return [];
+
+        string csprojContent;
+        try
+        {
+            csprojContent = File.ReadAllText(csprojFiles[0]);
+        }
+        catch
+        {
+            return [];
+        }
+
+        var results = new List<string>();
+        var matches = Regex.Matches(
+            csprojContent,
+            @"<ProjectReference\s+Include=""([^""]+\.csproj)""",
+            RegexOptions.IgnoreCase);
+
+        foreach (Match match in matches)
+        {
+            var relativePath = match.Groups[1].Value.Replace('\\', Path.DirectorySeparatorChar);
+            var absolutePath = Path.GetFullPath(Path.Combine(projectDir, relativePath));
+            var refDir = Path.GetDirectoryName(absolutePath);
+            if (!string.IsNullOrEmpty(refDir) && Directory.Exists(refDir))
+                results.Add(refDir);
+        }
+
+        return results;
+    }
+
+    /// <summary>
     /// Walks up the directory tree from the given source file path to find the nearest
     /// .csproj file, determines if it's executable or a class library, and resolves the
     /// correct assembly path accordingly.

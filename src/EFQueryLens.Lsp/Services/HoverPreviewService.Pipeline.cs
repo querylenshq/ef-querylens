@@ -55,9 +55,9 @@ internal sealed partial class HoverPreviewService
 
         var sourceLine = line + 1;
 
-        var siblingRoots = ProjectSourceHelper.GetSiblingRoots(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, siblingRoots);
-        log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName} siblingFiles={siblingRoots.Count}");
+    var sourceIndex = ProjectSourceHelper.GetProjectIndex(filePath);
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, sourceIndex);
+        log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName} indexedFiles={sourceIndex.FileCount}");
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
@@ -76,10 +76,12 @@ internal sealed partial class HoverPreviewService
         var additionalImports = BuildAdditionalImports(usingContext.Imports);
         var localVariableTypes = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition(sourceText, line, character);
         log($"extract-local-types line={line} char={character} count={localVariableTypes.Count} vars={string.Join(",", localVariableTypes.Keys)}");
-        // In multi-DbContext projects, the declared type of the context variable is the
-        // best local signal. Fall back to factory discovery for factory-only setups.
-        var dbContextTypeName = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName)
-            ?? AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly);
+        var factoryDbContextCandidates = AssemblyResolver.TryExtractDbContextTypeNamesFromFactories(targetAssembly);
+        var dbContextResolution = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
+            sourceText,
+            contextVariableName,
+            factoryDbContextCandidates);
+        var dbContextTypeName = LspSyntaxHelper.GetPreferredDbContextTypeName(dbContextResolution);
 
         try
         {
@@ -92,10 +94,25 @@ internal sealed partial class HoverPreviewService
                 Expression = expression,
                 ContextVariableName = contextVariableName,
                 DbContextTypeName = dbContextTypeName,
+                DbContextResolution = dbContextResolution,
                 AdditionalImports = additionalImports,
                 UsingAliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
                 UsingStaticTypes = usingContext.StaticTypes.ToArray(),
                 LocalVariableTypes = localVariableTypes,
+                UseAsyncRunner = true,
+                UsingContextSnapshot = new UsingContextSnapshot
+                {
+                    Imports = usingContext.Imports.ToList(),
+                    Aliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
+                    StaticTypes = usingContext.StaticTypes.ToList(),
+                },
+                ExpressionMetadata = new ParsedExpressionMetadata
+                {
+                    ExpressionType = "Invocation", // Expression type will be determined at parse time
+                    SourceLine = line,
+                    SourceCharacter = character,
+                    Confidence = 0.95, // LSP extraction is high-confidence
+                },
             };
 
             var queued = await TranslateQueuedOrImmediateAsync(translationRequest, cancellationToken);
