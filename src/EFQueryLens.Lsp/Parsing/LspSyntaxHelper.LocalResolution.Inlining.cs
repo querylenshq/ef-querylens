@@ -34,30 +34,21 @@ public static partial class LspSyntaxHelper
         var current = expression;
         for (var depth = 0; depth < 16; depth++)
         {
-            switch (current)
+            if (current is AwaitExpressionSyntax awaitExpr)
             {
-                case AwaitExpressionSyntax awaitExpr:
-                    return awaitExpr.Expression;
-
-                case ParenthesizedExpressionSyntax paren:
-                    current = paren.Expression;
-                    continue;
-
-                case InvocationExpressionSyntax inv
-                    when inv.Expression is MemberAccessExpressionSyntax ma:
-                    current = ma.Expression;
-                    continue;
-
-                case MemberAccessExpressionSyntax ma:
-                    current = ma.Expression;
-                    continue;
-
-                default:
-                    // Reached a node that is not part of the outer chain
-                    // (e.g. an IdentifierName at the root of a normal query).
-                    // No top-level await found — return the original expression.
-                    return expression;
+                return awaitExpr.Expression;
             }
+
+            if (TryStepToChainReceiver(current, out var next))
+            {
+                current = next;
+                continue;
+            }
+
+            // Reached a node that is not part of the outer chain
+            // (e.g. an IdentifierName at the root of a normal query).
+            // No top-level await found — return the original expression.
+            return expression;
         }
 
         return expression;
@@ -125,29 +116,43 @@ public static partial class LspSyntaxHelper
 
         while (true)
         {
-            switch (current)
+            if (current is CastExpressionSyntax cast)
             {
-                case InvocationExpressionSyntax invocation
-                    when invocation.Expression is MemberAccessExpressionSyntax memberAccess:
-                    current = memberAccess.Expression;
-                    continue;
-
-                case MemberAccessExpressionSyntax member:
-                    current = member.Expression;
-                    continue;
-
-                case ParenthesizedExpressionSyntax parenthesized:
-                    current = parenthesized.Expression;
-                    continue;
-
-                case CastExpressionSyntax cast:
-                    current = cast.Expression;
-                    continue;
-
-                default:
-                    leftMost = current;
-                    return true;
+                current = cast.Expression;
+                continue;
             }
+
+            if (TryStepToChainReceiver(current, out var next))
+            {
+                current = next;
+                continue;
+            }
+
+            leftMost = current;
+            return true;
+        }
+    }
+
+    private static bool TryStepToChainReceiver(ExpressionSyntax current, out ExpressionSyntax next)
+    {
+        switch (current)
+        {
+            case InvocationExpressionSyntax invocation
+                when invocation.Expression is MemberAccessExpressionSyntax memberAccess:
+                next = memberAccess.Expression;
+                return true;
+
+            case MemberAccessExpressionSyntax member:
+                next = member.Expression;
+                return true;
+
+            case ParenthesizedExpressionSyntax parenthesized:
+                next = parenthesized.Expression;
+                return true;
+
+            default:
+                next = current;
+                return false;
         }
     }
 
