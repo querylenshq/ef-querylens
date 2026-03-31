@@ -26,23 +26,8 @@ public sealed partial class QueryEvaluator
         try
         {
             // 1. Resolve the DbContext type from the user's ALC.
-            Type dbContextType;
             var contextResolutionWatch = Stopwatch.StartNew();
-            try
-            {
-                dbContextType = alcCtx.FindDbContextType(
-                    request.DbContextTypeName,
-                    request.Expression,
-                    request.DbContextResolution);
-            }
-            catch (InvalidOperationException ex) when (IsNoDbContextFoundError(ex))
-            {
-                TryLoadSiblingAssemblies(alcCtx);
-                dbContextType = alcCtx.FindDbContextType(
-                    request.DbContextTypeName,
-                    request.Expression,
-                    request.DbContextResolution);
-            }
+            var dbContextType = ResolveDbContextTypeWithSiblingRetry(alcCtx, request);
             contextResolutionWatch.Stop();
             TimeSpan? contextResolutionTime = contextResolutionWatch.Elapsed;
 
@@ -57,27 +42,15 @@ public sealed partial class QueryEvaluator
 
             // 2. Create DbContext via factory (QueryLens-native or EF Design-Time).
             var dbContextCreationWatch = Stopwatch.StartNew();
-            object dbInstance;
-            string creationStrategy;
-            if (dbContextPoolProvider is not null && !string.IsNullOrWhiteSpace(poolAssemblyPath))
-            {
-                dbContextLease = await dbContextPoolProvider.AcquireDbContextLeaseAsync(
-                    dbContextType,
-                    poolAssemblyPath,
-                    alcCtx.LoadedAssemblies,
-                    ct);
-                dbInstance = dbContextLease.Instance;
-                creationStrategy = dbContextLease.Strategy;
-            }
-            else
-            {
-                var created = CreateDbContextInstance(
-                    dbContextType,
-                    alcCtx.LoadedAssemblies,
-                    alcCtx.AssemblyPath);
-                dbInstance = created.Instance;
-                creationStrategy = created.Strategy;
-            }
+            var createdContext = await CreateDbContextInstanceAsync(
+                dbContextType,
+                alcCtx,
+                dbContextPoolProvider,
+                poolAssemblyPath,
+                ct);
+            dbContextLease = createdContext.Lease;
+            var dbInstance = createdContext.Instance;
+            var creationStrategy = createdContext.Strategy;
             dbContextCreationWatch.Stop();
             TimeSpan? dbContextCreationTime = dbContextCreationWatch.Elapsed;
 
@@ -460,43 +433,24 @@ public sealed partial class QueryEvaluator
             } // end else (eval runner cache miss)
 
             // 7. Execute and capture SQL.
-            var warnings = new List<QueryWarning>();
-            IReadOnlyList<QuerySqlCommand> commands;
-
-            var runnerExecutionWatch = Stopwatch.StartNew();
-            var (queryable, captureSkipReason, captureError, capturedCommands) = useAsyncRunner
-                ? await InvokeRunMethodAsync(
-                    asyncRunner ?? throw new InvalidOperationException("Async runner delegate was not initialized."),
-                    dbInstance,
-                    ct)
-                : ParseExecutionPayload(
-                    (syncRunner ?? throw new InvalidOperationException("Sync runner delegate was not initialized."))(dbInstance));
-            runnerExecutionWatch.Stop();
-            TimeSpan? runnerExecutionTime = runnerExecutionWatch.Elapsed;
-
-            if (capturedCommands.Count > 0)
-            {
-                commands = capturedCommands;
-
-                if (!string.IsNullOrWhiteSpace(captureError))
-                {
-                    warnings.Add(new QueryWarning
-                    {
-                        Severity = WarningSeverity.Warning,
-                        Code = "QL_CAPTURE_PARTIAL",
-                        Message = "Captured SQL commands, but query materialization failed in offline mode.",
-                        Suggestion = captureError,
-                    });
-                }
-            }
-            else
+            var execution = await ExecuteRunnerAndCaptureAsync(
+                useAsyncRunner,
+                asyncRunner,
+                syncRunner,
+                dbInstance,
+                ct);
+            if (execution.FailureReason is not null)
             {
                 return Failure(
-                    captureSkipReason ?? captureError ?? "Offline capture produced no SQL commands.",
+                    execution.FailureReason,
                     sw.Elapsed,
                     dbContextType,
                     alcCtx.LoadedAssemblies);
             }
+
+            var commands = execution.Commands;
+            var warnings = execution.Warnings;
+            TimeSpan? runnerExecutionTime = execution.RunnerExecutionTime;
 
             sw.Stop();
             var stageTimings = new EvaluationStageTimings(
@@ -577,6 +531,88 @@ public sealed partial class QueryEvaluator
         return token.IsKind(SyntaxKind.IdentifierToken)
             ? token.ValueText
             : null;
+    }
+
+    private async Task<(IReadOnlyList<QuerySqlCommand> Commands, List<QueryWarning> Warnings, string? FailureReason, TimeSpan RunnerExecutionTime)> ExecuteRunnerAndCaptureAsync(
+        bool useAsyncRunner,
+        AsyncRunnerInvoker? asyncRunner,
+        SyncRunnerInvoker? syncRunner,
+        object dbInstance,
+        CancellationToken ct)
+    {
+        var runnerExecutionWatch = Stopwatch.StartNew();
+        var (queryable, captureSkipReason, captureError, capturedCommands) = useAsyncRunner
+            ? await InvokeRunMethodAsync(
+                asyncRunner ?? throw new InvalidOperationException("Async runner delegate was not initialized."),
+                dbInstance,
+                ct)
+            : ParseExecutionPayload(
+                (syncRunner ?? throw new InvalidOperationException("Sync runner delegate was not initialized."))(dbInstance));
+        runnerExecutionWatch.Stop();
+
+        if (capturedCommands.Count == 0)
+        {
+            return ([], [], captureSkipReason ?? captureError ?? "Offline capture produced no SQL commands.", runnerExecutionWatch.Elapsed);
+        }
+
+        var warnings = new List<QueryWarning>();
+        if (!string.IsNullOrWhiteSpace(captureError))
+        {
+            warnings.Add(new QueryWarning
+            {
+                Severity = WarningSeverity.Warning,
+                Code = "QL_CAPTURE_PARTIAL",
+                Message = "Captured SQL commands, but query materialization failed in offline mode.",
+                Suggestion = captureError,
+            });
+        }
+
+        return (capturedCommands, warnings, null, runnerExecutionWatch.Elapsed);
+    }
+
+    private static Type ResolveDbContextTypeWithSiblingRetry(
+        ProjectAssemblyContext alcCtx,
+        TranslationRequest request)
+    {
+        try
+        {
+            return alcCtx.FindDbContextType(
+                request.DbContextTypeName,
+                request.Expression,
+                request.DbContextResolution);
+        }
+        catch (InvalidOperationException ex) when (IsNoDbContextFoundError(ex))
+        {
+            TryLoadSiblingAssemblies(alcCtx);
+            return alcCtx.FindDbContextType(
+                request.DbContextTypeName,
+                request.Expression,
+                request.DbContextResolution);
+        }
+    }
+
+    private async Task<(object Instance, string Strategy, IDbContextLease? Lease)> CreateDbContextInstanceAsync(
+        Type dbContextType,
+        ProjectAssemblyContext alcCtx,
+        IDbContextPoolProvider? dbContextPoolProvider,
+        string? poolAssemblyPath,
+        CancellationToken ct)
+    {
+        if (dbContextPoolProvider is not null && !string.IsNullOrWhiteSpace(poolAssemblyPath))
+        {
+            var lease = await dbContextPoolProvider.AcquireDbContextLeaseAsync(
+                dbContextType,
+                poolAssemblyPath,
+                alcCtx.LoadedAssemblies,
+                ct);
+            return (lease.Instance, lease.Strategy, lease);
+        }
+
+        var created = CreateDbContextInstance(
+            dbContextType,
+            alcCtx.LoadedAssemblies,
+            alcCtx.AssemblyPath);
+        return (created.Instance, created.Strategy, null);
     }
 
     /// <summary>
