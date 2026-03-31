@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Reflection;
 using System.Runtime.Loader;
+using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting.DesignTime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Primitives;
@@ -67,6 +69,30 @@ public sealed partial class QueryEvaluator
         {
             CurrentFakeServiceProvider = null;
         }
+    }
+
+    private async Task<(object Instance, string Strategy, IDbContextLease? Lease)> CreateDbContextInstanceAsync(
+        Type dbContextType,
+        ProjectAssemblyContext alcCtx,
+        IDbContextPoolProvider? dbContextPoolProvider,
+        string? poolAssemblyPath,
+        CancellationToken ct)
+    {
+        if (dbContextPoolProvider is not null && !string.IsNullOrWhiteSpace(poolAssemblyPath))
+        {
+            var lease = await dbContextPoolProvider.AcquireDbContextLeaseAsync(
+                dbContextType,
+                poolAssemblyPath,
+                alcCtx.LoadedAssemblies,
+                ct);
+            return (lease.Instance, lease.Strategy, lease);
+        }
+
+        var created = CreateDbContextInstance(
+            dbContextType,
+            alcCtx.LoadedAssemblies,
+            alcCtx.AssemblyPath);
+        return (created.Instance, created.Strategy, null);
     }
 
     /// <summary>

@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class StubSynthesizer
 {
     [GeneratedRegex(@"^\s*[A-Za-z_][A-Za-z0-9_]*\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)")]
     private static partial Regex QuerySourcePropertyRegex();
@@ -33,7 +33,7 @@ public sealed partial class QueryEvaluator
         return false;
     }
 
-    private static bool LooksLikeTypeOrNamespacePrefix(
+    internal static bool LooksLikeTypeOrNamespacePrefix(
         string id, string expression, IReadOnlyDictionary<string, string> aliases)
     {
         if (aliases.ContainsKey(id)) return true;

@@ -6,9 +6,9 @@ using Microsoft.CodeAnalysis;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal sealed partial class CompilationPipeline
 {
-    private MetadataReference[] GetOrBuildMetadataRefs(
+    internal MetadataReference[] GetOrBuildMetadataRefs(
         ProjectAssemblyContext alcCtx,
         List<Assembly> compilationAssemblies,
         string assemblySetHash)
@@ -21,10 +21,10 @@ public sealed partial class QueryEvaluator
         }
 
         var refs = CollectMetadataReferences(compilationAssemblies).ToArray();
-        _refCache[cacheKey] = new QueryEvaluator.MetadataRefEntry(
+        _refCache[cacheKey] = new MetadataRefEntry(
             refs,
             QueryEvaluator.GetUtcNowTicks());
-        TrimCacheByLastAccess(_refCache, QueryEvaluator.MaxMetadataRefCacheEntries, static e => e.LastAccessTicks);
+        QueryEvaluator.TrimCacheByLastAccess(_refCache, MaxMetadataRefCacheEntries, static e => e.LastAccessTicks);
         return refs;
     }
 
@@ -137,7 +137,7 @@ public sealed partial class QueryEvaluator
         seenNames.Add(simpleName);
     }
 
-    private static string ComputeAssemblySetHash(List<Assembly> assemblies)
+    internal static string ComputeAssemblySetHash(List<Assembly> assemblies)
     {
         var sb = new StringBuilder();
         foreach (var asm in assemblies

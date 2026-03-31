@@ -6,9 +6,19 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class EvalSourceBuilder
 {
-    private static string BuildEvalSource(
+    // Roslyn compilation options are reused across all eval compilations.
+    private static readonly CSharpCompilationOptions SCompilationOptions =
+        new(OutputKind.DynamicallyLinkedLibrary,
+            optimizationLevel: OptimizationLevel.Debug,
+            allowUnsafe: false,
+            nullableContextOptions: NullableContextOptions.Annotations);
+
+    private static readonly CSharpParseOptions SParseOptions =
+        CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest);
+
+    internal static string BuildEvalSource(
         Type dbContextType,
         TranslationRequest request,
         IReadOnlyList<string> stubs,
@@ -58,7 +68,7 @@ public sealed partial class QueryEvaluator
         return sb.ToString();
     }
 
-    private static CSharpCompilation BuildCompilation(string source, MetadataReference[] refs)
+    internal static CSharpCompilation BuildCompilation(string source, MetadataReference[] refs)
     {
         var tree = CSharpSyntaxTree.ParseText(source, SParseOptions);
         return CSharpCompilation.Create(

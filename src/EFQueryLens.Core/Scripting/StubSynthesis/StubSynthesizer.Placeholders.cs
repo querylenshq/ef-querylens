@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class StubSynthesizer
 {
     // Cache placeholder expressions for provider-specific types — keyed by CLR type.
     // BuildScalarPlaceholderExpression is called in the retry loop so the cache is important.

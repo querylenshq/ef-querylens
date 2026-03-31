@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class StubSynthesizer
 {
     private static IReadOnlyDictionary<string, Type> InferMemberAccessTypes(
         string variableName,

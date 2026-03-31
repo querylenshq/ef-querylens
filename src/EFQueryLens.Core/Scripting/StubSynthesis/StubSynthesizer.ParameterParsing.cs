@@ -2,7 +2,7 @@ using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class StubSynthesizer
 {
     private static IReadOnlyList<QueryParameter> ParseParameters(string sql)
     {

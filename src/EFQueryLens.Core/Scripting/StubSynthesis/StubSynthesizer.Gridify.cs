@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class StubSynthesizer
 {
     [GeneratedRegex(
         "^global::Gridify\\.IGridifyQuery\\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*new\\s+global::Gridify\\.GridifyQuery\\(\\);\\s*$",
@@ -190,7 +190,7 @@ public sealed partial class QueryEvaluator
         return null;
     }
 
-    private static bool TryApplyGridifyFallbackFromErrors(
+    internal static bool TryApplyGridifyFallbackFromErrors(
         IReadOnlyList<Diagnostic> errors,
         IList<string> stubs,
         ref bool includeGridifyFallbackExtensions)

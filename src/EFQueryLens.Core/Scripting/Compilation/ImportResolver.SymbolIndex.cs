@@ -5,12 +5,12 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class ImportResolver
 {
     private static readonly ConcurrentDictionary<string, bool> SUsingNameValidity =
         new(StringComparer.Ordinal);
 
-    private static (HashSet<string> Namespaces, HashSet<string> Types) BuildKnownNamespaceAndTypeIndex(
+    internal static (HashSet<string> Namespaces, HashSet<string> Types) BuildKnownNamespaceAndTypeIndex(
         IEnumerable<Assembly> assemblies)
     {
         var ns = new HashSet<string>(StringComparer.Ordinal);
@@ -88,20 +88,20 @@ public sealed partial class QueryEvaluator
             .Distinct(StringComparer.Ordinal)!;
     }
 
-    private static bool IsResolvableNamespace(string n, IReadOnlySet<string> ns) => ns.Contains(n);
+    internal static bool IsResolvableNamespace(string n, IReadOnlySet<string> ns) => ns.Contains(n);
 
-    private static bool IsResolvableType(string n, IReadOnlySet<string> types) => types.Contains(n);
+    internal static bool IsResolvableType(string n, IReadOnlySet<string> types) => types.Contains(n);
 
-    private static bool IsResolvableTypeOrNamespace(
+    internal static bool IsResolvableTypeOrNamespace(
         string n,
         IReadOnlySet<string> ns,
         IReadOnlySet<string> types) =>
         ns.Contains(n) || types.Contains(n);
 
-    private static bool IsValidAliasName(string a) =>
+    internal static bool IsValidAliasName(string a) =>
         !string.IsNullOrWhiteSpace(a) && SyntaxFacts.IsValidIdentifier(a);
 
-    private static bool IsValidUsingName(string name)
+    internal static bool IsValidUsingName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
             return false;

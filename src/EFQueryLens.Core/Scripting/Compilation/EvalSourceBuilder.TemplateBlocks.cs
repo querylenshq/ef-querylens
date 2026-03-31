@@ -4,7 +4,7 @@ using EFQueryLens.Core.Scripting.Compilation;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class EvalSourceBuilder
 {
     private static void AppendBaseUsings(StringBuilder sb, HashSet<string> emittedUsings)
     {
@@ -32,7 +32,7 @@ public sealed partial class QueryEvaluator
         IReadOnlyCollection<string> synthesizedUsingNamespaces)
     {
         foreach (var import in request.AdditionalImports
-                     .Where(i => IsValidUsingName(i) && IsResolvableNamespace(i, knownNamespaces))
+                     .Where(i => ImportResolver.IsValidUsingName(i) && ImportResolver.IsResolvableNamespace(i, knownNamespaces))
                      .Distinct(StringComparer.Ordinal)
                      .Order(StringComparer.Ordinal))
         {
@@ -40,7 +40,7 @@ public sealed partial class QueryEvaluator
         }
 
         foreach (var ns in synthesizedUsingNamespaces
-                     .Where(n => IsValidUsingName(n) && IsResolvableNamespace(n, knownNamespaces))
+                     .Where(n => ImportResolver.IsValidUsingName(n) && ImportResolver.IsResolvableNamespace(n, knownNamespaces))
                      .Distinct(StringComparer.Ordinal)
                      .Order(StringComparer.Ordinal))
         {
@@ -48,16 +48,16 @@ public sealed partial class QueryEvaluator
         }
 
         foreach (var kvp in request.UsingAliases
-                     .Where(kvp => IsValidAliasName(kvp.Key)
-                                   && IsValidUsingName(kvp.Value)
-                                   && IsResolvableTypeOrNamespace(kvp.Value, knownNamespaces, knownTypes))
+                     .Where(kvp => ImportResolver.IsValidAliasName(kvp.Key)
+                                   && ImportResolver.IsValidUsingName(kvp.Value)
+                                   && ImportResolver.IsResolvableTypeOrNamespace(kvp.Value, knownNamespaces, knownTypes))
                      .OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
         {
             AppendUsingLine(sb, emittedUsings, $"using {kvp.Key} = {kvp.Value};");
         }
 
         foreach (var st in request.UsingStaticTypes
-                     .Where(st => IsValidUsingName(st) && IsResolvableType(st, knownTypes))
+                     .Where(st => ImportResolver.IsValidUsingName(st) && ImportResolver.IsResolvableType(st, knownTypes))
                      .Distinct(StringComparer.Ordinal)
                      .Order(StringComparer.Ordinal))
         {
@@ -65,7 +65,7 @@ public sealed partial class QueryEvaluator
         }
 
         foreach (var st in synthesizedUsingStaticTypes
-                     .Where(IsValidUsingName)
+                     .Where(ImportResolver.IsValidUsingName)
                      .Distinct(StringComparer.Ordinal)
                      .Order(StringComparer.Ordinal))
         {

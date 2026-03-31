@@ -16,7 +16,7 @@ public sealed partial class QueryLensEngine
             ArgumentNullException.ThrowIfNull(request);
 
             var assemblyPath = Path.GetFullPath(request.AssemblyPath);
-            var alcCtx = GetOrRefreshContext(assemblyPath);
+            var alcCtx = _alcManager.GetOrRefreshContext(assemblyPath);
 
             Type dbContextType;
             try

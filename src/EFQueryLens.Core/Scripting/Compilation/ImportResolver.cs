@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class ImportResolver
 {
     [GeneratedRegex(@"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(")]
     private static partial Regex TopLevelInvocationRegex();
@@ -23,7 +23,7 @@ public sealed partial class QueryEvaluator
     private static bool IsExtensionImportRecoveryDiagnostic(Diagnostic diagnostic) =>
         diagnostic.Id is "CS1061" or "CS1929" or "CS7036";
 
-    private static IReadOnlyList<string> InferMissingExtensionStaticImports(
+    internal static IReadOnlyList<string> InferMissingExtensionStaticImports(
         IEnumerable<Diagnostic> errors,
         CSharpCompilation compilation,
         IEnumerable<Assembly> assemblies)
@@ -262,7 +262,7 @@ public sealed partial class QueryEvaluator
         return false;
     }
 
-    private static string? TryExtractRootIdentifier(string expression)
+    internal static string? TryExtractRootIdentifier(string expression)
     {
         if (string.IsNullOrWhiteSpace(expression))
             return null;
@@ -307,7 +307,7 @@ public sealed partial class QueryEvaluator
         }
     }
 
-    private static bool TryNormalizeRootContextHopFromErrors(
+    internal static bool TryNormalizeRootContextHopFromErrors(
         IReadOnlyList<Diagnostic> errors,
         CSharpCompilation compilation,
         string expression,
@@ -505,7 +505,7 @@ public sealed partial class QueryEvaluator
         }
     }
 
-    private static bool IsUnsupportedTopLevelMethodInvocation(string expression, string ctxVar)
+    internal static bool IsUnsupportedTopLevelMethodInvocation(string expression, string ctxVar)
     {
         var m = TopLevelInvocationRegex().Match(expression);
         if (!m.Success)
@@ -520,7 +520,7 @@ public sealed partial class QueryEvaluator
         return true;
     }
 
-    private static bool ContainsFindInvocation(string expression) =>
+    internal static bool ContainsFindInvocation(string expression) =>
         FindInvocationRegex().IsMatch(expression);
 
 }

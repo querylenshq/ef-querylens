@@ -1,14 +1,15 @@
+using System.Diagnostics;
 using System.Reflection;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting.Contracts;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class RunnerExecutor
 {
     private static async Task<(object? Queryable, string? CaptureSkipReason, string? CaptureError, IReadOnlyList<QuerySqlCommand> Commands)>
         InvokeRunMethodAsync(
-            AsyncRunnerInvoker runAsync,
+            QueryEvaluator.AsyncRunnerInvoker runAsync,
             object dbInstance,
             CancellationToken ct)
     {
@@ -16,14 +17,14 @@ public sealed partial class QueryEvaluator
         return ParseExecutionPayload(payload);
     }
 
-    private static SyncRunnerInvoker CreateSyncRunnerInvoker(Type runType)
+    internal static QueryEvaluator.SyncRunnerInvoker CreateSyncRunnerInvoker(Type runType)
     {
         var runMethod = runType.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Run method in __QueryLensRunner__.");
 
         try
         {
-            return (SyncRunnerInvoker)Delegate.CreateDelegate(typeof(SyncRunnerInvoker), runMethod);
+            return (QueryEvaluator.SyncRunnerInvoker)Delegate.CreateDelegate(typeof(QueryEvaluator.SyncRunnerInvoker), runMethod);
         }
         catch (Exception ex)
         {
@@ -31,14 +32,14 @@ public sealed partial class QueryEvaluator
         }
     }
 
-    private static AsyncRunnerInvoker CreateAsyncRunnerInvoker(Type runType)
+    internal static QueryEvaluator.AsyncRunnerInvoker CreateAsyncRunnerInvoker(Type runType)
     {
         var runMethod = runType.GetMethod("RunAsync", BindingFlags.Public | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find RunAsync method in __QueryLensRunner__.");
 
         try
         {
-            return (AsyncRunnerInvoker)Delegate.CreateDelegate(typeof(AsyncRunnerInvoker), runMethod);
+            return (QueryEvaluator.AsyncRunnerInvoker)Delegate.CreateDelegate(typeof(QueryEvaluator.AsyncRunnerInvoker), runMethod);
         }
         catch (Exception ex)
         {
@@ -90,6 +91,43 @@ public sealed partial class QueryEvaluator
             typedPayload.CaptureSkipReason,
             typedPayload.CaptureError,
             commands);
+    }
+
+    internal static async Task<(IReadOnlyList<QuerySqlCommand> Commands, List<QueryWarning> Warnings, string? FailureReason, TimeSpan RunnerExecutionTime)> ExecuteRunnerAndCaptureAsync(
+        bool useAsyncRunner,
+        QueryEvaluator.AsyncRunnerInvoker? asyncRunner,
+        QueryEvaluator.SyncRunnerInvoker? syncRunner,
+        object dbInstance,
+        CancellationToken ct)
+    {
+        var runnerExecutionWatch = Stopwatch.StartNew();
+        var (queryable, captureSkipReason, captureError, capturedCommands) = useAsyncRunner
+            ? await InvokeRunMethodAsync(
+                asyncRunner ?? throw new InvalidOperationException("Async runner delegate was not initialized."),
+                dbInstance,
+                ct)
+            : ParseExecutionPayload(
+                (syncRunner ?? throw new InvalidOperationException("Sync runner delegate was not initialized."))(dbInstance));
+        runnerExecutionWatch.Stop();
+
+        if (capturedCommands.Count == 0)
+        {
+            return ([], [], captureSkipReason ?? captureError ?? "Offline capture produced no SQL commands.", runnerExecutionWatch.Elapsed);
+        }
+
+        var warnings = new List<QueryWarning>();
+        if (!string.IsNullOrWhiteSpace(captureError))
+        {
+            warnings.Add(new QueryWarning
+            {
+                Severity = WarningSeverity.Warning,
+                Code = "QL_CAPTURE_PARTIAL",
+                Message = "Captured SQL commands, but query materialization failed in offline mode.",
+                Suggestion = captureError,
+            });
+        }
+
+        return (capturedCommands, warnings, null, runnerExecutionWatch.Elapsed);
     }
 }
 

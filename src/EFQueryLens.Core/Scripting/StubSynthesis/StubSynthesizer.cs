@@ -2,12 +2,12 @@ using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class StubSynthesizer
 {
     // Stub generation and type inference helpers extracted from QueryEvaluator.cs
     // to keep EvaluateAsync flow readable.
 
-    private static string BuildStubDeclaration(
+    internal static string BuildStubDeclaration(
         string name, string? rootId, TranslationRequest request, Type dbContextType)
     {
         if (!string.IsNullOrWhiteSpace(rootId)
@@ -91,7 +91,7 @@ public sealed partial class QueryEvaluator
         return $"object {name} = default;";
     }
 
-    private static string BuildStubFromTypeName(
+    internal static string BuildStubFromTypeName(
         string typeName,
         string varName,
         Type dbContextType,

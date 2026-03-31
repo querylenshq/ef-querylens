@@ -4,9 +4,9 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
-public sealed partial class QueryEvaluator
+internal static partial class ImportResolver
 {
-    private static bool TryNormalizePatternTernaryComparisonFromErrors(
+    internal static bool TryNormalizePatternTernaryComparisonFromErrors(
         IReadOnlyList<Diagnostic> errors,
         string expression,
         out string normalizedExpression)
@@ -84,7 +84,7 @@ public sealed partial class QueryEvaluator
         }
     }
 
-    private static bool TryNormalizeUnsupportedPatternMatchingFromErrors(
+    internal static bool TryNormalizeUnsupportedPatternMatchingFromErrors(
         IReadOnlyList<Diagnostic> errors,
         string expression,
         out string normalizedExpression)
