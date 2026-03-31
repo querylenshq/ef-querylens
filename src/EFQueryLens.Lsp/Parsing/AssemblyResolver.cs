@@ -14,6 +14,15 @@ namespace EFQueryLens.Lsp.Parsing;
 /// </summary>
 public static partial class AssemblyResolver
 {
+    [GeneratedRegex(@"<ProjectReference\s+Include=""([^""]+\.csproj)""", RegexOptions.IgnoreCase)]
+    private static partial Regex ProjectReferenceIncludeRegex();
+
+    [GeneratedRegex(@"<AssemblyName>(.+?)</AssemblyName>")]
+    private static partial Regex AssemblyNameRegex();
+
+    [GeneratedRegex(@"<OutputType>(\w+)</OutputType>", RegexOptions.IgnoreCase)]
+    private static partial Regex OutputTypeRegex();
+
     private sealed record CachedAssemblySelection(string TargetAssemblyPath, long ExpiresAtUtcTicks);
 
     private static readonly ConcurrentDictionary<string, CachedAssemblySelection> TargetAssemblyCache =
@@ -97,10 +106,7 @@ public static partial class AssemblyResolver
         }
 
         var results = new List<string>();
-        var matches = Regex.Matches(
-            csprojContent,
-            @"<ProjectReference\s+Include=""([^""]+\.csproj)""",
-            RegexOptions.IgnoreCase);
+        var matches = ProjectReferenceIncludeRegex().Matches(csprojContent);
 
         foreach (Match match in matches)
         {
@@ -159,7 +165,7 @@ public static partial class AssemblyResolver
         var assemblyName = Path.GetFileNameWithoutExtension(csprojFile);
         var csprojContent = File.ReadAllText(csprojFile);
 
-        var nameMatch = Regex.Match(csprojContent, @"<AssemblyName>(.+?)</AssemblyName>");
+        var nameMatch = AssemblyNameRegex().Match(csprojContent);
         if (nameMatch.Success)
         {
             assemblyName = nameMatch.Groups[1].Value.Trim();
@@ -196,7 +202,7 @@ public static partial class AssemblyResolver
             return true;
 
         // Check for explicit OutputType
-        var outputTypeMatch = Regex.Match(csprojContent, @"<OutputType>(\w+)</OutputType>", RegexOptions.IgnoreCase);
+        var outputTypeMatch = OutputTypeRegex().Match(csprojContent);
         if (outputTypeMatch.Success)
         {
             var outputType = outputTypeMatch.Groups[1].Value;

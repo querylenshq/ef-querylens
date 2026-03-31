@@ -6,6 +6,12 @@ namespace EFQueryLens.Lsp.Parsing;
 
 public static partial class AssemblyResolver
 {
+    [GeneratedRegex(@"IQueryLensDbContextFactory\s*<\s*([\w.]+)\s*>", RegexOptions.None, 1000)]
+    private static partial Regex QueryLensFactoryTypeRegex();
+
+    [GeneratedRegex(@"Project\("".+?""\)\s*=\s*"".+?""\s*,\s*""(.+?\.csproj)""", RegexOptions.Multiline)]
+    private static partial Regex SlnProjectRegex();
+
     private sealed record CandidateAssembly(
         string DllPath,
         DateTime TimestampUtc,
@@ -57,11 +63,7 @@ public static partial class AssemblyResolver
             try
             {
                 var text = File.ReadAllText(file);
-                var matches = Regex.Matches(
-                    text,
-                    @"IQueryLensDbContextFactory\s*<\s*([\w.]+)\s*>",
-                    RegexOptions.None,
-                    TimeSpan.FromSeconds(1));
+                var matches = QueryLensFactoryTypeRegex().Matches(text);
 
                 foreach (Match match in matches)
                 {
@@ -208,9 +210,7 @@ public static partial class AssemblyResolver
         else
         {
             var slnContent = File.ReadAllText(slnFile);
-            projectEntries = Regex.Matches(slnContent,
-                    @"Project\("".+?""\)\s*=\s*"".+?""\s*,\s*""(.+?\.csproj)""",
-                    RegexOptions.Multiline)
+            projectEntries = SlnProjectRegex().Matches(slnContent)
                 .Select(m => Path.GetFullPath(
                     Path.Combine(Path.GetDirectoryName(slnFile)!, m.Groups[1].Value)))
                 .Where(p => File.Exists(p) && !string.Equals(p,
@@ -235,7 +235,7 @@ public static partial class AssemblyResolver
                     continue;
 
                 var exeAssemblyName = Path.GetFileNameWithoutExtension(projPath);
-                var exeNameMatch = Regex.Match(content, @"<AssemblyName>(.+?)</AssemblyName>");
+                var exeNameMatch = AssemblyNameRegex().Match(content);
                 if (exeNameMatch.Success)
                     exeAssemblyName = exeNameMatch.Groups[1].Value.Trim();
 
