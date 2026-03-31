@@ -6,6 +6,7 @@ namespace EFQueryLens.Integration.Tests.Lsp;
 /// Tests for <see cref="LspEnvironment"/> — centralized environment variable parsing
 /// for LSP configuration, client detection, and action server port resolution.
 /// </summary>
+[Collection("EnvironmentVariables")]
 public class LspEnvironmentTests : IDisposable
 {
     private readonly Dictionary<string, string?> _savedEnv = new();

@@ -13,7 +13,7 @@ public static partial class LspSyntaxHelper
         int cursorPosition,
         out string expression,
         out string? contextVariableName,
-        IReadOnlyList<SyntaxNode>? additionalRoots = null)
+            ProjectSourceIndex? sourceIndex = null)
     {
         expression = string.Empty;
         contextVariableName = null;
@@ -38,11 +38,13 @@ public static partial class LspSyntaxHelper
             .DescendantNodes()
             .OfType<MethodDeclarationSyntax>();
 
-        if (additionalRoots is { Count: > 0 })
-        {
-            allDeclarations = allDeclarations.Concat(
-                additionalRoots.SelectMany(r => r.DescendantNodes().OfType<MethodDeclarationSyntax>()));
-        }
+            if (sourceIndex is not null)
+            {
+                // Text-pre-filtered: only files that mention the method name are parsed.
+                var methodRoots = sourceIndex.FindRootsForMethod(helperName);
+                allDeclarations = allDeclarations.Concat(
+                    methodRoots.SelectMany(r => r.DescendantNodes().OfType<MethodDeclarationSyntax>()));
+            }
 
         var candidates = allDeclarations
             .Where(m => string.Equals(m.Identifier.Text, helperName, StringComparison.Ordinal)
@@ -57,13 +59,12 @@ public static partial class LspSyntaxHelper
                 continue;
             }
 
-            // Keep this path narrow: only trigger helper synthesis when hover/cursor is
-            // inside one of the expression arguments (selector/where style parameters).
-            var cursorInsideExpressionArgument = expressionParameterIndexes
-                .Any(i => i >= 0
-                    && i < arguments.Count
-                    && arguments[i].Span.Contains(cursorPosition));
-            if (!cursorInsideExpressionArgument)
+            // Allow synthesis when the cursor is anywhere within the invocation —
+            // including on the receiver, method name, or a non-expression argument.
+            // The downstream guards (TryFindPrimaryQueryInvocation, IsLikelyQueryChain)
+            // already reject methods whose bodies contain no EF query chain, so no
+            // additional position narrowing is needed here.
+            if (!invocation.Span.Contains(cursorPosition))
             {
                 continue;
             }
