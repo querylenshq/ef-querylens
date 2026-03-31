@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using SampleSqlServerApp.Application;
 using SampleSqlServerApp.Application.Customers;
 using SampleSqlServerApp.Application.Orders;
+using SampleSqlServerApp.Application.Reporting;
 using SampleSqlServerApp.Domain.Entities;
 using SampleSqlServerApp.Domain.Enums;
 using SampleSqlServerApp.Infrastructure;
@@ -174,6 +175,13 @@ app.MapGet("/api/orders/recent/sql",
 			});
 
 		return Results.Ok(new SqlPreviewItem("Recent Orders", query.ToQueryString()));
+	});
+
+app.MapGet("/api/reporting/private-projection-sample",
+	async (CustomerReportService reportService, CancellationToken ct) =>
+	{
+		var rows = await reportService.GetPrivateProjectionSampleAsync(ct);
+		return Results.Ok(rows);
 	});
 
 app.MapGet("/api/sql-preview",
