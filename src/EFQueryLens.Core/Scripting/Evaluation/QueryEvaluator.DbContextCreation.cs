@@ -17,6 +17,15 @@ public sealed partial class QueryEvaluator
     private static readonly AsyncLocal<IServiceProvider?> _fakeServiceProvider =
         new();
 
+    /// <summary>
+    /// Exposes the current fake service provider for QueryLensFakeServices.
+    /// </summary>
+    internal static IServiceProvider? CurrentFakeServiceProvider
+    {
+        get => _fakeServiceProvider.Value;
+        set => _fakeServiceProvider.Value = value;
+    }
+
     internal static (object Instance, string Strategy) CreateDbContextInstance(
         Type dbContextType,
         IEnumerable<Assembly> userAssemblies,
@@ -27,8 +36,8 @@ public sealed partial class QueryEvaluator
             .ToList();
 
         // Set up fake services before calling factory to enable named connection string resolution
-        var fakeProvider = new QueryLensFakeServiceProvider();
-        _fakeServiceProvider.Value = fakeProvider;
+        var fakeProvider = new QueryLensFakeServices.ServiceProvider();
+        CurrentFakeServiceProvider = fakeProvider;
 
         // Attempt to globally register the fake configuration in Microsoft.Extensions.DependencyInjection
         // so that EF Core can find it when building its internal service provider
@@ -56,7 +65,7 @@ public sealed partial class QueryEvaluator
         }
         finally
         {
-            _fakeServiceProvider.Value = null;
+            CurrentFakeServiceProvider = null;
         }
     }
 
@@ -65,7 +74,7 @@ public sealed partial class QueryEvaluator
     /// so that EF Core's internal service provider discovery can find them.
     /// This uses reflection to access the DI system without requiring a direct dependency on it.
     /// </summary>
-    private static void TryRegisterFakeServicesInDefaultDI(QueryLensFakeServiceProvider fakeProvider)
+    private static void TryRegisterFakeServicesInDefaultDI(IServiceProvider fakeProvider)
     {
         try
         {
@@ -83,128 +92,6 @@ public sealed partial class QueryEvaluator
         catch
         {
             // Silently ignore failures - this is best-effort service registration
-        }
-    }
-
-    /// <summary>
-    /// Provides fake services for DbContext construction when real services are unavailable.
-    /// This ensures DbContext.OnConfiguring can resolve dependencies like IConfiguration
-    /// for named connection strings without failing in the offline evaluation context.
-    /// </summary>
-    internal sealed class QueryLensFakeServiceProvider : IServiceProvider
-    {
-        private readonly IConfiguration _configuration = new QueryLensFakeConfiguration();
-
-        /// <summary>
-        /// Static accessor for the current fake service provider in the AsyncLocal context.
-        /// This allows external code or EF Core to discover and use the fake provider.
-        /// </summary>
-        internal static QueryLensFakeServiceProvider? Current => 
-            _fakeServiceProvider.Value as QueryLensFakeServiceProvider;
-
-        public object? GetService(Type serviceType)
-        {
-            // Provide fake implementations for common services EF Core might request
-            if (serviceType == typeof(IConfiguration))
-                return _configuration;
-
-            if (serviceType == typeof(IConfigurationRoot))
-                return _configuration as IConfigurationRoot;
-
-            if (serviceType == typeof(QueryLensFakeConfiguration))
-                return _configuration;
-
-            // For other IConfiguration-like types by name, return our configuration
-            if (serviceType?.Name is "IConfiguration" or "IConfigurationRoot")
-                return _configuration;
-
-            // Check if this provider itself is being requested
-            if (serviceType == typeof(IServiceProvider) || serviceType == typeof(QueryLensFakeServiceProvider))
-                return this;
-
-            // Return null for unknown services; EF Core will use defaults
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Fake IConfiguration that provides dummy connection strings for any "Name=..." lookup.
-    /// When EF Core encounters named connection strings like UseSqlServer("Name=MainConnection"),
-    /// it will resolve them through this configuration instead of failing.
-    /// </summary>
-    internal sealed class QueryLensFakeConfiguration : IConfiguration, IConfigurationRoot
-    {
-        private readonly IConfigurationSection _nullSection =
-            new QueryLensFakeConfigurationSection();
-
-        public string? this[string key]
-        {
-            get
-            {
-                // Return dummy connection strings for any connection string lookup,
-                // including the canonical Name=_querylens used by generated factories.
-                if (key?.StartsWith("ConnectionStrings:", StringComparison.OrdinalIgnoreCase) == true)
-                    return "Server=__querylens_offline__;Database=__querylens_offline__;TrustServerCertificate=true;";
-
-                // Return null for other keys so EF Core uses its defaults
-                return null;
-            }
-            set { }
-        }
-
-        public IEnumerable<IConfigurationProvider> Providers => [];
-
-        public IConfigurationSection GetSection(string key) =>
-            _nullSection;
-
-        public IEnumerable<IConfigurationSection> GetChildren() =>
-            [];
-
-        public IChangeToken GetReloadToken() =>
-            new QueryLensChangeToken();
-
-        public void Reload() { }
-    }
-
-    /// <summary>
-    /// Fake configuration section that acts as a null/empty fallback section.
-    /// </summary>
-    internal sealed class QueryLensFakeConfigurationSection : IConfigurationSection
-    {
-        public string Key => string.Empty;
-        public string Path => string.Empty;
-        public string? Value { get; set; }
-
-        public string? this[string key]
-        {
-            get => null;
-            set { }
-        }
-
-        public IEnumerable<IConfigurationSection> GetChildren() =>
-            [];
-
-        public IChangeToken GetReloadToken() =>
-            new QueryLensChangeToken();
-
-        public IConfigurationSection GetSection(string key) =>
-            this;
-    }
-
-    /// <summary>
-    /// Fake change token that never signals changes (configuration is static in eval context).
-    /// </summary>
-    internal sealed class QueryLensChangeToken : IChangeToken
-    {
-        public bool HasChanged => false;
-        public bool ActiveChangeCallbacks => false;
-
-        public IDisposable RegisterChangeCallback(Action<object?> callback, object? state) =>
-            new NoOpDisposable();
-
-        private sealed class NoOpDisposable : IDisposable
-        {
-            public void Dispose() { }
         }
     }
 }
