@@ -11,6 +11,7 @@ public sealed class SqliteAppDbContext : DbContext, ISqliteAppDbContext
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<Tag> Tags => Set<Tag>();
     public DbSet<CustomerTag> CustomerTags => Set<CustomerTag>();
+    public DbSet<Item> Items => Set<Item>();
 
     IQueryable<Customer> ISqliteAppDbContext.Customers => Customers.AsNoTracking();
     IQueryable<Order> ISqliteAppDbContext.Orders => Orders.AsNoTracking();
@@ -75,6 +76,16 @@ public sealed class SqliteAppDbContext : DbContext, ISqliteAppDbContext
                 .WithMany(t => t.CustomerTags)
                 .HasForeignKey(x => x.TagId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Item>(b =>
+        {
+            b.ToTable("items");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Code).HasMaxLength(50);
+            b.Property(x => x.Name).HasMaxLength(200);
+            b.Property(x => x.CreatedUtc);
+            b.HasIndex(x => x.Code);
         });
     }
 }

@@ -32,7 +32,11 @@ public static partial class LspSyntaxHelper
             if (hasKnownQueryMethods)
             {
                 var rootName = TryExtractRootContextVariable(invocation);
-                if (!LooksLikeDbContextRoot(rootName) && LooksLikeStaticTypeRoot(rootName))
+                // Convention-based heuristic: C# types use PascalCase, instance variables use camelCase/_-prefix.
+                // This helps us avoid treating static method calls like Math.Max() as query candidates.
+                // Methods like Max/Min/Count/Sum exist in both System.Linq and System.Math, so we use
+                // naming convention as a disambiguator when the root is not a known DbContext variable.
+                if (!LooksLikeDbContextRoot(rootName) && char.IsUpper(rootName?[0] ?? 'x'))
                 {
                     return false;
                 }
@@ -399,6 +403,19 @@ public static partial class LspSyntaxHelper
         if (snapshot is null)
             return null;
 
+        if (ShouldIgnoreDeclaredTypeName(snapshot))
+        {
+            if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+                return snapshot.FactoryTypeName;
+
+            return snapshot.FactoryCandidateTypeNames.Count == 1
+                ? snapshot.FactoryCandidateTypeNames[0]
+                : null;
+        }
+
+        if (ShouldPreferFactoryTypeName(snapshot))
+            return snapshot.FactoryTypeName;
+
         if (!string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName))
             return snapshot.DeclaredTypeName;
 
@@ -415,6 +432,20 @@ public static partial class LspSyntaxHelper
         if (snapshot is null)
             return string.Empty;
 
+        if (ShouldIgnoreDeclaredTypeName(snapshot))
+        {
+            if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+                return snapshot.FactoryTypeName;
+
+            if (snapshot.FactoryCandidateTypeNames.Count > 0)
+                return string.Join(";", snapshot.FactoryCandidateTypeNames.Order(StringComparer.Ordinal));
+
+            return string.Empty;
+        }
+
+        if (ShouldPreferFactoryTypeName(snapshot) && !string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+            return snapshot.FactoryTypeName;
+
         if (!string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName))
             return snapshot.DeclaredTypeName;
 
@@ -425,6 +456,64 @@ public static partial class LspSyntaxHelper
             return string.Empty;
 
         return string.Join(";", snapshot.FactoryCandidateTypeNames.Order(StringComparer.Ordinal));
+    }
+
+    private static bool ShouldPreferFactoryTypeName(DbContextResolutionSnapshot snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName)
+            || string.IsNullOrWhiteSpace(snapshot.FactoryTypeName)
+            || string.Equals(snapshot.DeclaredTypeName, snapshot.FactoryTypeName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return IsLikelyInterfaceTypeName(snapshot.DeclaredTypeName);
+    }
+
+    private static bool ShouldIgnoreDeclaredTypeName(DbContextResolutionSnapshot snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName)
+            || !IsLikelyInterfaceTypeName(snapshot.DeclaredTypeName)
+            || snapshot.FactoryCandidateTypeNames.Count == 0)
+        {
+            return false;
+        }
+
+        if (ContainsTypeName(snapshot.FactoryCandidateTypeNames, snapshot.DeclaredTypeName))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName)
+            && string.Equals(snapshot.DeclaredTypeName, snapshot.FactoryTypeName, StringComparison.Ordinal))
+            return false;
+
+        return true;
+    }
+
+    private static bool ContainsTypeName(IReadOnlyList<string> candidates, string typeName)
+    {
+        if (candidates.Contains(typeName, StringComparer.Ordinal))
+            return true;
+
+        var shortName = ShortTypeName(typeName);
+        return candidates.Any(candidate =>
+            string.Equals(ShortTypeName(candidate), shortName, StringComparison.Ordinal));
+    }
+
+    private static string ShortTypeName(string typeName)
+    {
+        var normalized = typeName.StartsWith("global::", StringComparison.Ordinal)
+            ? typeName.Substring("global::".Length)
+            : typeName;
+        return normalized.Split('.').LastOrDefault() ?? normalized;
+    }
+
+    private static bool IsLikelyInterfaceTypeName(string typeName)
+    {
+        var shortName = ShortTypeName(typeName);
+
+        return shortName.Length > 1
+            && shortName[0] == 'I'
+            && char.IsUpper(shortName[1]);
     }
 
     private static string BuildResolutionSource(

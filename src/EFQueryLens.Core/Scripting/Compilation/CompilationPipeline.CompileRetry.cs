@@ -49,6 +49,7 @@ internal sealed partial class CompilationPipeline
         changed |= ApplyMissingTypeImportRule(errors, knownNamespaces, knownTypes, synthesizedUsingStaticTypes, synthesizedUsingNamespaces);
         changed |= ApplyArgumentTypeRestubRule(errors, dbContextType, workingRequest, stubs);
         changed |= ApplyExpressionNormalizationRules(errors, compilation, workingRequest.Expression, dbContextType, ref workingExpression);
+
         changed |= ApplyMissingExtensionImportRule(errors, compilation, compilationAssemblies, synthesizedUsingStaticTypes);
 
         if (StubSynthesizer.TryApplyGridifyFallbackFromErrors(errors, stubs, ref includeGridifyFallbackExtensions))
@@ -203,7 +204,7 @@ internal sealed partial class CompilationPipeline
         return changed;
     }
 
-    private static bool ApplyExpressionNormalizationRules(
+    private bool ApplyExpressionNormalizationRules(
         IReadOnlyList<Diagnostic> errors,
         CSharpCompilation compilation,
         string originalExpression,
@@ -220,6 +221,7 @@ internal sealed partial class CompilationPipeline
                 out var normalizedExpression)
             && !string.Equals(normalizedExpression, workingExpression, StringComparison.Ordinal))
         {
+            LogDebug($"compile-retry expression-mutation rule=root-hop trigger=CS1061 before-len={workingExpression.Length} after-len={normalizedExpression.Length}");
             workingExpression = normalizedExpression;
             changed = true;
         }
@@ -230,6 +232,7 @@ internal sealed partial class CompilationPipeline
                 out var ternaryNormalizedExpression)
             && !string.Equals(ternaryNormalizedExpression, workingExpression, StringComparison.Ordinal))
         {
+            LogDebug($"compile-retry expression-mutation rule=pattern-ternary trigger=CS0019 before-len={workingExpression.Length} after-len={ternaryNormalizedExpression.Length}");
             workingExpression = ternaryNormalizedExpression;
             changed = true;
         }
@@ -240,6 +243,7 @@ internal sealed partial class CompilationPipeline
                 out var patternNormalizedExpression)
             && !string.Equals(patternNormalizedExpression, workingExpression, StringComparison.Ordinal))
         {
+            LogDebug($"compile-retry expression-mutation rule=is-pattern trigger=CS8122 before-len={workingExpression.Length} after-len={patternNormalizedExpression.Length}");
             workingExpression = patternNormalizedExpression;
             changed = true;
         }
@@ -250,6 +254,7 @@ internal sealed partial class CompilationPipeline
                 out var inaccessibleProjectionNormalizedExpression)
             && !string.Equals(inaccessibleProjectionNormalizedExpression, workingExpression, StringComparison.Ordinal))
         {
+            LogDebug($"compile-retry expression-mutation rule=inaccessible-projection trigger=CS0122 before-len={workingExpression.Length} after-len={inaccessibleProjectionNormalizedExpression.Length}");
             workingExpression = inaccessibleProjectionNormalizedExpression;
             changed = true;
         }

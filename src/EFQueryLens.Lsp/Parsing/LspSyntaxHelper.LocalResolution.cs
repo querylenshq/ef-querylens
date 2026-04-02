@@ -15,21 +15,15 @@ public static partial class LspSyntaxHelper
     }
 
     /// <summary>
-    /// If the expression is an invocation chain whose receiver is (or descends through
-    /// parentheses to) an <c>await</c> expression - e.g.
-    /// <c>(await query.ToListAsync()).ToList()</c> - returns the operand of that
-    /// <c>await</c> (<c>query.ToListAsync()</c>).
+    /// If the expression is a chain wrapped by post-materialization in-memory operations,
+    /// returns the DB-evaluable terminal boundary.
     ///
-    /// In-memory operations chained after <c>await</c> (e.g. <c>.ToList()</c> on an
-    /// already-materialised <c>List&lt;T&gt;</c>) are irrelevant for SQL capture.
-    /// The runner template's <c>UnwrapTask</c> helper already handles
-    /// <see cref="System.Threading.Tasks.Task{T}"/> results, so stripping the
-    /// outer await chain preserves SQL generation while avoiding CS4032
-    /// ("The 'await' operator can only be used within an async method") in the
-    /// generated synchronous scaffold.
+    /// Examples:
+    /// - <c>(await query.ToListAsync(ct)).ToList()</c> -> <c>query.ToListAsync(ct)</c>
+    /// - <c>query.ToList().DistinctBy(x => x.Id).ToList()</c> -> <c>query.ToList()</c>
     ///
-    /// Returns <paramref name="expression"/> unchanged when no top-level
-    /// <c>await</c> is reachable by walking the outer invocation chain.
+    /// Returns <paramref name="expression"/> unchanged when no clear materialization
+    /// boundary is found while walking the outer chain.
     /// </summary>
     private static ExpressionSyntax StripOuterAwaitChain(ExpressionSyntax expression)
     {
@@ -39,6 +33,12 @@ public static partial class LspSyntaxHelper
             if (current is AwaitExpressionSyntax awaitExpr)
             {
                 return awaitExpr.Expression;
+            }
+
+            if (current is InvocationExpressionSyntax invocation
+                && IsMaterializationBoundaryInvocation(invocation))
+            {
+                return invocation;
             }
 
             if (TryStepToChainReceiver(current, out var next))
@@ -54,6 +54,63 @@ public static partial class LspSyntaxHelper
         }
 
         return expression;
+    }
+
+    private static bool IsMaterializationBoundaryInvocation(InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        var methodName = memberAccess.Name.Identifier.ValueText;
+        if (!TerminalMethods.Contains(methodName))
+        {
+            return false;
+        }
+
+        // If an earlier terminal already exists in this outer chain, this invocation
+        // is post-materialization in-memory processing and should not become boundary.
+        var chainMethodNames = GetInvocationChainMethodNames(invocation).ToArray();
+        for (var i = 1; i < chainMethodNames.Length; i++)
+        {
+            if (TerminalMethods.Contains(chainMethodNames[i]))
+            {
+                return false;
+            }
+        }
+
+        var receiver = UnwrapParenthesizedExpression(memberAccess.Expression);
+        if (receiver is AwaitExpressionSyntax)
+        {
+            return false;
+        }
+
+        // Receiver should look like an EF/queryable chain. This avoids treating
+        // plain in-memory sequences as SQL query boundaries.
+        if (!IsLikelyQueryableExpression(receiver))
+        {
+            return false;
+        }
+
+        if (receiver is InvocationExpressionSyntax receiverInvocation)
+        {
+            return IsLikelyQueryChain(receiverInvocation);
+        }
+
+        var rootName = TryExtractRootContextVariable(receiver);
+        return LooksLikeDbContextRoot(rootName);
+    }
+
+    private static ExpressionSyntax UnwrapParenthesizedExpression(ExpressionSyntax expression)
+    {
+        var current = expression;
+        while (current is ParenthesizedExpressionSyntax parenthesized)
+        {
+            current = parenthesized.Expression;
+        }
+
+        return current;
     }
 
     private static bool IsTransparentQueryCastType(TypeSyntax type)
@@ -83,6 +140,7 @@ public static partial class LspSyntaxHelper
         ExpressionSyntax expression,
         StatementSyntax anchorStatement)
     {
+        var rootAnchorStatement = anchorStatement;
         var currentExpression = expression;
         var currentAnchorStatement = anchorStatement;
 
@@ -92,6 +150,19 @@ public static partial class LspSyntaxHelper
                 || leftMostExpression is not IdentifierNameSyntax identifier)
             {
                 break;
+            }
+
+            if (depth == 0
+                && TryCollectQueryVariableFlow(
+                    identifier.Identifier.ValueText,
+                    currentAnchorStatement,
+                    out var flowExpression,
+                    out var flowBaseStatement)
+                && flowBaseStatement is not null)
+            {
+                currentExpression = currentExpression.ReplaceNode(leftMostExpression, flowExpression.WithoutTrivia());
+                currentAnchorStatement = flowBaseStatement;
+                continue;
             }
 
             if (!TryResolveLocalExpressionCore(
@@ -108,7 +179,39 @@ public static partial class LspSyntaxHelper
             currentAnchorStatement = resolvedAtStatement;
         }
 
+        // Resolve set-operation argument identifiers (Concat/Union/Except/Intersect)
+        // against the original hover statement scope, not the most recently resolved
+        // left-most declaration statement.
+        currentExpression = InlineSetOperationIdentifierArguments(currentExpression, rootAnchorStatement);
         return currentExpression;
+    }
+
+    private static ExpressionSyntax InlineSetOperationIdentifierArguments(
+        ExpressionSyntax expression,
+        StatementSyntax anchorStatement)
+    {
+        var rewritten = new SetOperationArgumentInliner(anchorStatement).Visit(expression) as ExpressionSyntax;
+        return rewritten ?? expression;
+    }
+
+    private static bool IsSetOperationInvocation(InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        return memberAccess.Name.Identifier.ValueText is "Concat" or "Union" or "Except" or "Intersect";
+    }
+
+    private static bool IsLikelyQueryableExpression(ExpressionSyntax expression)
+    {
+        return expression switch
+        {
+            InvocationExpressionSyntax invocation => IsLikelyQueryChain(GetOutermostInvocationChain(invocation)),
+            MemberAccessExpressionSyntax => true,
+            _ => false,
+        };
     }
 
     private static bool TryGetLeftMostExpression(ExpressionSyntax expression, out ExpressionSyntax leftMost)
@@ -335,6 +438,54 @@ public static partial class LspSyntaxHelper
             return false;
 
         return TryResolveLocalExpressionCore(identifier, anchorStatement, out expression, out resolvedAtStatement);
+    }
+
+    private sealed class SetOperationArgumentInliner : CSharpSyntaxRewriter
+    {
+        private readonly StatementSyntax _anchorStatement;
+
+        public SetOperationArgumentInliner(StatementSyntax anchorStatement)
+        {
+            _anchorStatement = anchorStatement;
+        }
+
+        public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
+        {
+            var visited = (InvocationExpressionSyntax)base.VisitInvocationExpression(node)!;
+            if (!IsSetOperationInvocation(visited))
+            {
+                return visited;
+            }
+
+            var changed = false;
+            var arguments = new List<ArgumentSyntax>(visited.ArgumentList.Arguments.Count);
+
+            foreach (var argument in visited.ArgumentList.Arguments)
+            {
+                if (argument.Expression is IdentifierNameSyntax identifier
+                    && TryResolveLocalExpressionCore(
+                        identifier.Identifier.ValueText,
+                        _anchorStatement,
+                        out var resolvedExpression,
+                        out _)
+                    && IsLikelyQueryableExpression(resolvedExpression))
+                {
+                    arguments.Add(argument.WithExpression(resolvedExpression.WithoutTrivia()));
+                    changed = true;
+                    continue;
+                }
+
+                arguments.Add(argument);
+            }
+
+            if (!changed)
+            {
+                return visited;
+            }
+
+            return visited.WithArgumentList(
+                visited.ArgumentList.WithArguments(SyntaxFactory.SeparatedList(arguments)));
+        }
     }
 
     private sealed class TransparentQueryableCastStripper : CSharpSyntaxRewriter

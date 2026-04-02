@@ -22,14 +22,12 @@ public partial class QueryEvaluatorTests
         using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
         var evaluator = new QueryEvaluator();
 
-        var result = await evaluator.EvaluateAsync(
-            sqlAlcCtx,
-            new TranslationRequest
+        var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
             {
                 AssemblyPath = sqlAlcCtx.AssemblyPath,
                 Expression = "db.Customers",
                 DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
-            });
+            }, TestContext.Current.CancellationToken);
 
         if (result.Success)
         {
@@ -57,9 +55,7 @@ public partial class QueryEvaluatorTests
         using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
         var evaluator = new QueryEvaluator();
 
-        var result = await evaluator.EvaluateAsync(
-            sqlAlcCtx,
-            new TranslationRequest
+        var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
             {
                 AssemblyPath = sqlAlcCtx.AssemblyPath,
                 Expression = "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(expression)",
@@ -70,7 +66,7 @@ public partial class QueryEvaluatorTests
                     ["pageSize"] = "int",
                     ["expression"] = "System.Linq.Expressions.Expression<System.Func<SampleSqlServerApp.Domain.Entities.Order, int>>",
                 },
-            });
+            }, TestContext.Current.CancellationToken);
 
         if (result.Success)
         {
@@ -97,14 +93,12 @@ public partial class QueryEvaluatorTests
         using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
         var evaluator = new QueryEvaluator();
 
-        var result = await evaluator.EvaluateAsync(
-            sqlAlcCtx,
-            new TranslationRequest
+        var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
             {
                 AssemblyPath = sqlAlcCtx.AssemblyPath,
                 Expression = "db.CustomerDirectory",
                 DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerReportingDbContext",
-            });
+            }, TestContext.Current.CancellationToken);
 
         if (result.Success)
         {
@@ -123,7 +117,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MetaData_HasCorrectProviderName()
     {
-        var result = await TranslateAsync("db.Orders");
+        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Equal("Pomelo.EntityFrameworkCore.MySql", result.Metadata.ProviderName);
@@ -132,7 +126,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_Metadata_TranslationTimeIsPositive()
     {
-        var result = await TranslateAsync("db.Orders");
+        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.True(result.Metadata.TranslationTime > TimeSpan.Zero);
@@ -141,7 +135,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_Metadata_DbContextTypeIsSet()
     {
-        var result = await TranslateAsync("db.Orders");
+        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Equal("SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext", result.Metadata.DbContextType);
@@ -150,7 +144,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_Metadata_EfCoreVersionIsKnown()
     {
-        var result = await TranslateAsync("db.Orders");
+        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotEqual("unknown", result.Metadata.EfCoreVersion);

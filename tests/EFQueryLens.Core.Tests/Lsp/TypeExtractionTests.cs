@@ -1,4 +1,5 @@
 using EFQueryLens.Lsp.Parsing;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Tests.Lsp;
 
@@ -309,6 +310,50 @@ public class TypeExtractionTests
 
         Assert.True(types.TryGetValue("id", out var typeName));
         Assert.Equal("System.Guid", typeName);
+    }
+
+    [Fact]
+    public void ExtractLocalVariableTypes_LambdaParameters_AreFound()
+    {
+        var source = """
+            app.MapGet("/api/customers/{customerId:guid}/orders",
+                async (
+                    Guid customerId,
+                    decimal? minTotal,
+                    OrderStatus? status,
+                    CancellationToken ct) =>
+                {
+                    _ = minTotal;
+                    return Results.Ok();
+                });
+            """;
+
+        var types = Extract(source, "_ = minTotal;");
+
+        Assert.True(types.TryGetValue("minTotal", out var minTotalType));
+        Assert.Equal("decimal?", minTotalType);
+        Assert.True(types.TryGetValue("status", out var statusType));
+        Assert.Equal("OrderStatus?", statusType);
+        Assert.True(types.TryGetValue("ct", out var ctType));
+        Assert.Equal("CancellationToken", ctType);
+    }
+
+    [Fact]
+    public void BuildMemberTypeHints_FromNullableSymbols_ProducesHasValueAndValueHints()
+    {
+        IReadOnlyList<LocalSymbolHint> symbols =
+        [
+            new LocalSymbolHint { Name = "minTotal", TypeName = "decimal?", Kind = "parameter" },
+            new LocalSymbolHint { Name = "status", TypeName = "OrderStatus?", Kind = "parameter" },
+        ];
+
+        var expression = "db.Orders.Where(o => (!minTotal.HasValue || o.Total >= minTotal.Value) && (!status.HasValue || o.Status == status.Value))";
+        var hints = LspSyntaxHelper.BuildMemberTypeHints(expression, symbols);
+
+        Assert.Contains(hints, h => h.ReceiverName == "minTotal" && h.MemberName == "HasValue" && h.TypeName == "bool");
+        Assert.Contains(hints, h => h.ReceiverName == "minTotal" && h.MemberName == "Value" && h.TypeName == "decimal");
+        Assert.Contains(hints, h => h.ReceiverName == "status" && h.MemberName == "HasValue" && h.TypeName == "bool");
+        Assert.Contains(hints, h => h.ReceiverName == "status" && h.MemberName == "Value" && h.TypeName == "OrderStatus");
     }
 
     [Fact]

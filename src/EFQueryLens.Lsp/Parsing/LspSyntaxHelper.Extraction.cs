@@ -11,9 +11,11 @@ public static partial class LspSyntaxHelper
 {
     public static string? TryExtractLinqExpression(string sourceText, int line, int character,
         out string? contextVariableName,
+        out string? callSiteExpression,
         ProjectSourceIndex? sourceIndex = null)
     {
         contextVariableName = null;
+        callSiteExpression = null;
 
         var tree = CSharpSyntaxTree.ParseText(sourceText);
         var root = tree.GetRoot();
@@ -30,16 +32,33 @@ public static partial class LspSyntaxHelper
         // Find the node at the cursor position
         var node = root.FindToken(position).Parent;
 
-        // Walk up until we find an InvocationExpression (like .Where() or .ToList()),
-        // a MemberAccessExpression (like db.Orders), or a query-expression root
-        // (from ... in ... select ...).
-        var invocation = node?.FirstAncestorOrSelf<InvocationExpressionSyntax>();
-        var memberAccess = node?.FirstAncestorOrSelf<MemberAccessExpressionSyntax>();
-        var queryExpression = node?.FirstAncestorOrSelf<QueryExpressionSyntax>();
+        InvocationExpressionSyntax? invocation = null;
+        ExpressionSyntax? targetExpression = null;
 
-        ExpressionSyntax? targetExpression = invocation
-            ?? (ExpressionSyntax?)memberAccess
-            ?? queryExpression;
+        // Conditional expression special-case:
+        // - Hovering inside a query subtree in either branch should extract that branch query.
+        // - Hovering elsewhere (condition / operator / outside branch subtrees) falls back to
+        //   regular outermost extraction, which preserves current default behavior.
+        if (!TryExtractConditionalBranchQueryAtPosition(node, position, out targetExpression, out invocation))
+        {
+            // Walk up until we find an InvocationExpression (like .Where() or .ToList()),
+            // a MemberAccessExpression (like db.Orders), or a query-expression root
+            // (from ... in ... select ...).
+            invocation = node?.FirstAncestorOrSelf<InvocationExpressionSyntax>();
+            var memberAccess = node?.FirstAncestorOrSelf<MemberAccessExpressionSyntax>();
+            var queryExpression = node?.FirstAncestorOrSelf<QueryExpressionSyntax>();
+
+            targetExpression = invocation
+                ?? (ExpressionSyntax?)memberAccess
+                ?? queryExpression;
+        }
+
+        if (targetExpression is null
+            && TryGetRhsExpressionFromDeclarationOrAssignment(node, out var rhsExpression))
+        {
+            targetExpression = rhsExpression;
+            invocation = rhsExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
+        }
 
         if (targetExpression == null)
             return null;
@@ -73,6 +92,20 @@ public static partial class LspSyntaxHelper
                         sourceIndex))
             {
                 contextVariableName = synthesizedContextVariableName;
+                callSiteExpression = finalInvocation.ToString();
+                return synthesizedExpression;
+            }
+
+            if (TryExtractFromQueryableReturningHelperCall(
+                    root,
+                    finalInvocation,
+                    position,
+                    out synthesizedExpression,
+                    out synthesizedContextVariableName,
+                    sourceIndex))
+            {
+                contextVariableName = synthesizedContextVariableName;
+                callSiteExpression = finalInvocation.ToString();
                 return synthesizedExpression;
             }
 
@@ -89,10 +122,17 @@ public static partial class LspSyntaxHelper
 
             if (outerChain is null)
             {
-                return null;
-            }
+                if (!IsPotentialQueryableOperatorInvocation(finalInvocation))
+                {
+                    return null;
+                }
 
-            targetExpression = outerChain;
+                targetExpression = finalInvocation;
+            }
+            else
+            {
+                targetExpression = outerChain;
+            }
         }
 
         // If the outermost chain is chained on the result of an await expression
@@ -101,6 +141,54 @@ public static partial class LspSyntaxHelper
         // handles Task<T> via UnwrapTask; keeping the await would cause CS4032
         // in the generated synchronous scaffold.
         targetExpression = StripOuterAwaitChain(targetExpression);
+
+        // Helper-query inlining for query-like chains:
+        // orderQueries.BuildRecentOrdersQuery(...).Select(...).ToListAsync(...)
+        // should inline BuildRecentOrdersQuery body to root at _db.* so DbContext
+        // disambiguation can use actual DbSet usage instead of service type roots.
+        if (targetExpression is InvocationExpressionSyntax chainInvocation)
+        {
+            var helperInvocation = node?.AncestorsAndSelf()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(i => i.Span.Contains(position))
+                .OrderBy(i => i.Span.Length)
+                .FirstOrDefault(i =>
+                {
+                    var methodName = GetInvokedMethodName(i);
+                    return !string.IsNullOrWhiteSpace(methodName)
+                        && !QueryChainMethods.Contains(methodName)
+                        && !TerminalMethods.Contains(methodName);
+                });
+
+            if (helperInvocation is null
+                && TryFindQueryableHelperInvocationInChain(chainInvocation, position, out var chainHelperInvocation))
+            {
+                helperInvocation = chainHelperInvocation;
+            }
+
+            if (helperInvocation is not null
+                && TryExtractFromQueryableReturningHelperCall(
+                root,
+                helperInvocation,
+                position,
+                out var helperExpression,
+                out var helperContextVariableName,
+                sourceIndex))
+            {
+                try
+                {
+                    targetExpression = SyntaxFactory.ParseExpression(helperExpression);
+                    invocation = targetExpression as InvocationExpressionSyntax
+                        ?? targetExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
+                    contextVariableName = helperContextVariableName;
+                    callSiteExpression = chainInvocation.ToString();
+                }
+                catch
+                {
+                    // Keep original extraction if helper synthesis parse fails.
+                }
+            }
+        }
 
         // Inline local IQueryable variables for non-terminal chains too, so
         // expressions like auditTrailQuery.ApplyPaging(...).ToListAsync(...) are
@@ -121,7 +209,19 @@ public static partial class LspSyntaxHelper
                 .Select(i => i.Identifier.Text)
                 .FirstOrDefault();
 
-        return targetExpression.ToString();
+        // Phase 2: Apply semantic variable tracking to preserve reused variable names.
+        // This is attempted before pre-normalization to capture the raw expression structure.
+        var initialExpr = targetExpression.ToString();
+        var semanticallyDedup = ApplySemanticVariableTracking(targetExpression, sourceText);
+        var candidateExpression = semanticallyDedup != initialExpr
+            ? semanticallyDedup
+            : initialExpr;
+
+        // Apply syntax-only normalizations before sending to daemon so the daemon
+        // compile-retry loop sees a clean expression.  This is safe to do here
+        // because these rewrites are purely syntactic and do not require runtime model
+        // or assembly information.
+        return PreNormalizeExtractedExpression(candidateExpression);
     }
 
     public static SourceUsingContext ExtractUsingContext(string sourceText)
@@ -196,6 +296,13 @@ public static partial class LspSyntaxHelper
             switch (current)
             {
                 case InvocationExpressionSyntax invocation:
+                    if (invocation.Expression is IdentifierNameSyntax
+                        && invocation.ArgumentList.Arguments.Count > 0)
+                    {
+                        current = invocation.ArgumentList.Arguments[0].Expression;
+                        continue;
+                    }
+
                     current = invocation.Expression;
                     continue;
 
@@ -206,6 +313,10 @@ public static partial class LspSyntaxHelper
 
                 case ParenthesizedExpressionSyntax parenthesized:
                     current = parenthesized.Expression;
+                    continue;
+
+                case ConditionalExpressionSyntax conditional:
+                    current = conditional.WhenTrue;
                     continue;
 
                 case QueryExpressionSyntax queryExpression:
@@ -308,6 +419,11 @@ public static partial class LspSyntaxHelper
 
     private static bool IsLikelyQueryChain(InvocationExpressionSyntax invocation)
     {
+        if (invocation.Expression is MemberAccessExpressionSyntax { Expression: PredefinedTypeSyntax })
+        {
+            return false;
+        }
+
         var methodNames = GetInvocationChainMethodNames(invocation).ToArray();
 
         if (methodNames.Length == 0)
@@ -316,6 +432,89 @@ public static partial class LspSyntaxHelper
         }
 
         return methodNames.Any(name => TerminalMethods.Contains(name) || QueryChainMethods.Contains(name));
+    }
+
+    private static bool IsPotentialQueryableOperatorInvocation(InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        if (memberAccess.Expression is PredefinedTypeSyntax)
+        {
+            return false;
+        }
+
+        if (memberAccess.Expression is not IdentifierNameSyntax receiver)
+        {
+            return false;
+        }
+
+        if (LooksLikeDbContextRoot(receiver.Identifier.ValueText))
+        {
+            return true;
+        }
+
+        var anchorStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
+        if (anchorStatement is null)
+        {
+            return false;
+        }
+
+        if (!TryResolveLocalExpressionCore(
+                receiver.Identifier.ValueText,
+                anchorStatement,
+                out var resolvedReceiver,
+                out _))
+        {
+            return false;
+        }
+
+        return resolvedReceiver switch
+        {
+            InvocationExpressionSyntax resolvedInvocation => IsLikelyQueryChain(GetOutermostInvocationChain(resolvedInvocation)),
+            MemberAccessExpressionSyntax => true,
+            _ => false,
+        };
+    }
+
+    private static bool TryFindQueryableHelperInvocationInChain(
+        InvocationExpressionSyntax outerInvocation,
+        int cursorPosition,
+        out InvocationExpressionSyntax helperInvocation)
+    {
+        helperInvocation = null!;
+        var current = outerInvocation;
+
+        for (var depth = 0; depth < 16; depth++)
+        {
+            if (current.Expression is not MemberAccessExpressionSyntax memberAccess)
+            {
+                return false;
+            }
+
+            var methodName = memberAccess.Name.Identifier.ValueText;
+            var receiverRoot = TryExtractRootContextVariable(memberAccess.Expression);
+            if (!QueryChainMethods.Contains(methodName)
+                && !TerminalMethods.Contains(methodName)
+                && !LooksLikeDbContextRoot(receiverRoot)
+                && current.Span.Contains(cursorPosition))
+            {
+                helperInvocation = current;
+                return true;
+            }
+
+            if (memberAccess.Expression is InvocationExpressionSyntax receiverInvocation)
+            {
+                current = receiverInvocation;
+                continue;
+            }
+
+            return false;
+        }
+
+        return false;
     }
 
     private static IEnumerable<string> GetInvocationChainMethodNames(InvocationExpressionSyntax invocation)
@@ -342,22 +541,7 @@ public static partial class LspSyntaxHelper
             return false;
         }
 
-        if (KnownDbContextRootNames.Contains(rootName))
-        {
-            return true;
-        }
-
-        return rootName.Contains("context", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool LooksLikeStaticTypeRoot(string? rootName)
-    {
-        if (string.IsNullOrWhiteSpace(rootName))
-        {
-            return false;
-        }
-
-        return char.IsUpper(rootName[0]);
+        return KnownDbContextRootNames.Contains(rootName);
     }
 
     private static bool TryExtractFromExpressionParameterHelperCall(
@@ -441,7 +625,8 @@ public static partial class LspSyntaxHelper
             queryText = SubstituteMethodParametersWithCallArguments(
                 queryText,
                 method.ParameterList.Parameters,
-                arguments);
+                arguments,
+                invocation);
 
             ExpressionSyntax parsed;
             try
@@ -475,6 +660,251 @@ public static partial class LspSyntaxHelper
         }
 
         return false;
+    }
+
+    private static bool TryExtractFromQueryableReturningHelperCall(
+        SyntaxNode root,
+        InvocationExpressionSyntax invocation,
+        int cursorPosition,
+        out string expression,
+        out string? contextVariableName,
+        ProjectSourceIndex? sourceIndex = null)
+    {
+        expression = string.Empty;
+        contextVariableName = null;
+
+        var helperName = GetInvokedMethodName(invocation);
+        if (string.IsNullOrWhiteSpace(helperName))
+        {
+            return false;
+        }
+
+        var arguments = invocation.ArgumentList.Arguments;
+        if (arguments.Count == 0)
+        {
+            return false;
+        }
+
+        IEnumerable<MethodDeclarationSyntax> allDeclarations = root
+            .DescendantNodes()
+            .OfType<MethodDeclarationSyntax>();
+
+        if (sourceIndex is not null)
+        {
+            var methodRoots = sourceIndex.FindRootsForMethod(helperName);
+            allDeclarations = allDeclarations.Concat(
+                methodRoots.SelectMany(r => r.DescendantNodes().OfType<MethodDeclarationSyntax>()));
+        }
+
+        var candidates = allDeclarations
+            .Where(m => string.Equals(m.Identifier.Text, helperName, StringComparison.Ordinal)
+                && m.ParameterList.Parameters.Count == arguments.Count)
+            .ToArray();
+
+        foreach (var method in candidates)
+        {
+            if (!invocation.Span.Contains(cursorPosition))
+            {
+                continue;
+            }
+
+            if (!LooksLikeQueryableReturnType(method.ReturnType))
+            {
+                continue;
+            }
+
+            var queryInvocation = TryFindPrimaryQueryInvocation(method);
+            if (queryInvocation is null)
+            {
+                continue;
+            }
+
+            ExpressionSyntax queryExpression = queryInvocation;
+            queryExpression = TryInlineLocalQueryRoot(queryExpression, queryInvocation);
+            queryExpression = StripTransparentQueryableCasts(queryExpression);
+
+            var queryText = queryExpression.ToString();
+            if (string.IsNullOrWhiteSpace(queryText))
+            {
+                continue;
+            }
+
+            queryText = SubstituteMethodParametersWithCallArguments(
+                queryText,
+                method.ParameterList.Parameters,
+                arguments,
+                invocation);
+
+            ExpressionSyntax parsed;
+            try
+            {
+                parsed = SyntaxFactory.ParseExpression(queryText);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (parsed is InvocationExpressionSyntax parsedInvocation
+                && !IsLikelyQueryChain(GetOutermostInvocationChain(parsedInvocation)))
+            {
+                continue;
+            }
+
+            var rootContext = TryExtractRootContextVariable(parsed)
+                ?? parsed.DescendantNodes()
+                    .OfType<IdentifierNameSyntax>()
+                    .Select(i => i.Identifier.Text)
+                    .FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(rootContext))
+            {
+                continue;
+            }
+
+            expression = parsed.ToString();
+            contextVariableName = rootContext;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool LooksLikeQueryableReturnType(TypeSyntax? returnType)
+    {
+        var returnTypeText = returnType?.ToString();
+        if (string.IsNullOrWhiteSpace(returnTypeText))
+        {
+            return false;
+        }
+
+        return returnTypeText.Contains("IQueryable<", StringComparison.Ordinal)
+               || returnTypeText.Contains("IOrderedQueryable<", StringComparison.Ordinal);
+    }
+
+    private static bool TryGetRhsExpressionFromDeclarationOrAssignment(
+        SyntaxNode? node,
+        out ExpressionSyntax expression)
+    {
+        expression = null!;
+
+        var variableDeclarator = node?.FirstAncestorOrSelf<VariableDeclaratorSyntax>();
+        if (variableDeclarator?.Initializer?.Value is ExpressionSyntax initializerExpression)
+        {
+            expression = initializerExpression;
+            return true;
+        }
+
+        var assignment = node?.FirstAncestorOrSelf<AssignmentExpressionSyntax>();
+        if (assignment is not null)
+        {
+            expression = assignment.Right;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractConditionalBranchQueryAtPosition(
+        SyntaxNode? node,
+        int cursorPosition,
+        out ExpressionSyntax? expression,
+        out InvocationExpressionSyntax? invocation)
+    {
+        expression = null;
+        invocation = null;
+
+        var conditional = node?.FirstAncestorOrSelf<ConditionalExpressionSyntax>();
+        if (conditional is null)
+        {
+            return false;
+        }
+
+        ExpressionSyntax branch = conditional.WhenTrue.Span.Contains(cursorPosition)
+            ? conditional.WhenTrue
+            : conditional.WhenFalse.Span.Contains(cursorPosition)
+                ? conditional.WhenFalse
+                : null!;
+
+        if (branch is null)
+        {
+            return false;
+        }
+
+        branch = UnwrapParenthesized(branch);
+
+        var invocationInBranch = node?.AncestorsAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(i => branch.Span.Contains(i.Span))
+            .Select(GetOutermostInvocationChain)
+            .FirstOrDefault(i => branch.Span.Contains(i.Span) && IsLikelyQueryChain(i));
+        if (invocationInBranch is not null)
+        {
+            invocation = invocationInBranch;
+            expression = invocationInBranch;
+            return true;
+        }
+
+        if (branch is InvocationExpressionSyntax branchInvocation)
+        {
+            var outermostBranchInvocation = GetOutermostInvocationChain(branchInvocation);
+            if (IsLikelyQueryChain(outermostBranchInvocation))
+            {
+                invocation = outermostBranchInvocation;
+                expression = outermostBranchInvocation;
+                return true;
+            }
+        }
+
+        if (branch is IdentifierNameSyntax identifier)
+        {
+            var anchorStatement = conditional.FirstAncestorOrSelf<StatementSyntax>();
+            if (anchorStatement is not null
+                && TryResolveLocalExpressionCore(
+                    identifier.Identifier.ValueText,
+                    anchorStatement,
+                    out var resolvedExpression,
+                    out _))
+            {
+                resolvedExpression = UnwrapParenthesized(resolvedExpression);
+                if (resolvedExpression is InvocationExpressionSyntax resolvedInvocation)
+                {
+                    var outermostResolvedInvocation = GetOutermostInvocationChain(resolvedInvocation);
+                    if (IsLikelyQueryChain(outermostResolvedInvocation))
+                    {
+                        invocation = outermostResolvedInvocation;
+                        expression = outermostResolvedInvocation;
+                        return true;
+                    }
+                }
+
+                if (IsLikelyQueryableExpression(resolvedExpression))
+                {
+                    expression = resolvedExpression;
+                    invocation = resolvedExpression as InvocationExpressionSyntax;
+                    return true;
+                }
+            }
+        }
+
+        if (IsLikelyQueryableExpression(branch))
+        {
+            expression = branch;
+            invocation = branch as InvocationExpressionSyntax;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static ExpressionSyntax UnwrapParenthesized(ExpressionSyntax expression)
+    {
+        var current = expression;
+        while (current is ParenthesizedExpressionSyntax parenthesized)
+        {
+            current = parenthesized.Expression;
+        }
+
+        return current;
     }
 
     private static string? GetInvokedMethodName(InvocationExpressionSyntax invocation)
@@ -540,7 +970,8 @@ public static partial class LspSyntaxHelper
     private static string SubstituteMethodParametersWithCallArguments(
         string queryText,
         SeparatedSyntaxList<ParameterSyntax> parameters,
-        SeparatedSyntaxList<ArgumentSyntax> arguments)
+        SeparatedSyntaxList<ArgumentSyntax> arguments,
+        InvocationExpressionSyntax invocationContext)
     {
         var result = queryText;
 
@@ -552,7 +983,17 @@ public static partial class LspSyntaxHelper
                 continue;
             }
 
-            var argumentText = arguments[i].Expression.ToString();
+            var argumentExpression = arguments[i].Expression;
+            var argumentText = argumentExpression.ToString();
+            if (argumentExpression is IdentifierNameSyntax identifier
+                && TryResolveLocalExpression(
+                    identifier.Identifier.ValueText,
+                    invocationContext,
+                    out var resolvedExpression))
+            {
+                argumentText = resolvedExpression.WithoutTrivia().ToString();
+            }
+
             if (string.IsNullOrWhiteSpace(argumentText))
             {
                 continue;

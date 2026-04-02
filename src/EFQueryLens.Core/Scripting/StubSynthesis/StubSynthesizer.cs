@@ -10,10 +10,21 @@ internal static partial class StubSynthesizer
     internal static string BuildStubDeclaration(
         string name, string? rootId, TranslationRequest request, Type dbContextType)
     {
+        var expressionForInference = PreprocessExpressionForInference(request.Expression);
+
         if (!string.IsNullOrWhiteSpace(rootId)
             && string.Equals(name, rootId, StringComparison.Ordinal)
             && !string.Equals(name, request.ContextVariableName, StringComparison.Ordinal))
             return $"var {name} = {request.ContextVariableName};";
+
+        var hintedTypeName = request.LocalSymbolHints
+            .FirstOrDefault(h => string.Equals(h.Name, name, StringComparison.Ordinal))?.TypeName;
+        if (!string.IsNullOrWhiteSpace(hintedTypeName))
+        {
+            var hintedStub = BuildStubFromTypeName(hintedTypeName!, name, dbContextType, request.UsingAliases);
+            if (!string.IsNullOrWhiteSpace(hintedStub))
+                return hintedStub;
+        }
 
         // Use LSP-provided authoritative type when available — skip heuristics entirely.
         if (request.LocalVariableTypes.TryGetValue(name, out var knownTypeName)
@@ -30,10 +41,15 @@ internal static partial class StubSynthesizer
         // Gridify placeholders must win over generic member-access synthesis.
         // `query` is commonly used both as IGridifyQuery and as `query.Page` / `query.PageSize`.
         // If we synthesize it as anonymous object first, extension calls fail with CS1503.
-        if (TryBuildGridifyStubDeclaration(name, request.Expression, dbContextType, out var gridifyStub))
+        if (TryBuildGridifyStubDeclaration(name, expressionForInference, dbContextType, out var gridifyStub))
             return gridifyStub;
 
-        var memberTypes = InferMemberAccessTypes(name, request.Expression, dbContextType, request.UsingAliases);
+        var memberTypes = BuildMemberTypesFromHints(name, request, dbContextType);
+        foreach (var kv in InferMemberAccessTypes(name, expressionForInference, dbContextType, request.UsingAliases))
+        {
+            if (!memberTypes.ContainsKey(kv.Key))
+                memberTypes[kv.Key] = kv.Value;
+        }
         if (memberTypes.Count > 0)
         {
             var memberInitializers = string.Join(
@@ -44,9 +60,9 @@ internal static partial class StubSynthesizer
             return $"var {name} = new {{ {memberInitializers} }};";
         }
 
-        var inferred = InferVariableType(name, request.Expression, dbContextType);
-        inferred ??= InferMethodArgumentType(name, request.Expression, dbContextType);
-        inferred ??= InferComparisonOperandType(name, request.Expression, dbContextType);
+        var inferred = InferVariableType(name, expressionForInference, dbContextType);
+        inferred ??= InferMethodArgumentType(name, expressionForInference, dbContextType);
+        inferred ??= InferComparisonOperandType(name, expressionForInference, dbContextType);
         if (inferred is not null)
         {
             if (IsStaticClassType(inferred))
@@ -57,13 +73,13 @@ internal static partial class StubSynthesizer
             return $"{tn} {name} = {value};";
         }
 
-        if (LooksLikeBooleanConditionIdentifier(name, request.Expression))
+        if (LooksLikeBooleanConditionIdentifier(name, expressionForInference))
             return $"bool {name} = true;";
 
-        if (LooksLikeNumericArithmeticIdentifier(name, request.Expression))
+        if (LooksLikeNumericArithmeticIdentifier(name, expressionForInference))
             return $"int {name} = 1;";
 
-        var elem = InferContainsElementType(name, request.Expression, dbContextType);
+        var elem = InferContainsElementType(name, expressionForInference, dbContextType);
         if (elem is not null)
         {
             var en = ToCSharpTypeName(elem);
@@ -71,24 +87,72 @@ internal static partial class StubSynthesizer
             return $"System.Collections.Generic.List<{en}> {name} = new() {{ {containsValues} }};";
         }
 
-        var sel = InferSelectEntityType(name, request.Expression, dbContextType);
+        var sel = InferSelectEntityType(name, expressionForInference, dbContextType);
         if (sel is not null)
         {
             var sn = ToCSharpTypeName(sel);
             return $"System.Linq.Expressions.Expression<System.Func<{sn}, object>> {name} = _ => default!;";
         }
 
-        var whereEntity = InferWhereEntityType(name, request.Expression, dbContextType);
+        var whereEntity = InferWhereEntityType(name, expressionForInference, dbContextType);
         if (whereEntity is not null)
         {
             var wn = ToCSharpTypeName(whereEntity);
             return $"System.Linq.Expressions.Expression<System.Func<{wn}, bool>> {name} = _ => true;";
         }
 
-        if (LooksLikeCancellationTokenArgument(name, request.Expression))
+        if (LooksLikeCancellationTokenArgument(name, expressionForInference))
             return $"System.Threading.CancellationToken {name} = default;";
 
         return $"object {name} = default;";
+    }
+
+    private static string PreprocessExpressionForInference(string expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+            return expression;
+
+        // LSP semantic-dedup preamble is emitted as line comments ("// var ...").
+        // Remove comment-only lines before regex/AST heuristics so query-root
+        // detection still sees the actual LINQ chain head.
+        var filteredLines = expression
+            .Split('\n')
+            .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal));
+
+        return string.Join("\n", filteredLines);
+    }
+
+    private static Dictionary<string, Type> BuildMemberTypesFromHints(
+        string variableName,
+        TranslationRequest request,
+        Type dbContextType)
+    {
+        var result = new Dictionary<string, Type>(StringComparer.Ordinal);
+
+        foreach (var hint in request.MemberTypeHints.Where(h =>
+                     string.Equals(h.ReceiverName, variableName, StringComparison.Ordinal)
+                     && !string.IsNullOrWhiteSpace(h.MemberName)
+                     && !string.IsNullOrWhiteSpace(h.TypeName)))
+        {
+            var resolved = TryResolveStubType(hint.TypeName, dbContextType, request.UsingAliases);
+            if (resolved is null)
+            {
+                resolved = hint.TypeName switch
+                {
+                    "bool" or "System.Boolean" => typeof(bool),
+                    "string" or "System.String" => typeof(string),
+                    "int" or "System.Int32" => typeof(int),
+                    "long" or "System.Int64" => typeof(long),
+                    "decimal" or "System.Decimal" => typeof(decimal),
+                    _ => null,
+                };
+            }
+
+            if (resolved is not null && !result.ContainsKey(hint.MemberName))
+                result[hint.MemberName] = resolved;
+        }
+
+        return result;
     }
 
     internal static string BuildStubFromTypeName(
@@ -105,6 +169,15 @@ internal static partial class StubSynthesizer
         var resolvedType = TryResolveStubType(normalizedTypeName, dbContextType, usingAliases);
         if (IsStaticClassType(resolvedType))
             return string.Empty;
+
+        var isNullableValueTypeSyntax = normalizedTypeName.EndsWith("?", StringComparison.Ordinal)
+            && resolvedType is not null
+            && resolvedType.IsValueType;
+        if (isNullableValueTypeSyntax)
+        {
+            var underlying = ToCSharpTypeName(resolvedType!);
+            return $"{underlying}? {varName} = {BuildScalarPlaceholderExpression(resolvedType!)};";
+        }
 
         return normalizedTypeName switch
         {
@@ -148,8 +221,17 @@ internal static partial class StubSynthesizer
             // evaluate captured parameter expressions (e.g. model.PlanningCaseId) at runtime,
             // and a null reference throws before SQL is ever produced.
             // Strip nullable-reference-type annotation ('?') — typeof() has no CLR distinction for ref types.
-            var tn => $"var {varName} = ({tn.TrimEnd('?')})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({tn.TrimEnd('?')}));",
+            var tn => BuildUninitializedObjectStub(tn, varName, resolvedType),
         };
+    }
+
+    private static string BuildUninitializedObjectStub(string typeName, string varName, Type? resolvedType)
+    {
+        var targetTypeName = resolvedType is not null
+            ? ToCSharpTypeName(resolvedType).TrimEnd('?')
+            : typeName.TrimEnd('?');
+
+        return $"var {varName} = ({targetTypeName})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({targetTypeName}));";
     }
 
     private static Type? TryResolveStubType(
@@ -162,6 +244,9 @@ internal static partial class StubSynthesizer
 
         var normalized = typeName.Trim().TrimEnd('?');
         normalized = normalized.Replace("global::", string.Empty, StringComparison.Ordinal);
+
+        if (TryResolveKeywordAliasType(normalized, out var aliasType))
+            return aliasType;
 
         var aliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal);
         var resolved = ResolveTypeFromName(normalized, dbContextType, aliases);
@@ -176,6 +261,31 @@ internal static partial class StubSynthesizer
             return Type.GetType($"System.{normalized}", throwOnError: false, ignoreCase: false);
 
         return null;
+    }
+
+    private static bool TryResolveKeywordAliasType(string normalizedTypeName, out Type? type)
+    {
+        type = normalizedTypeName switch
+        {
+            "bool" => typeof(bool),
+            "byte" => typeof(byte),
+            "sbyte" => typeof(sbyte),
+            "char" => typeof(char),
+            "decimal" => typeof(decimal),
+            "double" => typeof(double),
+            "float" => typeof(float),
+            "int" => typeof(int),
+            "uint" => typeof(uint),
+            "long" => typeof(long),
+            "ulong" => typeof(ulong),
+            "short" => typeof(short),
+            "ushort" => typeof(ushort),
+            "string" => typeof(string),
+            "object" => typeof(object),
+            _ => null,
+        };
+
+        return type is not null;
     }
 
     private static bool IsStaticClassType(Type? type)

@@ -122,7 +122,9 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         string missingName,
         string expression,
         IReadOnlyDictionary<string, string>? localVariableTypes = null,
-        IReadOnlyDictionary<string, string>? usingAliases = null)
+        IReadOnlyDictionary<string, string>? usingAliases = null,
+        IReadOnlyList<LocalSymbolHint>? localSymbolHints = null,
+        IReadOnlyList<MemberTypeHint>? memberTypeHints = null)
     {
         var dbContextType = _alcCtx.FindDbContextType(null, expression);
         var request = new TranslationRequest
@@ -131,6 +133,8 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
             Expression = expression,
             LocalVariableTypes = localVariableTypes ?? new Dictionary<string, string>(StringComparer.Ordinal),
             UsingAliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            LocalSymbolHints = localSymbolHints ?? [],
+            MemberTypeHints = memberTypeHints ?? [],
         };
 
         var method = typeof(StubSynthesizer).GetMethod(

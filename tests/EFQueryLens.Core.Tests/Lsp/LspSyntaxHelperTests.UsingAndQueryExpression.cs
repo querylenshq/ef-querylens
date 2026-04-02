@@ -95,7 +95,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -120,7 +121,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);

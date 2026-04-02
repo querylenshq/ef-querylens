@@ -16,7 +16,8 @@ public sealed partial class QueryEvaluator
             return alcCtx.FindDbContextType(
                 request.DbContextTypeName,
                 request.Expression,
-                request.DbContextResolution);
+                request.DbContextResolution,
+                request.ContextVariableName);
         }
         catch (InvalidOperationException ex) when (IsNoDbContextFoundError(ex))
         {
@@ -24,7 +25,8 @@ public sealed partial class QueryEvaluator
             return alcCtx.FindDbContextType(
                 request.DbContextTypeName,
                 request.Expression,
-                request.DbContextResolution);
+                request.DbContextResolution,
+                request.ContextVariableName);
         }
     }
 

@@ -20,6 +20,26 @@ internal sealed partial class HoverPreviewService
         IReadOnlyList<QuerySqlCommand> Commands,
         IReadOnlyList<QueryWarning> Warnings);
 
+    private static string? ResolveExecutedExpression(
+        string? callSiteExpression,
+        string expression,
+        string? translationExecutedExpression)
+    {
+        if (!string.IsNullOrWhiteSpace(translationExecutedExpression))
+        {
+            return translationExecutedExpression;
+        }
+
+        if (string.IsNullOrWhiteSpace(callSiteExpression))
+        {
+            return null;
+        }
+
+        return string.Equals(callSiteExpression, expression, StringComparison.Ordinal)
+            ? null
+            : expression;
+    }
+
     private static string BuildStatusText(QueryTranslationStatus status) => status switch
     {
         QueryTranslationStatus.Starting => "EF QueryLens - starting up",
@@ -56,8 +76,17 @@ internal sealed partial class HoverPreviewService
         var sourceLine = line + 1;
 
     var sourceIndex = ProjectSourceHelper.GetProjectIndex(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, sourceIndex);
-        log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName} indexedFiles={sourceIndex.FileCount}");
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, out var callSiteExpression, sourceIndex);
+        var expressionPreview = string.IsNullOrWhiteSpace(expression)
+            ? string.Empty
+            : expression.Replace("\r", string.Empty, StringComparison.Ordinal)
+                .Replace("\n", " ", StringComparison.Ordinal);
+        if (expressionPreview.Length > 240)
+        {
+            expressionPreview = expressionPreview[..240] + "...";
+        }
+
+        log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName} exprLen={expression?.Length ?? 0} preview={expressionPreview} indexedFiles={sourceIndex.FileCount}");
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
@@ -74,8 +103,12 @@ internal sealed partial class HoverPreviewService
 
         var usingContext = LspSyntaxHelper.ExtractUsingContext(sourceText);
         var additionalImports = BuildAdditionalImports(usingContext.Imports);
-        var localVariableTypes = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition(sourceText, line, character);
-        log($"extract-local-types line={line} char={character} count={localVariableTypes.Count} vars={string.Join(",", localVariableTypes.Keys)}");
+        var localSymbolHints = LspSyntaxHelper.ExtractLocalSymbolHintsAtPosition(sourceText, line, character);
+        var localVariableTypes = localSymbolHints
+            .GroupBy(h => h.Name, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().TypeName, StringComparer.Ordinal);
+        var memberTypeHints = LspSyntaxHelper.BuildMemberTypeHints(expression, localSymbolHints);
+        log($"extract-local-types line={line} char={character} count={localVariableTypes.Count} vars={string.Join(",", localVariableTypes.Keys)} memberHints={memberTypeHints.Count}");
         var factoryDbContextCandidates = AssemblyResolver.TryExtractDbContextTypeNamesFromFactories(targetAssembly);
         var dbContextResolution = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
             sourceText,
@@ -99,6 +132,8 @@ internal sealed partial class HoverPreviewService
                 UsingAliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
                 UsingStaticTypes = usingContext.StaticTypes.ToArray(),
                 LocalVariableTypes = localVariableTypes,
+                LocalSymbolHints = localSymbolHints,
+                MemberTypeHints = memberTypeHints,
                 UseAsyncRunner = true,
                 UsingContextSnapshot = new UsingContextSnapshot
                 {
@@ -131,7 +166,7 @@ internal sealed partial class HoverPreviewService
                     Status: queued.Status,
                     AvgTranslationMs: queued.AverageTranslationMs,
                     LastTranslationMs: queued.LastTranslationMs,
-                    SourceExpression: expression,
+                    SourceExpression: callSiteExpression ?? expression,
                     ExecutedExpression: null,
                     SourceLine: sourceLine,
                     Metadata: null,
@@ -179,8 +214,11 @@ internal sealed partial class HoverPreviewService
                 Status: QueryTranslationStatus.Ready,
                 AvgTranslationMs: queued.AverageTranslationMs,
                 LastTranslationMs: queued.LastTranslationMs,
-                SourceExpression: expression,
-                ExecutedExpression: translation.ExecutedExpression,
+                SourceExpression: callSiteExpression ?? expression,
+                ExecutedExpression: ResolveExecutedExpression(
+                    callSiteExpression,
+                    expression,
+                    translation.ExecutedExpression),
                 SourceLine: sourceLine,
                 Metadata: translation.Metadata,
                 Commands: commands,

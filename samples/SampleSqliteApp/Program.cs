@@ -1,7 +1,15 @@
 using Microsoft.EntityFrameworkCore;
+using SampleSqliteApp;
 using SampleSqliteApp.Application;
 using SampleSqliteApp.Application.Customers;
 using SampleSqliteApp.Domain.Enums;
+
+// Check for test commands
+if (args.Contains("--test-concat"))
+{
+    await ConcatTest.RunAsync();
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 

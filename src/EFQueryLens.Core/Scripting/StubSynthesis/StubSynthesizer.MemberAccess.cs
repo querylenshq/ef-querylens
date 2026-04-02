@@ -241,6 +241,9 @@ internal static partial class StubSynthesizer
 
     private static Type? InferMemberTypeFromNameHeuristic(string memberName)
     {
+        if (string.Equals(memberName, "HasValue", StringComparison.Ordinal))
+            return typeof(bool);
+
         if (string.Equals(memberName, "Now", StringComparison.Ordinal)
             || string.Equals(memberName, "UtcNow", StringComparison.Ordinal)
             || string.Equals(memberName, "Today", StringComparison.Ordinal))

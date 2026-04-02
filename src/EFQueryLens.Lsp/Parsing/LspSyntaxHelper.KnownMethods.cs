@@ -44,6 +44,9 @@ public static partial class LspSyntaxHelper
     {
         // Filtering & projection
         "Where", "Select", "SelectMany", "Distinct",
+
+        // Set operations
+        "Concat", "Union", "Except", "Intersect",
         
         // Joining & grouping
         "Join", "GroupBy",

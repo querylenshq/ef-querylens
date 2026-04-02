@@ -82,6 +82,18 @@ internal sealed class DaemonRuntime(IMemoryCache cache)
             sb.Append(st).Append('\0');
         foreach (var kv in r.LocalVariableTypes.OrderBy(x => x.Key, StringComparer.Ordinal))
             sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
+        foreach (var hint in r.LocalSymbolHints
+                     .OrderBy(h => h.Name, StringComparer.Ordinal)
+                     .ThenBy(h => h.Kind, StringComparer.Ordinal))
+        {
+            sb.Append("sym:").Append(hint.Name).Append(':').Append(hint.TypeName).Append(':').Append(hint.Kind).Append('\0');
+        }
+        foreach (var hint in r.MemberTypeHints
+                     .OrderBy(h => h.ReceiverName, StringComparer.Ordinal)
+                     .ThenBy(h => h.MemberName, StringComparer.Ordinal))
+        {
+            sb.Append("mem:").Append(hint.ReceiverName).Append('.').Append(hint.MemberName).Append(':').Append(hint.TypeName).Append('\0');
+        }
 
         if (r.DbContextResolution is not null)
         {

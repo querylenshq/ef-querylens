@@ -28,6 +28,48 @@ public partial class LspSyntaxHelperTests
     }
 
     [Fact]
+    public void TryExtractLinqExpression_SyncMaterializedQueryWithInMemoryChain_StripsOuterInMemoryChain()
+    {
+        var source = """
+            var queryA = dbContext.Items.Where(x => x.Code.StartsWith("A"));
+            var queryB = dbContext.Items.Where(x => x.Code.StartsWith("B"));
+            var result = queryA.Concat(queryB).ToList().DistinctBy(x => x.Id).ToList();
+            """;
+
+        var (line, character) = FindPosition(source, "DistinctBy");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Equal("dbContext", contextVariableName);
+        Assert.Contains("dbContext.Items", expression, StringComparison.Ordinal);
+        Assert.Contains(".ToList()", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("DistinctBy", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FindAllLinqChains_SyncMaterializedQueryWithInMemoryChain_StripsOuterInMemoryChain()
+    {
+        var source = """
+            var queryA = dbContext.Items.Where(x => x.Code.StartsWith("A"));
+            var queryB = dbContext.Items.Where(x => x.Code.StartsWith("B"));
+            var result = queryA.Concat(queryB).ToList().DistinctBy(x => x.Id).ToList();
+            """;
+
+        var chains = LspSyntaxHelper.FindAllLinqChains(source);
+
+        var chain = chains.FirstOrDefault(c => c.Expression.Contains("Concat", StringComparison.Ordinal));
+        Assert.NotNull(chain);
+        Assert.Contains(".ToList()", chain.Expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("DistinctBy", chain.Expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryExtractLinqExpression_HoverOnAwaitKeyword_StripsOuterToListReturnsEfChain()
     {
         var source = """
@@ -42,7 +84,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -66,7 +109,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -89,7 +133,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);

@@ -74,4 +74,51 @@ public sealed class DbContextResolutionSnapshotTests
             "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
             LspSyntaxHelper.GetPreferredDbContextTypeName(snapshot));
     }
+
+    [Fact]
+    public void BuildDbContextResolutionSnapshot_DeclaredInterfaceAndUniqueFactoryMismatch_PrefersFactoryConcreteType()
+    {
+        var source = """
+            private readonly SampleMySqlApp.Application.Abstractions.IMySqlAppDbContext db;
+            _ = db.Customers;
+            """;
+
+        var snapshot = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
+            source,
+            "db",
+            ["SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext"]);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("declared+factory-mismatch", snapshot!.ResolutionSource);
+        Assert.Equal(
+            "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext",
+            LspSyntaxHelper.GetPreferredDbContextTypeName(snapshot));
+        Assert.Equal(
+            "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext",
+            LspSyntaxHelper.GetDbContextResolutionCacheToken(snapshot));
+    }
+
+    [Fact]
+    public void BuildDbContextResolutionSnapshot_DeclaredInterfaceAndMultipleFactoryCandidates_DoesNotPreferInterfaceName()
+    {
+        var source = """
+            private readonly SampleMySqlApp.Application.Abstractions.IMySqlAppDbContext db;
+            _ = db.Customers;
+            """;
+
+        var snapshot = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
+            source,
+            "db",
+            [
+                "SampleMySqlApp.Infrastructure.Persistence.MySqlReportingDbContext",
+                "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext",
+            ]);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("declared+factory-candidates", snapshot!.ResolutionSource);
+        Assert.Null(LspSyntaxHelper.GetPreferredDbContextTypeName(snapshot));
+        Assert.Equal(
+            "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext;SampleMySqlApp.Infrastructure.Persistence.MySqlReportingDbContext",
+            LspSyntaxHelper.GetDbContextResolutionCacheToken(snapshot));
+    }
 }

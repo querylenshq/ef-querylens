@@ -16,7 +16,7 @@ public partial class QueryEvaluatorTests
             {
                 ["filter"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, bool>>",
             },
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -36,7 +36,7 @@ public partial class QueryEvaluatorTests
             {
                 ["filter"] = "Expression<Func<SampleMySqlApp.Domain.Entities.Order, bool>>",
             },
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -46,7 +46,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_WhereWithParam_ParsesParameters()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId == 5)");
+        var result = await TranslateAsync("db.Orders.Where(o => o.UserId == 5)", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);

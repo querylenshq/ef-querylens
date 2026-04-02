@@ -18,7 +18,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -41,7 +42,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -68,7 +70,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -95,7 +98,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -122,7 +126,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -145,7 +150,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("services", contextVariableName);
@@ -167,7 +173,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -188,7 +195,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -210,7 +218,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -239,7 +248,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.Null(expression);
         Assert.Null(contextVariableName);
@@ -278,7 +288,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
@@ -323,13 +334,111 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);
         Assert.Contains("dbContext.Orders", expression, StringComparison.Ordinal);
         Assert.Contains("o => o.IsNotDeleted", expression, StringComparison.Ordinal);
         Assert.Contains("o => new { o.Id, o.Total }", expression, StringComparison.Ordinal);
+        Assert.Contains("ToListAsync", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_HelperMethodReturningQueryable_InlinesUnderlyingDbQuery()
+    {
+        var source = """
+            public sealed class ProgramLike
+            {
+                public async Task Run(OrderQueries orderQueries, CancellationToken ct)
+                {
+                    var result = await orderQueries
+                        .BuildRecentOrdersQuery(DateTime.UtcNow, 30)
+                        .Select(o => new { o.OrderId, o.Total })
+                        .ToListAsync(ct);
+                }
+            }
+            
+            public sealed class OrderQueries
+            {
+                private readonly IMySqlAppDbContext _db;
+
+                public OrderQueries(IMySqlAppDbContext db)
+                {
+                    _db = db;
+                }
+
+                public IQueryable<OrderSummaryDto> BuildRecentOrdersQuery(DateTime utcNow, int lookbackDays = 30)
+                {
+                    var fromUtc = utcNow.Date.AddDays(-lookbackDays);
+                    return _db.Orders
+                        .Where(o => o.IsNotDeleted && o.CreatedUtc >= fromUtc)
+                        .Select(o => new OrderSummaryDto(o.Id, o.Customer.Name, o.Total, o.CreatedUtc));
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "BuildRecentOrdersQuery");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Equal("_db", contextVariableName);
+        Assert.Contains("_db.Orders", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("orderQueries.BuildRecentOrdersQuery", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_HelperMethodWithLocalExpressionVariable_InlinesVariableExpression()
+    {
+        var source = """
+            public class DemoService
+            {
+                private async Task<List<TResult>> GetOrdersAsync<TResult>(
+                    Guid customerId,
+                    Expression<Func<Order, bool>> whereExpression,
+                    Expression<Func<Order, TResult>> selector,
+                    CancellationToken ct)
+                {
+                    return await dbContext.Orders
+                        .Where(o => o.CustomerId == customerId)
+                        .Where(whereExpression)
+                        .Select(selector)
+                        .ToListAsync(ct);
+                }
+
+                private async Task Run(Guid customerId, CancellationToken ct)
+                {
+                    Expression<Func<Order, bool>> whereExpression = o => !o.IsDeleted;
+                    var result = await GetOrdersAsync(
+                        customerId,
+                        whereExpression,
+                        o => new { o.Id, o.Total },
+                        ct);
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "whereExpression,");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Equal("dbContext", contextVariableName);
+        Assert.Contains("dbContext.Orders", expression, StringComparison.Ordinal);
+        Assert.Contains("o => !o.IsDeleted", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Where(whereExpression)", expression, StringComparison.Ordinal);
         Assert.Contains("ToListAsync", expression, StringComparison.Ordinal);
     }
 
@@ -350,7 +459,8 @@ public partial class LspSyntaxHelperTests
             source,
             line,
             character,
-            out var contextVariableName);
+            out var contextVariableName,
+            out _);
 
         Assert.NotNull(expression);
         Assert.Equal("dbContext", contextVariableName);

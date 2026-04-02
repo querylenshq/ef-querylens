@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -15,14 +16,27 @@ public static partial class LspSyntaxHelper
     internal static Dictionary<string, string> ExtractLocalVariableTypesAtPosition(
         string sourceText, int line, int character)
     {
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var hints = ExtractLocalSymbolHintsAtPosition(sourceText, line, character);
+        return hints
+            .GroupBy(h => h.Name, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().TypeName, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns rich symbol hints for variables visible at cursor position.
+    /// Includes method/local-function/lambda parameters and local declarations.
+    /// </summary>
+    internal static IReadOnlyList<LocalSymbolHint> ExtractLocalSymbolHintsAtPosition(
+        string sourceText, int line, int character)
+    {
+        var result = new Dictionary<string, LocalSymbolHint>(StringComparer.Ordinal);
         try
         {
             var tree = CSharpSyntaxTree.ParseText(sourceText);
             var root = tree.GetRoot();
             var textLines = tree.GetText().Lines;
 
-            if (line >= textLines.Count) return result;
+            if (line >= textLines.Count) return [];
 
             var lineStart = textLines[line].Start;
             var charOffset = Math.Min(character, textLines[line].End - lineStart);
@@ -30,7 +44,7 @@ public static partial class LspSyntaxHelper
 
             var node = root.FindNode(new Microsoft.CodeAnalysis.Text.TextSpan(cursorPosition, 0));
             var anchorStatement = node.FirstAncestorOrSelf<StatementSyntax>();
-            if (anchorStatement is null) return result;
+            if (anchorStatement is null) return [];
 
             CollectLocalsInScope(anchorStatement, result);
         }
@@ -39,10 +53,90 @@ public static partial class LspSyntaxHelper
             // Best-effort — never propagate to caller.
         }
 
-        return result;
+        return result.Values.ToArray();
     }
 
-    private static void CollectLocalsInScope(StatementSyntax anchorStatement, Dictionary<string, string> result)
+    internal static IReadOnlyList<MemberTypeHint> BuildMemberTypeHints(
+        string expression,
+        IEnumerable<LocalSymbolHint> localSymbolHints)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+            return [];
+
+        var receiverTypes = localSymbolHints
+            .Where(h => !string.IsNullOrWhiteSpace(h.Name) && !string.IsNullOrWhiteSpace(h.TypeName))
+            .GroupBy(h => h.Name, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().TypeName, StringComparer.Ordinal);
+
+        if (receiverTypes.Count == 0)
+            return [];
+
+        var map = new Dictionary<(string Receiver, string Member), string>();
+        foreach (var kv in receiverTypes)
+        {
+            if (!TryGetNullableUnderlyingTypeName(kv.Value, out var underlying))
+                continue;
+
+            map[(kv.Key, "HasValue")] = "bool";
+            map[(kv.Key, "Value")] = underlying!;
+        }
+
+        if (map.Count == 0)
+            return [];
+
+        var hints = new List<MemberTypeHint>();
+        foreach (var ((receiver, member), typeName) in map
+                     .OrderBy(x => x.Key.Receiver, StringComparer.Ordinal)
+                     .ThenBy(x => x.Key.Member, StringComparer.Ordinal))
+        {
+            if (!expression.Contains($"{receiver}.{member}", StringComparison.Ordinal))
+                continue;
+
+            hints.Add(new MemberTypeHint
+            {
+                ReceiverName = receiver,
+                MemberName = member,
+                TypeName = typeName,
+            });
+        }
+
+        return hints;
+    }
+
+    private static bool TryGetNullableUnderlyingTypeName(string typeName, out string? underlying)
+    {
+        underlying = null;
+        if (string.IsNullOrWhiteSpace(typeName))
+            return false;
+
+        var trimmed = typeName.Trim();
+        if (trimmed.EndsWith("?", StringComparison.Ordinal) && trimmed.Length > 1)
+        {
+            underlying = trimmed[..^1];
+            return true;
+        }
+
+        const string nullablePrefix = "System.Nullable<";
+        if (trimmed.StartsWith(nullablePrefix, StringComparison.Ordinal)
+            && trimmed.EndsWith(">", StringComparison.Ordinal)
+            && trimmed.Length > nullablePrefix.Length + 1)
+        {
+            underlying = trimmed[nullablePrefix.Length..^1];
+            return true;
+        }
+
+        if (trimmed.StartsWith("Nullable<", StringComparison.Ordinal)
+            && trimmed.EndsWith(">", StringComparison.Ordinal)
+            && trimmed.Length > "Nullable<".Length + 1)
+        {
+            underlying = trimmed["Nullable<".Length..^1];
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void CollectLocalsInScope(StatementSyntax anchorStatement, Dictionary<string, LocalSymbolHint> result)
     {
         var visited = anchorStatement;
 
@@ -69,7 +163,14 @@ public static partial class LspSyntaxHelper
 
                         var typeName = GetTypeStringForDeclaration(localDecl.Declaration.Type, variable);
                         if (typeName is not null)
-                            result[varName] = typeName;
+                        {
+                            result[varName] = new LocalSymbolHint
+                            {
+                                Name = varName,
+                                TypeName = typeName,
+                                Kind = "local",
+                            };
+                        }
                     }
                 }
             }
@@ -81,15 +182,34 @@ public static partial class LspSyntaxHelper
         }
     }
 
-    private static void CollectParametersFromScope(SyntaxNode scope, Dictionary<string, string> result)
+    private static void CollectParametersFromScope(SyntaxNode scope, Dictionary<string, LocalSymbolHint> result)
     {
         ParameterListSyntax? paramList = scope switch
         {
             MethodDeclarationSyntax m => m.ParameterList,
             ConstructorDeclarationSyntax c => c.ParameterList,
             LocalFunctionStatementSyntax lf => lf.ParameterList,
+            ParenthesizedLambdaExpressionSyntax l => l.ParameterList,
             _ => null,
         };
+
+        if (scope is SimpleLambdaExpressionSyntax simpleLambda)
+        {
+            var param = simpleLambda.Parameter;
+            var paramName = param.Identifier.ValueText;
+            var typeName = param.Type?.ToString();
+            if (!string.IsNullOrWhiteSpace(paramName)
+                && !result.ContainsKey(paramName)
+                && !string.IsNullOrWhiteSpace(typeName))
+            {
+                result[paramName] = new LocalSymbolHint
+                {
+                    Name = paramName,
+                    TypeName = typeName!,
+                    Kind = "lambda-parameter",
+                };
+            }
+        }
 
         if (paramList is null) return;
 
@@ -126,7 +246,12 @@ public static partial class LspSyntaxHelper
                 continue;
             }
 
-            result[paramName] = typeName;
+            result[paramName] = new LocalSymbolHint
+            {
+                Name = paramName,
+                TypeName = typeName,
+                Kind = scope is ParenthesizedLambdaExpressionSyntax ? "lambda-parameter" : "parameter",
+            };
         }
     }
 

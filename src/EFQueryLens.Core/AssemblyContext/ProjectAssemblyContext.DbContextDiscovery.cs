@@ -82,7 +82,8 @@ public sealed partial class ProjectAssemblyContext
     public Type FindDbContextType(
         string? typeName = null,
         string? expressionHint = null,
-        DbContextResolutionSnapshot? resolutionSnapshot = null)
+        DbContextResolutionSnapshot? resolutionSnapshot = null,
+        string? contextVariableName = null)
     {
         EnsureNotDisposed();
 
@@ -94,7 +95,7 @@ public sealed partial class ProjectAssemblyContext
                 DbContextDiscoveryFailureKind.NoDbContextFound,
                 $"No DbContext subclass found in '{assemblyFileName}'.");
 
-        var inputs = BuildResolutionInputs(all, typeName, expressionHint, resolutionSnapshot);
+        var inputs = BuildResolutionInputs(all, typeName, expressionHint, resolutionSnapshot, contextVariableName);
         var resolved = TryResolveByHints(inputs, typeName, resolutionSnapshot, assemblyFileName);
         if (resolved is not null)
             return resolved;
@@ -111,9 +112,10 @@ public sealed partial class ProjectAssemblyContext
         IReadOnlyList<Type> all,
         string? typeName,
         string? expressionHint,
-        DbContextResolutionSnapshot? resolutionSnapshot)
+        DbContextResolutionSnapshot? resolutionSnapshot,
+        string? contextVariableName)
     {
-        var dbSetName = expressionHint is null ? null : ExtractFirstPropertyAccess(expressionHint);
+        var dbSetName = expressionHint is null ? null : ExtractFirstPropertyAccess(expressionHint, contextVariableName);
         var expressionMatches = string.IsNullOrWhiteSpace(dbSetName)
             ? []
             : all.Where(t => OwnsProperty(t, dbSetName)).ToList();
@@ -343,13 +345,26 @@ public sealed partial class ProjectAssemblyContext
     /// e.g. "dbContext.AppWorkflows.Include(...)" -> "AppWorkflows"
     ///      "db.Orders.Where(...)" -> "Orders"
     /// </summary>
-    private static string? ExtractFirstPropertyAccess(string expression)
+    private static string? ExtractFirstPropertyAccess(string expression, string? contextVariableName)
     {
         var tree = CSharpSyntaxTree.ParseText(
             expression,
             CSharpParseOptions.Default.WithKind(SourceCodeKind.Script));
 
         var root = tree.GetRoot();
+
+        // Prefer members accessed from the explicit query root variable supplied by LSP
+        // (for example "_dbContext"), which is more reliable than identifier-name heuristics.
+        if (!string.IsNullOrWhiteSpace(contextVariableName))
+        {
+            var explicitContextRootMemberAccess = root.DescendantNodes()
+                .OfType<MemberAccessExpressionSyntax>()
+                .FirstOrDefault(m => IsExactContextRootExpression(m.Expression, contextVariableName));
+            if (explicitContextRootMemberAccess is not null)
+            {
+                return explicitContextRootMemberAccess.Name.Identifier.Text;
+            }
+        }
 
         var memberAccess = root.DescendantNodes()
             .OfType<MemberAccessExpressionSyntax>()
@@ -371,6 +386,21 @@ public sealed partial class ProjectAssemblyContext
             .OfType<MemberBindingExpressionSyntax>()
             .FirstOrDefault();
         return fallbackMemberBinding?.Name.Identifier.Text;
+
+        static bool IsExactContextRootExpression(ExpressionSyntax expression, string expectedContextVariableName)
+        {
+            if (expression is IdentifierNameSyntax identifier)
+            {
+                return string.Equals(identifier.Identifier.ValueText, expectedContextVariableName, StringComparison.Ordinal);
+            }
+
+            if (expression is ParenthesizedExpressionSyntax { Expression: IdentifierNameSyntax parenthesizedIdentifier })
+            {
+                return string.Equals(parenthesizedIdentifier.Identifier.ValueText, expectedContextVariableName, StringComparison.Ordinal);
+            }
+
+            return false;
+        }
 
         static bool IsRootContextExpression(ExpressionSyntax expression) => expression switch
         {

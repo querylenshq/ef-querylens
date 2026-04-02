@@ -26,7 +26,10 @@ namespace SampleSqliteApp.Infrastructure.Persistence
                 .UseSqlite("Data Source=:memory:")
                 .Options;
 
-            return new SqliteAppDbContext(options);
+            var context = new SqliteAppDbContext(options);
+            // Force model building so EnsureCreatedAsync() recognizes all entities
+            _ = context.Model;
+            return context;
         }
     }
 }

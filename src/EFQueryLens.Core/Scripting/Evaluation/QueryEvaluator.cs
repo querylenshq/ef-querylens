@@ -94,6 +94,14 @@ public sealed partial class QueryEvaluator
             sb.Append(staticType).Append('\0');
         foreach (var kv in request.LocalVariableTypes.OrderBy(x => x.Key, StringComparer.Ordinal))
             sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
+        foreach (var hint in request.LocalSymbolHints
+                     .OrderBy(h => h.Name, StringComparer.Ordinal)
+                     .ThenBy(h => h.Kind, StringComparer.Ordinal))
+            sb.Append("sym:").Append(hint.Name).Append(':').Append(hint.TypeName).Append(':').Append(hint.Kind).Append('\0');
+        foreach (var hint in request.MemberTypeHints
+                     .OrderBy(h => h.ReceiverName, StringComparer.Ordinal)
+                     .ThenBy(h => h.MemberName, StringComparer.Ordinal))
+            sb.Append("mem:").Append(hint.ReceiverName).Append('.').Append(hint.MemberName).Append(':').Append(hint.TypeName).Append('\0');
         sb.Append("useAsyncRunner=").Append(request.UseAsyncRunner ? '1' : '0').Append('\0');
         sb.Append("payloadContractVersion=").Append(QueryLensGeneratedPayloadContract.Version).Append('\0');
     }

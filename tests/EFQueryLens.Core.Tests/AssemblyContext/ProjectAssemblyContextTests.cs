@@ -316,6 +316,32 @@ public partial class ProjectAssemblyContextTests
     }
 
     [Fact]
+    public void FindDbContextType_WithTernaryGuardedExpressionHint_PrefersDbContextRootMemberOverGuardMembers()
+    {
+        var dll = GetSampleMySqlAppDll();
+        using var ctx = new ProjectAssemblyContext(dll);
+
+        var expressionHint =
+            "request.MinOrders is not null ? request.IsActive is not null ? _dbContext.Customers.Where(c => c.IsNotDeleted).Where(c => c.IsActive == isActive) : _dbContext.Customers.Where(c => c.IsNotDeleted).Where(c => c.Orders.Count(o => o.IsNotDeleted) >= minOrders) : _dbContext.Customers.Where(c => c.IsNotDeleted)";
+
+        var type = ctx.FindDbContextType(
+            expressionHint: expressionHint,
+            resolutionSnapshot: new DbContextResolutionSnapshot
+            {
+                FactoryCandidateTypeNames =
+                [
+                    "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext",
+                    "SampleMySqlApp.Infrastructure.Persistence.MySqlReportingDbContext",
+                ],
+                ResolutionSource = "factory-candidates",
+                Confidence = 0.5,
+            },
+            contextVariableName: "_dbContext");
+
+        Assert.Equal("SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext", type.FullName);
+    }
+
+    [Fact]
     public void FindDbContextType_WhenRequestedContextConflictsWithExpressionRoot_ThrowsTypedException()
     {
         using var ctx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());

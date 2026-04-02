@@ -74,14 +74,14 @@ public partial class QueryEvaluatorTests
             }
             """;
 
-        var tree = CSharpSyntaxTree.ParseText(src);
+        var tree = CSharpSyntaxTree.ParseText(src, cancellationToken: TestContext.Current.CancellationToken);
         var compilation = CSharpCompilation.Create(
             "test",
             [tree],
             [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        var cs1503 = compilation.GetDiagnostics().FirstOrDefault(d => d.Id == "CS1503");
+        var cs1503 = compilation.GetDiagnostics(TestContext.Current.CancellationToken).FirstOrDefault(d => d.Id == "CS1503");
 
         Assert.NotNull(cs1503);
         var expected = QueryEvaluator.TryExtractExpectedTypeFromCS1503(cs1503!);

@@ -45,6 +45,20 @@ public record TranslationRequest
         new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>
+    /// Rich local symbol hints extracted by the LSP at the hover position.
+    /// Includes symbol kind/scope and preserves source-authored type strings.
+    /// Core prefers these hints over heuristic inference.
+    /// </summary>
+    public IReadOnlyList<LocalSymbolHint> LocalSymbolHints { get; init; } = [];
+
+    /// <summary>
+    /// Member-level type hints keyed by receiver/member names
+    /// (for example: <c>minTotal.HasValue -> bool</c>, <c>minTotal.Value -> decimal</c>).
+    /// Lets Core synthesize object-member stubs without name-based guesses.
+    /// </summary>
+    public IReadOnlyList<MemberTypeHint> MemberTypeHints { get; init; } = [];
+
+    /// <summary>
     /// When true, generates and invokes an async runner method (<c>RunAsync</c>)
     /// without sync fallback. Default is false for compatibility.
     /// </summary>
@@ -153,4 +167,25 @@ public record ParsedExpressionMetadata
     /// Helpful for daemon diagnostics.
     /// </summary>
     public double Confidence { get; init; } = 1.0;
+}
+
+/// <summary>
+/// Rich symbol hint captured by LSP extraction for a variable visible at hover position.
+/// </summary>
+public sealed record LocalSymbolHint
+{
+    public required string Name { get; init; }
+    public required string TypeName { get; init; }
+    public string Kind { get; init; } = "local";
+}
+
+/// <summary>
+/// Type hint for a member access rooted on a local symbol.
+/// Example: receiver=minTotal, member=HasValue, type=bool.
+/// </summary>
+public sealed record MemberTypeHint
+{
+    public required string ReceiverName { get; init; }
+    public required string MemberName { get; init; }
+    public required string TypeName { get; init; }
 }

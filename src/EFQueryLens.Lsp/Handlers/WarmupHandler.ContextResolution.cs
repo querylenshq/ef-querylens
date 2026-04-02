@@ -23,7 +23,7 @@ internal sealed partial class WarmupHandler
 
     private static string? TryResolveDbContextTypeName(string sourceText, int line, int character)
     {
-        _ = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName);
+        _ = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, out _);
         if (string.IsNullOrWhiteSpace(contextVariableName))
         {
             return null;

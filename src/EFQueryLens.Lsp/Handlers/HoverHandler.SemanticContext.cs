@@ -68,7 +68,7 @@ internal sealed partial class HoverHandler
         }
 
         var sourceIndex = ProjectSourceHelper.GetProjectIndex(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, sourceIndex);
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, out _, sourceIndex);
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
