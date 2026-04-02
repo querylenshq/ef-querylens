@@ -126,7 +126,8 @@ export function createSqlActionHandlers(
             lineInput,
             characterInput,
             formatSqlOnShow,
-            sqlDialect);
+            sqlDialect,
+            true);
         if (!sqlText) {
             return;
         }
@@ -147,7 +148,8 @@ export function createSqlActionHandlers(
             lineInput,
             characterInput,
             formatSqlOnShow,
-            sqlDialect
+            sqlDialect,
+            true
         );
         if (!enrichedSql) {
             return;
@@ -157,14 +159,22 @@ export function createSqlActionHandlers(
         const pad = (n: number) => n.toString().padStart(2, '0');
         const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
         const timeStr = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-        const name = `efquery_${dateStr}_${timeStr}.sql`;
+        const name = `efquery_${dateStr}_${timeStr}.md`;
         const uri = Uri.parse(`untitled:${name}`);
 
-        const doc = await workspace.openTextDocument(uri);
+        await workspace.openTextDocument(uri);
         const edit = new WorkspaceEdit();
         edit.insert(uri, new Position(0, 0), enrichedSql);
         await workspace.applyEdit(edit);
-        await window.showTextDocument(doc, { viewColumn: ViewColumn.Beside });
+
+        // Open preview only: do not show the raw markdown editor unless preview command fails.
+        try {
+            await commands.executeCommand('markdown.showPreviewToSide', uri);
+        } catch {
+            // Fallback to plain text editor if markdown preview command is unavailable.
+            const doc = await workspace.openTextDocument(uri);
+            await window.showTextDocument(doc, { viewColumn: ViewColumn.Beside, preview: true });
+        }
     }
 
     async function getSqlForLens(
@@ -172,7 +182,8 @@ export function createSqlActionHandlers(
         lineInput: unknown,
         characterInput: unknown,
         formatSqlOnShow: boolean,
-        sqlDialect: QueryLensSqlDialect
+        sqlDialect: QueryLensSqlDialect,
+        includeContextComments: boolean
     ): Promise<string | null> {
         const client = getClient();
         if (!client) {
@@ -233,7 +244,7 @@ export function createSqlActionHandlers(
             if (structured.EnrichedSql) {
                 const rawSql = structured.Statements?.[0]?.Sql ?? structured.EnrichedSql;
                 const formattedSql = formatSqlOnShow ? formatSql(rawSql, sqlDialect) : rawSql;
-                return formattedSql;
+                return includeContextComments ? structured.EnrichedSql : formattedSql;
             }
 
             return null;

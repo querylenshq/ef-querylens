@@ -64,6 +64,7 @@ val bundleQueryLensRuntime by tasks.registering {
     val lspSourceDir = projectDir.resolve("../../../src/EFQueryLens.Lsp")
     val daemonSourceDir = projectDir.resolve("../../../src/EFQueryLens.Daemon")
     val coreSourceDir = projectDir.resolve("../../../src/EFQueryLens.Core")
+    val formatterSourceDir = projectDir.resolve("../../../src/EFQueryLens.Formatter")
 
     // Ensure runtime rebundles whenever backend source/config changes.
     inputs.files(
@@ -74,6 +75,9 @@ val bundleQueryLensRuntime by tasks.registering {
             include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
         },
         fileTree(coreSourceDir) {
+            include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
+        },
+        fileTree(formatterSourceDir) {
             include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
         },
         projectDir.resolve("../../../Directory.Build.props"),

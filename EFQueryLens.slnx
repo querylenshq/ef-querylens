@@ -10,6 +10,7 @@
     <Project Path="src/EFQueryLens.Cli/EFQueryLens.Cli.csproj" />
     <Project Path="src/EFQueryLens.Core/EFQueryLens.Core.csproj" />
     <Project Path="src/EFQueryLens.Daemon/EFQueryLens.Daemon.csproj" />
+    <Project Path="src/EFQueryLens.Formatter/EFQueryLens.Formatter.csproj" />
     <Project Path="src/EFQueryLens.Lsp/EFQueryLens.Lsp.csproj" />
     <Project Path="src/EFQueryLens.Mcp/EFQueryLens.Mcp.csproj" />
   </Folder>

@@ -210,7 +210,7 @@ internal static partial class LinqHoverMarkdownRenderer
         string tempDir = Path.Combine(Path.GetTempPath(), "EFQueryLens");
         Directory.CreateDirectory(tempDir);
         string stamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-        string tempPath = Path.Combine(tempDir, $"efquery_{stamp}.sql");
+        string tempPath = Path.Combine(tempDir, $"efquery_{stamp}.md");
         File.WriteAllText(tempPath, content, Encoding.UTF8);
 
         try
@@ -218,6 +218,7 @@ internal static partial class LinqHoverMarkdownRenderer
             if (Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
             {
                 dte.ItemOperations.OpenFile(tempPath);
+                TryActivateVisualStudioMarkdownPreview(dte);
                 return;
             }
         }
@@ -233,6 +234,31 @@ internal static partial class LinqHoverMarkdownRenderer
         catch
         {
             // Ignore.
+        }
+    }
+
+    private static void TryActivateVisualStudioMarkdownPreview(EnvDTE.DTE dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // Best-effort command names across VS versions/extensions.
+        string[] candidateCommands =
+        [
+            "Markdown.StartPreview",
+            "View.MarkdownPreview",
+        ];
+
+        foreach (string command in candidateCommands)
+        {
+            try
+            {
+                dte.ExecuteCommand(command);
+                return;
+            }
+            catch
+            {
+                // Try next candidate.
+            }
         }
     }
 

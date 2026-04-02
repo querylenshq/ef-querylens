@@ -178,14 +178,17 @@ public class HoverPreviewServiceFormattingTests : IDisposable
         ]);
 
         Assert.NotNull(enriched);
-        Assert.Contains("-- EF QueryLens", enriched, StringComparison.Ordinal);
-        Assert.Contains("-- Source:", enriched, StringComparison.Ordinal);
-        Assert.Contains("-- EF Core:", enriched, StringComparison.Ordinal);
-        Assert.Contains("-- DbContext:", enriched, StringComparison.Ordinal);
-        Assert.Contains("-- Provider:", enriched, StringComparison.Ordinal);
-        Assert.Contains("-- LINQ:", enriched, StringComparison.Ordinal);
-        Assert.Contains("-- Executed LINQ:", enriched, StringComparison.Ordinal);
-        Assert.Contains("-- Parameters:", enriched, StringComparison.Ordinal);
+        Assert.Contains("# EF QueryLens", enriched, StringComparison.Ordinal);
+        Assert.Contains("- Source:", enriched, StringComparison.Ordinal);
+        Assert.Contains("- EF Core:", enriched, StringComparison.Ordinal);
+        Assert.Contains("- DbContext:", enriched, StringComparison.Ordinal);
+        Assert.Contains("- Provider:", enriched, StringComparison.Ordinal);
+        Assert.Contains("## LINQ (csharp)", enriched, StringComparison.Ordinal);
+        Assert.Contains("## Executed LINQ (csharp)", enriched, StringComparison.Ordinal);
+        Assert.Contains("```csharp", enriched, StringComparison.Ordinal);
+        Assert.Contains("## Parameters", enriched, StringComparison.Ordinal);
+        Assert.Contains("## SQL", enriched, StringComparison.Ordinal);
+        Assert.Contains("```sql", enriched, StringComparison.Ordinal);
         Assert.Contains("Client evaluation", enriched, StringComparison.Ordinal);
         Assert.Contains("QLX: Warn", enriched, StringComparison.Ordinal);
         Assert.Contains("SELECT * FROM Orders", enriched, StringComparison.Ordinal);
@@ -225,6 +228,124 @@ public class HoverPreviewServiceFormattingTests : IDisposable
         Assert.Null(enriched);
     }
 
+    [Fact]
+    public void BuildStructuredEnrichedSql_ExecutedLinqStatementSnippet_PreservesLayout()
+    {
+        var method = GetStaticMethod(
+            "BuildStructuredEnrichedSql",
+            typeof(string),
+            typeof(string),
+            typeof(int),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(IReadOnlyList<QueryWarning>),
+            typeof(bool),
+            typeof(IReadOnlyList<QueryParameter>));
+
+        var executed = "var x = 10;\nvar custom = new\n{\n\n};\n\nquery = db.q;\nquery.Where(x).ToList();";
+
+        var enriched = (string?)method.Invoke(null, [
+            "SELECT 1",
+            "file.cs",
+            10,
+            "db.Orders",
+            executed,
+            "9.0.0",
+            "My.Namespace.MyDbContext",
+            "SqlServer",
+            null,
+            false,
+            null,
+        ]);
+
+        Assert.NotNull(enriched);
+        var normalized = enriched.Replace("\r\n", "\n", StringComparison.Ordinal);
+        Assert.Contains("## Executed LINQ (csharp)", normalized, StringComparison.Ordinal);
+        Assert.Contains("var x = 10;", normalized, StringComparison.Ordinal);
+        Assert.Contains("var custom = new", normalized, StringComparison.Ordinal);
+        Assert.Contains("query = db.q;", normalized, StringComparison.Ordinal);
+        Assert.Contains("query.Where(x).ToList();", normalized, StringComparison.Ordinal);
+        Assert.Contains("\n\n};\n\nquery", normalized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildStructuredEnrichedSql_StripsSyntheticVarUsageComments_FromExpressionBlock()
+    {
+        var method = GetStaticMethod(
+            "BuildStructuredEnrichedSql",
+            typeof(string),
+            typeof(string),
+            typeof(int),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(IReadOnlyList<QueryWarning>),
+            typeof(bool),
+            typeof(IReadOnlyList<QueryParameter>));
+
+        var sourceExpression = """
+            // var customerId: var (used 9x)
+            // var CustomerId: Guid (used 6x)
+            _dbContext.Orders.Where(o => o.Customer.CustomerId == customerId)
+            """;
+
+        var enriched = (string?)method.Invoke(null, [
+            "SELECT 1",
+            "file.cs",
+            5,
+            sourceExpression,
+            null,
+            "9.0.0",
+            "My.Namespace.MyDbContext",
+            "SqlServer",
+            null,
+            false,
+            null,
+        ]);
+
+        Assert.NotNull(enriched);
+        Assert.DoesNotContain("// var customerId: var (used 9x)", enriched, StringComparison.Ordinal);
+        Assert.DoesNotContain("// var CustomerId: Guid (used 6x)", enriched, StringComparison.Ordinal);
+        Assert.Contains("_dbContext", enriched, StringComparison.Ordinal);
+        Assert.Contains(".Orders", enriched, StringComparison.Ordinal);
+        Assert.Contains("customerId", enriched, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NormalizeCodeForComment_LongFluentChain_FormatsAsMultiline()
+    {
+        var method = GetStaticMethod("NormalizeCodeForComment", typeof(string));
+
+        var expression = "db.Orders.Where(o => o.IsNotDeleted).Where(o => o.Total > 10).OrderByDescending(o => o.CreatedUtc).ThenBy(o => o.Id).Take(10).Select(o => o.Id)";
+
+        var formatted = (string)method.Invoke(null, [expression])!;
+
+        Assert.Contains("db.Orders", formatted, StringComparison.Ordinal);
+        Assert.Contains(".Where(o => o.IsNotDeleted)", formatted, StringComparison.Ordinal);
+        Assert.Contains(".OrderByDescending(o => o.CreatedUtc)", formatted, StringComparison.Ordinal);
+        Assert.Contains(".ThenBy(o => o.Id)", formatted, StringComparison.Ordinal);
+        Assert.Contains(".Select(o => o.Id)", formatted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NormalizeCodeForComment_TernaryExpression_FormatsAsMultiline()
+    {
+        var method = GetStaticMethod("NormalizeCodeForComment", typeof(string));
+
+        var expression = "x > 0 ? db.Orders.Where(o => o.IsNotDeleted) : db.Orders.Where(o => o.Total > 10)";
+
+        var formatted = (string)method.Invoke(null, [expression])!;
+
+        Assert.Contains("x > 0", formatted, StringComparison.Ordinal);
+        Assert.Contains("? db.Orders.Where(o => o.IsNotDeleted)", formatted, StringComparison.Ordinal);
+        Assert.Contains(": db.Orders.Where(o => o.Total > 10)", formatted, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("MySql", "select * from orders")]
     [InlineData("Npgsql", "select * from orders")]
@@ -250,6 +371,35 @@ public class HoverPreviewServiceFormattingTests : IDisposable
         Assert.Equal(3, imports.Count);
         Assert.Contains("System.Linq", imports, StringComparer.Ordinal);
         Assert.Contains("Custom", imports, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveExecutedExpression_WhenTranslatorDoesNotRewrite_UsesSynthesizedExpressionForHelperCalls()
+    {
+        var method = GetStaticMethod("ResolveExecutedExpression", typeof(string), typeof(string), typeof(string));
+
+        var executed = (string?)method.Invoke(null, [
+            "service.GetOrdersAsync(customerId, whereExpression, selector, ct)",
+            "dbContext.Orders.Where(o => o.CustomerId == customerId).Where(o => !o.IsDeleted).Select(selector).ToListAsync(ct)",
+            null,
+        ]);
+
+        Assert.NotNull(executed);
+        Assert.Contains("dbContext.Orders", executed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveExecutedExpression_PrefersTranslatorRewrite_WhenAvailable()
+    {
+        var method = GetStaticMethod("ResolveExecutedExpression", typeof(string), typeof(string), typeof(string));
+
+        var executed = (string?)method.Invoke(null, [
+            "sourceExpr",
+            "synthesizedExpr",
+            "rewrittenExpr",
+        ]);
+
+        Assert.Equal("rewrittenExpr", executed);
     }
 
     private static MethodInfo GetStaticMethod(string name, params Type[] parameterTypes) =>

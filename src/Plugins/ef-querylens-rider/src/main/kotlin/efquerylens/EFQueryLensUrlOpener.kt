@@ -10,6 +10,7 @@ import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
@@ -357,9 +358,8 @@ class EFQueryLensUrlOpener : UrlOpener() {
     }
 
     /**
-     * Opens the SQL for [preview] in a new IDE editor tab, matching VS Code behaviour.
-     * A timestamped `.sql` temp file is written and then opened via [FileEditorManager]
-     * so the user gets full editor features (syntax highlighting, copy, search, etc.).
+     * Opens the enriched markdown for [preview] in a new IDE editor tab.
+     * Uses preview-tab navigation so this behaves like a lightweight preview view.
      */
     internal fun openSqlInEditor(
         project: Project,
@@ -370,7 +370,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
                 val timestamp =
                     LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss"))
                 val content = preview.actionSqlText
-                val tempFile = File(System.getProperty("java.io.tmpdir"), "efquery_$timestamp.sql")
+                val tempFile = File(System.getProperty("java.io.tmpdir"), "efquery_$timestamp.md")
                 tempFile.writeText(content, Charsets.UTF_8)
                 val virtualFile =
                     LocalFileSystem.getInstance().refreshAndFindFileByIoFile(tempFile)
@@ -378,8 +378,12 @@ class EFQueryLensUrlOpener : UrlOpener() {
                             thisLogger().warn("[EFQueryLens] Could not resolve virtual file for $tempFile")
                             return@invokeLater
                         }
-                FileEditorManager.getInstance(project).openFile(virtualFile, true)
-                thisLogger().info("[EFQueryLens] Opened SQL in editor: ${tempFile.name}")
+
+                // Prefer opening in preview tab to keep the interaction lightweight.
+                val descriptor = OpenFileDescriptor(project, virtualFile)
+                descriptor.setUsePreviewTab(true)
+                descriptor.navigate(true)
+                thisLogger().info("[EFQueryLens] Opened markdown preview in editor: ${tempFile.name}")
             } catch (e: Exception) {
                 thisLogger().warn("[EFQueryLens] openSqlInEditor failed", e)
             }

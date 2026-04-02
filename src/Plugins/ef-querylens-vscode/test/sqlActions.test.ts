@@ -60,7 +60,7 @@ describe('sql action handlers', () => {
                         ({
                             Status: 0,
                             Success: true,
-                            EnrichedSql: '/* enriched */\nSELECT 1',
+                            EnrichedSql: '-- EF QueryLens\n-- DbContext: SampleDbContext\nSELECT 99',
                             Statements: [{ Sql: 'SELECT 1' }],
                             CommandCount: 1,
                             SourceLine: 10,
@@ -71,8 +71,10 @@ describe('sql action handlers', () => {
 
         await handlers.copySqlFromLens('file:///c:/repo/query.cs', 10, 5, true, 'auto');
 
-        expect(getClipboardText().toLowerCase()).toContain('select');
-        expect(getClipboardText()).toContain('1');
+        expect(getClipboardText()).toContain('-- EF QueryLens');
+        expect(getClipboardText()).toContain('SampleDbContext');
+        expect(getClipboardText()).toContain('SELECT 99');
+        expect(getClipboardText()).not.toContain('SELECT 1');
         const messages = getWindowMessages();
         expect(messages.infos.some(m => m.includes('SQL copied to clipboard'))).toBe(true);
     });
@@ -85,7 +87,7 @@ describe('sql action handlers', () => {
                         ({
                             Status: 0,
                             Success: true,
-                            EnrichedSql: '-- metadata\nSELECT 2',
+                            EnrichedSql: '-- metadata\nSELECT 22',
                             Statements: [{ Sql: 'SELECT 2' }],
                             CommandCount: 1,
                             SourceLine: 22,
@@ -97,9 +99,15 @@ describe('sql action handlers', () => {
         await handlers.openSqlEditorFromLens('file:///c:/repo/query.cs', 22, 3, true, 'sql');
 
         const interactions = getDocumentInteractions();
+        const executed = getExecutedCommands();
         expect(interactions.appliedEdits.length).toBe(1);
-        expect(interactions.createdEdits.some(e => /select/i.test(e.text) && e.text.includes('2'))).toBe(true);
-        expect(interactions.shownDocuments.length).toBe(1);
+        expect(interactions.createdEdits.some(e => e.text.includes('-- metadata') && e.text.includes('SELECT 22'))).toBe(true);
+        expect(interactions.createdEdits.some(e => e.text === 'SELECT 2')).toBe(false);
+        expect(
+            interactions.createdEdits.some(e => String(e.uri).startsWith('untitled:efquery_') && String(e.uri).endsWith('.md'))
+        ).toBe(true);
+        expect(executed.some(c => c.id === 'markdown.showPreviewToSide')).toBe(true);
+        expect(interactions.shownDocuments.length).toBe(0);
     });
 
     test('copySqlFromLens surfaces status messages for non-ready responses', async () => {
