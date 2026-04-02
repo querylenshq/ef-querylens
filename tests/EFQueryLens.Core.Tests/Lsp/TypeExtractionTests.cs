@@ -190,7 +190,7 @@ public class TypeExtractionTests
         var types = Extract(source, "_ = list;");
 
         Assert.True(types.TryGetValue("list", out var typeName));
-        Assert.Equal("System.Collections.Generic.List<string>", typeName);
+        Assert.Equal("List<string>", typeName);
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class TypeExtractionTests
         var types = Extract(source, "_ = id;");
 
         Assert.True(types.TryGetValue("id", out var typeName));
-        Assert.Equal("System.Guid", typeName);
+        Assert.Equal("Guid", typeName);
     }
 
     [Fact]
@@ -218,7 +218,7 @@ public class TypeExtractionTests
         var types = Extract(source, "_ = id;");
 
         Assert.True(types.TryGetValue("id", out var typeName));
-        Assert.Equal("System.Guid", typeName);
+        Assert.Equal("Guid", typeName);
     }
 
     // ─── Scope boundaries ─────────────────────────────────────────────────────

@@ -40,6 +40,24 @@ internal sealed partial class HoverPreviewService
             : expression;
     }
 
+    private static bool IsValidExtractionOrigin(ExtractionOriginSnapshot? origin)
+    {
+        if (origin is null)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(origin.FilePath))
+        {
+            return false;
+        }
+
+        return origin.Line >= 0
+               && origin.Character >= 0
+               && origin.EndLine >= 0
+               && origin.EndCharacter >= 0;
+    }
+
     private static string BuildStatusText(QueryTranslationStatus status) => status switch
     {
         QueryTranslationStatus.Starting => "EF QueryLens - starting up",
@@ -95,9 +113,11 @@ internal sealed partial class HoverPreviewService
         }
 
         log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName} exprLen={expression?.Length ?? 0} preview={expressionPreview} indexedFiles={sourceIndex.FileCount}");
-        if (extraction?.Origin is not null)
+        var origin = extraction?.Origin;
+        var originValid = IsValidExtractionOrigin(origin);
+        if (origin is not null)
         {
-            log($"extract-origin path={extraction.Origin.FilePath} line={extraction.Origin.Line} char={extraction.Origin.Character} scope={extraction.Origin.Scope}");
+            log($"extract-origin path={origin.FilePath} line={origin.Line} char={origin.Character} scope={origin.Scope} originValid={originValid}");
         }
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
@@ -121,9 +141,15 @@ internal sealed partial class HoverPreviewService
 
         var usingContext = LspSyntaxHelper.ExtractUsingContext(sourceText);
         var additionalImports = BuildAdditionalImports(usingContext.Imports);
-        var extractionLine = extraction?.Origin?.Line ?? line;
-        var extractionChar = extraction?.Origin?.Character ?? character;
-        var extractionFilePath = extraction?.Origin?.FilePath;
+        if (!originValid)
+        {
+            log($"preview-blocked line={line} char={character} reason=missing-origin");
+            return Fail("No preview: missing extraction origin.", sourceLine);
+        }
+
+        var extractionLine = origin!.Line;
+        var extractionChar = origin.Character;
+        var extractionFilePath = origin.FilePath;
         var extractionSourceText = sourceText;
         if (!string.IsNullOrWhiteSpace(extractionFilePath)
             && !string.Equals(
@@ -160,7 +186,7 @@ internal sealed partial class HoverPreviewService
         log(
             $"extract-local-types line={line} char={character} originLine={extractionLine} originChar={extractionChar} " +
             $"count={localSymbolGraph.Count} vars={string.Join(",", localSymbolGraph.Select(s => s.Name))} " +
-            $"unresolved={unresolvedNames.Count} unresolvedDeps={unresolvedDependencies.Length} complete={graphComplete}");
+            $"unresolved={unresolvedNames.Count} unresolvedDeps={unresolvedDependencies.Length} graphComplete={graphComplete}");
 
         if (!graphComplete)
         {

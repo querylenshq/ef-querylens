@@ -23,6 +23,15 @@ public class DaemonEndpointsTests
         {
             Expression = "db.Orders",
             AssemblyPath = "C:/app/MyApp.dll",
+            ExtractionOrigin = new ExtractionOriginSnapshot
+            {
+                FilePath = @"c:\repo\source.cs",
+                Line = 1,
+                Character = 1,
+                EndLine = 1,
+                EndCharacter = 20,
+                Scope = "hover-query",
+            },
         };
 
         var firstTranslate = await client.PostAsJsonAsync("/translate", request);
@@ -74,6 +83,15 @@ public class DaemonEndpointsTests
         {
             Expression = "db.Orders",
             AssemblyPath = "C:/app/MyApp.dll",
+            ExtractionOrigin = new ExtractionOriginSnapshot
+            {
+                FilePath = @"c:\repo\source.cs",
+                Line = 1,
+                Character = 1,
+                EndLine = 1,
+                EndCharacter = 20,
+                Scope = "hover-query",
+            },
         };
 
         var first = await appHandle.Client.PostAsJsonAsync("/translate", request);

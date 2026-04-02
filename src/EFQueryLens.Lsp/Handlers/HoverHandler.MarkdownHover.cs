@@ -152,18 +152,41 @@ internal sealed partial class HoverHandler
         int character,
         SemanticHoverContext? semanticContext)
     {
+        var created = new Lazy<Task<ComputedEntry>>(
+            () => ComputeCombinedAsync(filePath, sourceText, line, character, CancellationToken.None),
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+        var inflight = _inflightBackgroundComputes.GetOrAdd(cacheKey, created);
+        var isOwner = ReferenceEquals(inflight, created);
+
         try
         {
-            var computed = await ComputeCombinedAsync(filePath, sourceText, line, character, CancellationToken.None);
-            CacheEntry(cacheKey, computed, semanticContext);
-            LogHoverDebug($"bg-compute-finished key={cacheKey} status={computed.Status}");
+            var computed = await inflight.Value;
+            if (isOwner)
+            {
+                CacheEntry(cacheKey, computed, semanticContext);
+                LogHoverDebug($"bg-compute-finished key={cacheKey} status={computed.Status}");
+            }
+            else
+            {
+                LogHoverDebug($"bg-compute-joined key={cacheKey}");
+            }
         }
         catch (Exception ex)
         {
-            // Evict the InQueue placeholder so the next hover re-triggers computation
-            // rather than showing "computing..." indefinitely.
-            RemovePrimaryCacheEntry(cacheKey);
-            LogHoverDebug($"bg-compute-failed key={cacheKey} type={ex.GetType().Name} message={ex.Message}");
+            if (isOwner)
+            {
+                // Evict the InQueue placeholder so the next hover re-triggers computation
+                // rather than showing "computing..." indefinitely.
+                RemovePrimaryCacheEntry(cacheKey);
+                LogHoverDebug($"bg-compute-failed key={cacheKey} type={ex.GetType().Name} message={ex.Message}");
+            }
+        }
+        finally
+        {
+            if (isOwner)
+            {
+                _inflightBackgroundComputes.TryRemove(cacheKey, out _);
+            }
         }
     }
 

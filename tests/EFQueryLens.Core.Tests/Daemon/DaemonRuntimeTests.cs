@@ -142,6 +142,15 @@ public class DaemonRuntimeTests
         DaemonRuntime.ValidateSnapshotConsistency(request);
     }
 
+    [Fact]
+    public void ValidateSnapshotConsistency_Throws_ForMissingExtractionOrigin()
+    {
+        var request = BuildRequest() with { ExtractionOrigin = null };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => DaemonRuntime.ValidateSnapshotConsistency(request));
+        Assert.Contains("Missing or invalid extraction origin", ex.Message, StringComparison.Ordinal);
+    }
+
     private static TranslationRequest BuildRequest(
         IReadOnlyList<string>? additionalImports = null,
         IReadOnlyDictionary<string, string>? aliases = null,
@@ -188,6 +197,15 @@ public class DaemonRuntimeTests
                 SourceLine = 12,
                 SourceCharacter = 4,
                 Confidence = 0.9,
+            },
+            ExtractionOrigin = new ExtractionOriginSnapshot
+            {
+                FilePath = @"c:\repo\file.cs",
+                Line = 12,
+                Character = 4,
+                EndLine = 12,
+                EndCharacter = 40,
+                Scope = "hover-query",
             },
         };
 

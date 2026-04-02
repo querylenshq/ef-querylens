@@ -40,4 +40,32 @@ public partial class LspSyntaxHelperTests
         Assert.Contains("_dbContext.Orders", result.Expression, StringComparison.Ordinal);
         Assert.Contains(".Where(o => o.Customer.CustomerId == customerId)", result.Expression, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void TryExtractLinqExpressionDetailed_DoesNotInjectSemanticCommentHints()
+    {
+        var source = """
+            class Demo
+            {
+                void M(Guid customerId)
+                {
+                    var q = _dbContext.Orders
+                        .Where(o => o.Customer.CustomerId == customerId)
+                        .Where(o => o.Customer.CustomerId == customerId);
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, ".Where(o => o.Customer.CustomerId == customerId);");
+        var result = LspSyntaxHelper.TryExtractLinqExpressionDetailed(
+            source,
+            filePath: @"c:\repo\Demo.cs",
+            line,
+            character);
+
+        Assert.NotNull(result);
+        Assert.DoesNotContain("// var ", result.Expression, StringComparison.Ordinal);
+        Assert.True(result.Origin.Line >= 0);
+        Assert.True(result.Origin.Character >= 0);
+    }
 }

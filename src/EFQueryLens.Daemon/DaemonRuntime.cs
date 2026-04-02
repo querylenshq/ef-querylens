@@ -158,6 +158,16 @@ internal sealed class DaemonRuntime(IMemoryCache cache)
                 $"Unsupported translation request contract version {request.RequestContractVersion}. Expected {TranslationRequestContract.Version}.");
         }
 
+        if (request.ExtractionOrigin is null
+            || string.IsNullOrWhiteSpace(request.ExtractionOrigin.FilePath)
+            || request.ExtractionOrigin.Line < 0
+            || request.ExtractionOrigin.Character < 0
+            || request.ExtractionOrigin.EndLine < 0
+            || request.ExtractionOrigin.EndCharacter < 0)
+        {
+            throw new InvalidOperationException("Missing or invalid extraction origin in translation request.");
+        }
+
         if (request.UsingContextSnapshot is null)
             return;
 

@@ -342,14 +342,7 @@ public static partial class LspSyntaxHelper
         if (typeSyntax is not IdentifierNameSyntax { IsVar: true })
             return typeSyntax.ToString();
 
-        // var x = ... — try to infer from initializer expression.
-        if (variable.Initializer?.Value is { } initializer)
-        {
-            var syntaxType = TryInferTypeFromInitializer(initializer);
-            if (!string.IsNullOrWhiteSpace(syntaxType))
-                return syntaxType;
-        }
-
+        // var x = ... — semantic model is the single source of truth.
         return TryInferVarTypeFromSemanticModel(variable, semanticModel);
     }
 
@@ -366,60 +359,6 @@ public static partial class LspSyntaxHelper
             return null;
 
         return type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-    }
-
-    private static string? TryInferTypeFromInitializer(ExpressionSyntax initializer) =>
-        initializer switch
-        {
-            // new TypeName(...) or new TypeName<T>(...)
-            ObjectCreationExpressionSyntax creation => creation.Type.ToString(),
-
-            // (TypeName)expr
-            CastExpressionSyntax cast => cast.Type.ToString(),
-
-            // default(TypeName)
-            DefaultExpressionSyntax { Type: { } t } => t.ToString(),
-
-            // new TypeName[] { ... }
-            ArrayCreationExpressionSyntax array => array.Type.ToString(),
-
-            // new[] { ... } — element type unknown without semantic model
-            ImplicitArrayCreationExpressionSyntax => null,
-
-            // new() — target type unknown without semantic model
-            ImplicitObjectCreationExpressionSyntax => null,
-            
-            // condition ? trueExpr : falseExpr — infer from true branch (should match false)
-            ConditionalExpressionSyntax conditional 
-                => TryInferTypeFromInitializer(conditional.WhenTrue) 
-                   ?? TryInferTypeFromInitializer(conditional.WhenFalse),
-
-            // 5, 5L, 5.0f, "str", true, false, ...
-            LiteralExpressionSyntax literal => literal.Kind() switch
-            {
-                SyntaxKind.NumericLiteralExpression => InferNumericLiteralType(literal.Token),
-                SyntaxKind.StringLiteralExpression => "string",
-                SyntaxKind.CharacterLiteralExpression => "char",
-                SyntaxKind.TrueLiteralExpression => "bool",
-                SyntaxKind.FalseLiteralExpression => "bool",
-                _ => null,
-            },
-
-            // $"..." is always System.String
-            InterpolatedStringExpressionSyntax => "string",
-
-            _ => null,
-        };
-
-    private static string? InferNumericLiteralType(SyntaxToken token)
-    {
-        var text = token.Text;
-        if (text.EndsWith("L", StringComparison.OrdinalIgnoreCase)) return "long";
-        if (text.EndsWith("m", StringComparison.OrdinalIgnoreCase)) return "decimal";
-        if (text.EndsWith("f", StringComparison.OrdinalIgnoreCase)) return "float";
-        if (text.EndsWith("d", StringComparison.OrdinalIgnoreCase)) return "double";
-        if (text.Contains('.')) return "double";
-        return "int";
     }
 
     private static string ReplaceOpenGenericTypeParameters(string typeName, IReadOnlyCollection<string> openTypeParams)

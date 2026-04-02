@@ -30,6 +30,7 @@ public static partial class LspSyntaxHelper
             out var contextVariableName,
             out var callSiteExpression,
             out var extractionOrigin,
+            filePath,
             sourceIndex);
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
@@ -68,12 +69,14 @@ public static partial class LspSyntaxHelper
             out contextVariableName,
             out callSiteExpression,
             out _,
+            filePath: null,
             sourceIndex);
 
     public static string? TryExtractLinqExpression(string sourceText, int line, int character,
         out string? contextVariableName,
         out string? callSiteExpression,
         out ExtractionOriginSnapshot? extractionOrigin,
+        string? filePath = null,
         ProjectSourceIndex? sourceIndex = null)
     {
         contextVariableName = null;
@@ -125,6 +128,7 @@ public static partial class LspSyntaxHelper
 
         if (targetExpression == null)
             return null;
+        var sourceBackedExtractionNode = targetExpression;
 
         // Walk to the topmost invocation/member access, including any terminal call
         // (Count, ToList, FirstOrDefaultAsync, ExecuteDeleteAsync, etc.) so the engine
@@ -153,6 +157,9 @@ public static partial class LspSyntaxHelper
                     out var synthesizedExpression,
                     out var synthesizedContextVariableName,
                     out var helperOrigin,
+                    filePath,
+                    line,
+                    character,
                     sourceIndex))
             {
                 contextVariableName = synthesizedContextVariableName;
@@ -168,6 +175,9 @@ public static partial class LspSyntaxHelper
                     out synthesizedExpression,
                     out synthesizedContextVariableName,
                     out helperOrigin,
+                    filePath,
+                    line,
+                    character,
                     sourceIndex))
             {
                 contextVariableName = synthesizedContextVariableName;
@@ -241,6 +251,9 @@ public static partial class LspSyntaxHelper
                 out var helperExpression,
                 out var helperContextVariableName,
                 out var helperOrigin,
+                filePath,
+                line,
+                character,
                 sourceIndex))
             {
                 try
@@ -278,23 +291,21 @@ public static partial class LspSyntaxHelper
                 .Select(i => i.Identifier.Text)
                 .FirstOrDefault();
 
-        // Phase 2: Apply semantic variable tracking to preserve reused variable names.
-        // This is attempted before pre-normalization to capture the raw expression structure.
-        var initialExpr = targetExpression.ToString();
-        var semanticallyDedup = ApplySemanticVariableTracking(targetExpression, sourceText);
-        var candidateExpression = semanticallyDedup != initialExpr
-            ? semanticallyDedup
-            : initialExpr;
-
         // Apply syntax-only normalizations before sending to daemon so the daemon
         // compile-retry loop sees a clean expression.  This is safe to do here
         // because these rewrites are purely syntactic and do not require runtime model
         // or assembly information.
         if (extractionOrigin is null)
         {
-            extractionOrigin = BuildExtractionOriginSnapshot(targetExpression, "hover-query");
+            extractionOrigin = BuildExtractionOriginSnapshot(
+                sourceBackedExtractionNode,
+                "hover-query",
+                fallbackFilePath: filePath,
+                fallbackLine: line,
+                fallbackCharacter: character);
         }
 
+        var candidateExpression = targetExpression.ToString();
         return PreNormalizeExtractedExpression(candidateExpression);
     }
 
@@ -608,6 +619,9 @@ public static partial class LspSyntaxHelper
         out string expression,
         out string? contextVariableName,
         out ExtractionOriginSnapshot? extractionOrigin,
+        string? fallbackFilePath = null,
+        int fallbackLine = 0,
+        int fallbackCharacter = 0,
         ProjectSourceIndex? sourceIndex = null)
     {
         expression = string.Empty;
@@ -716,7 +730,18 @@ public static partial class LspSyntaxHelper
 
             expression = parsed.ToString();
             contextVariableName = rootContext;
-            extractionOrigin = BuildExtractionOriginSnapshot(queryInvocation, "helper-method");
+            var origin = BuildExtractionOriginSnapshot(
+                queryInvocation,
+                "helper-method",
+                fallbackFilePath,
+                fallbackLine,
+                fallbackCharacter);
+            if (!IsSourceBackedOrigin(origin, fallbackFilePath, fallbackLine, fallbackCharacter))
+            {
+                continue;
+            }
+
+            extractionOrigin = origin;
             return true;
         }
 
@@ -730,6 +755,9 @@ public static partial class LspSyntaxHelper
         out string expression,
         out string? contextVariableName,
         out ExtractionOriginSnapshot? extractionOrigin,
+        string? fallbackFilePath = null,
+        int fallbackLine = 0,
+        int fallbackCharacter = 0,
         ProjectSourceIndex? sourceIndex = null)
     {
         expression = string.Empty;
@@ -827,7 +855,18 @@ public static partial class LspSyntaxHelper
 
             expression = parsed.ToString();
             contextVariableName = rootContext;
-            extractionOrigin = BuildExtractionOriginSnapshot(queryInvocation, "helper-method");
+            var origin = BuildExtractionOriginSnapshot(
+                queryInvocation,
+                "helper-method",
+                fallbackFilePath,
+                fallbackLine,
+                fallbackCharacter);
+            if (!IsSourceBackedOrigin(origin, fallbackFilePath, fallbackLine, fallbackCharacter))
+            {
+                continue;
+            }
+
+            extractionOrigin = origin;
             return true;
         }
 
@@ -875,21 +914,52 @@ public static partial class LspSyntaxHelper
 
     private static ExtractionOriginSnapshot BuildExtractionOriginSnapshot(
         SyntaxNode node,
-        string scope)
+        string scope,
+        string? fallbackFilePath = null,
+        int fallbackLine = 0,
+        int fallbackCharacter = 0)
     {
         var lineSpan = node.GetLocation().GetLineSpan();
         var start = lineSpan.StartLinePosition;
         var end = lineSpan.EndLinePosition;
+        var hasPath = !string.IsNullOrWhiteSpace(lineSpan.Path);
+        var hasUsefulSpan = start.Line >= 0 && start.Character >= 0 && end.Line >= 0 && end.Character >= 0;
 
         return new ExtractionOriginSnapshot
         {
-            FilePath = lineSpan.Path,
-            Line = start.Line,
-            Character = start.Character,
-            EndLine = end.Line,
-            EndCharacter = end.Character,
+            FilePath = hasPath ? lineSpan.Path : fallbackFilePath,
+            Line = hasUsefulSpan ? start.Line : fallbackLine,
+            Character = hasUsefulSpan ? start.Character : fallbackCharacter,
+            EndLine = hasUsefulSpan ? end.Line : fallbackLine,
+            EndCharacter = hasUsefulSpan ? end.Character : fallbackCharacter,
             Scope = scope,
         };
+    }
+
+    private static bool IsSourceBackedOrigin(
+        ExtractionOriginSnapshot origin,
+        string? fallbackFilePath,
+        int fallbackLine,
+        int fallbackCharacter)
+    {
+        if (origin.Line < 0 || origin.Character < 0)
+        {
+            return false;
+        }
+
+        // In some unit/in-memory paths we intentionally do not carry a file path.
+        // In those cases, line/char provenance is sufficient for helper extraction.
+        if (string.IsNullOrWhiteSpace(fallbackFilePath))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(origin.FilePath))
+        {
+            return false;
+        }
+
+        return !(origin.Line == fallbackLine && origin.Character == fallbackCharacter);
     }
 
     private static bool TryGetRhsExpressionFromDeclarationOrAssignment(
