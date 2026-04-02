@@ -65,7 +65,7 @@ internal static partial class DesignTimeDbContextFactory
                         i.GetGenericTypeDefinition().FullName == QueryLensInterfaceName &&
                         i.GetGenericArguments()[0].FullName == dbContextType.FullName));
 
-                // Compatibility fallback: accept "duck-typed" factories that expose
+                // Compatibility path: accept "duck-typed" factories that expose
                 // a public parameterless CreateOfflineContext() returning the target
                 // DbContext type, even when the generic interface identity doesn't match
                 // (e.g., copied interface definition in user code).

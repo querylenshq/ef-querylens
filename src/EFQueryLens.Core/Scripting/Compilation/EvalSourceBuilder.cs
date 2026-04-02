@@ -25,8 +25,7 @@ internal static partial class EvalSourceBuilder
         IReadOnlySet<string> knownNamespaces,
         IReadOnlySet<string> knownTypes,
         IReadOnlyCollection<string> synthesizedUsingStaticTypes,
-        IReadOnlyCollection<string> synthesizedUsingNamespaces,
-        bool includeGridifyFallbackExtensions)
+        IReadOnlyCollection<string> synthesizedUsingNamespaces)
     {
         var sb = new StringBuilder();
         var emittedUsings = new HashSet<string>(StringComparer.Ordinal);
@@ -58,8 +57,6 @@ internal static partial class EvalSourceBuilder
         sb.Append(EvalSourceTemplateCatalog.OfflineCapture);
         sb.AppendLine("#endregion");
         sb.AppendLine();
-        
-        AppendFallbackExtensions(sb, includeGridifyFallbackExtensions);
         
         sb.AppendLine("#region Execution");
         AppendRunner(sb, dbContextType, request, stubs);

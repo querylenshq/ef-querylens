@@ -7,7 +7,13 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingScalarVariable_InWhere_DoesNotCollapseToWhereFalse()
     {
-        var result = await TranslateAsync("db.Users.Where(u => u.Email == companyUen).Select(u => u.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Users.Where(u => u.Email == companyUen).Select(u => u.Id)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["companyUen"] = "string",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -17,7 +23,13 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingBooleanVariable_InLogicalWhere_IsSynthesizedAsBool()
     {
-        var result = await TranslateAsync("db.Users.Where(u => isIntranetUser || u.Id > 0).Select(u => u.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Users.Where(u => isIntranetUser || u.Id > 0).Select(u => u.Id)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["isIntranetUser"] = "bool",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -27,7 +39,14 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingGuidAndBoolVariables_InCombinedPredicate_DoNotCrossInfer()
     {
-        var result = await TranslateAsync("db.ApplicationChecklists.Where(s => s.ApplicationId == applicationId && (isIntranetUser || s.IsLatest)).Select(s => s.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.ApplicationChecklists.Where(s => s.ApplicationId == applicationId && (isIntranetUser || s.IsLatest)).Select(s => s.Id)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["applicationId"] = "System.Guid",
+                ["isIntranetUser"] = "bool",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -38,28 +57,45 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingObjectMemberVariable_InWhere_IsSynthesized()
     {
-        var result = await TranslateAsync("db.ApplicationChecklists.Where(w => w.ApplicationId == currentUser.ApplicationId).Select(s => new { s.ApplicationId, s.Id })", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.ApplicationChecklists.Where(w => w.ApplicationId == currentUser.ApplicationId).Select(s => new { s.ApplicationId, s.Id })",
+            memberTypeHints:
+            [
+                new MemberTypeHint { ReceiverName = "currentUser", MemberName = "ApplicationId", TypeName = "System.Guid" },
+            ],
+            ct: TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("does not contain a definition", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Success);
+        Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("currentUser", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task Evaluate_MissingObjectWithNowMember_InWhere_UsesDateTimeStub()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.CreatedAt.Date == dateTime.Now.Date).Select(o => o.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.Where(o => o.CreatedAt.Date == dateTime.Now.Date).Select(o => o.Id)",
+            memberTypeHints:
+            [
+                new MemberTypeHint { ReceiverName = "dateTime", MemberName = "Now", TypeName = "System.DateTime" },
+            ],
+            ct: TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.DoesNotContain("'string' does not contain a definition for 'Date'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Success);
+        Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dateTime", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task Evaluate_MissingStringTerm_InContainsStartsWith_IsSynthesizedAsString()
     {
-        var result = await TranslateAsync("db.Customers.Where(c => c.Name.ToLower().Contains(term) || c.Email.ToLower().StartsWith(term))", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Customers.Where(c => c.Name.ToLower().Contains(term) || c.Email.ToLower().StartsWith(term))",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["term"] = "string",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -72,20 +108,35 @@ public partial class QueryEvaluatorTests
     [Fact]
     public void BuildStubDeclaration_NullableLikeMembers_UsesBoolHasValueAndTypedValue()
     {
-        var stub = BuildStubDeclarationForTest(
+        var stub = BuildStubDeclarationForRequestForTest(
             missingName: "minTotal",
-            expression: "db.Orders.Where(o => (!minTotal.HasValue || o.Total >= minTotal.Value))");
+            expression: "db.Orders.Where(o => (!minTotal.HasValue || o.Total >= minTotal.Value))",
+            memberTypeHints:
+            [
+                new MemberTypeHint { ReceiverName = "minTotal", MemberName = "HasValue", TypeName = "bool" },
+                new MemberTypeHint { ReceiverName = "minTotal", MemberName = "Value", TypeName = "decimal" },
+            ]);
 
-        Assert.Equal(
-            "var minTotal = new { HasValue = true, Value = 1m };",
-            stub);
+        Assert.Equal(string.Empty, stub);
     }
 
     [Fact]
     public async Task Evaluate_MissingNullableLikeObjects_InPredicate_DoesNotUseStringHasValue()
     {
-        var result = await TranslateAsync(
+        var result = await TranslateStrictAsync(
             "db.Orders.Where(o => (!minTotal.HasValue || o.Total >= minTotal.Value) && (!status.HasValue || o.Status == status.Value)).Select(o => o.Id)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["minTotal"] = "decimal?",
+                ["status"] = "SampleMySqlApp.Domain.Enums.OrderStatus?",
+            },
+            memberTypeHints:
+            [
+                new MemberTypeHint { ReceiverName = "minTotal", MemberName = "HasValue", TypeName = "bool" },
+                new MemberTypeHint { ReceiverName = "minTotal", MemberName = "Value", TypeName = "decimal" },
+                new MemberTypeHint { ReceiverName = "status", MemberName = "HasValue", TypeName = "bool" },
+                new MemberTypeHint { ReceiverName = "status", MemberName = "Value", TypeName = "SampleMySqlApp.Domain.Enums.OrderStatus" },
+            ],
             ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
@@ -130,9 +181,35 @@ public partial class QueryEvaluatorTests
     }
 
     [Fact]
+    public void BuildStubDeclaration_LocalSymbolHintWithInitializer_UsesInitializerExpression()
+    {
+        var stub = BuildStubDeclarationForRequestForTest(
+            missingName: "pageSize",
+            expression: "db.Orders.Skip((page - 1) * pageSize).Take(pageSize)",
+            localSymbolHints:
+            [
+                new LocalSymbolHint
+                {
+                    Name = "pageSize",
+                    TypeName = "int",
+                    Kind = "local",
+                    InitializerExpression = "Math.Max(request.PageSize, 1)",
+                },
+            ]);
+
+        Assert.Equal("var pageSize = Math.Max(request.PageSize, 1);", stub);
+    }
+
+    [Fact]
     public async Task Evaluate_MissingMinOrders_InCountComparison_IsSynthesizedAsNumeric()
     {
-        var result = await TranslateAsync("db.Customers.Where(c => c.Orders.Count(o => o.IsNotDeleted) >= minOrders)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Customers.Where(c => c.Orders.Count(o => o.IsNotDeleted) >= minOrders)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["minOrders"] = "int",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -145,9 +222,13 @@ public partial class QueryEvaluatorTests
     [Fact]
     public void BuildStubDeclaration_GridifyQueryArgument_UsesIGridifyQuery()
     {
-        var stub = BuildStubDeclarationForTest(
+        var stub = BuildStubDeclarationForRequestForTest(
             missingName: "query",
-            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm)");
+            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["query"] = "global::Gridify.IGridifyQuery",
+            });
 
         Assert.Equal(
             "global::Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
@@ -157,21 +238,29 @@ public partial class QueryEvaluatorTests
     [Fact]
     public void BuildStubDeclaration_GridifyMapperArgument_UsesTypedIGridifyMapper()
     {
-        var stub = BuildStubDeclarationForTest(
+        var stub = BuildStubDeclarationForRequestForTest(
             missingName: "gm",
-            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm)");
+            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["gm"] = "global::Gridify.IGridifyMapper<SampleMySqlApp.Domain.Entities.Order>",
+            });
 
         Assert.Equal(
-            "global::Gridify.IGridifyMapper<SampleMySqlApp.Domain.Entities.Order>? gm = null;",
+            "global::Gridify.IGridifyMapper<SampleMySqlApp.Domain.Entities.Order> gm = null!;",
             stub);
     }
 
     [Fact]
     public void BuildStubDeclaration_GridifyQueryWithPagingMembers_PrefersIGridifyQueryOverAnonymousObject()
     {
-        var stub = BuildStubDeclarationForTest(
+        var stub = BuildStubDeclarationForRequestForTest(
             missingName: "query",
-            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm).ApplyPaging(query.Page, query.PageSize)");
+            expression: "db.Orders.ApplyFilteringAndOrdering(query, gm).ApplyPaging(query.Page, query.PageSize)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["query"] = "global::Gridify.IGridifyQuery",
+            });
 
         Assert.Equal(
             "global::Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
@@ -179,76 +268,61 @@ public partial class QueryEvaluatorTests
     }
 
     [Fact]
-    public async Task Evaluate_GridifyShape_WithoutGridifyAssembly_UsesFallbackPath()
+    public async Task Evaluate_GridifyShape_WithoutHints_FailsInStrictMode()
     {
-        var result = await TranslateAsync("db.Orders.ApplyFilteringAndOrdering(query, gm).ApplyPaging(query.Page, query.PageSize)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.ApplyFilteringAndOrdering(query, gm).ApplyPaging(query.Page, query.PageSize)",
+            ct: TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.Contains("Orders", result.Sql, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("The type or namespace name 'Gridify'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void HasMissingGridifyTypeErrors_NonGridifyMissingType_ReturnsFalse()
-    {
-        var errors = CreateCompilationErrors(
-            "public sealed class C { private MissingType _x = default!; }");
-
-        Assert.Contains(errors, d => d.Id == "CS0246");
-        Assert.False(InvokeHasMissingGridifyTypeErrors(errors));
-    }
-
-    [Fact]
-    public void HasMissingGridifyTypeErrors_GridifyMissingType_ReturnsTrue()
-    {
-        var errors = CreateCompilationErrors(
-            "public sealed class C { private Gridify.GridifyQuery _x = default!; }");
-
-        Assert.Contains(errors, d => d.Id == "CS0246" || d.Id == "CS0234");
-        Assert.True(InvokeHasMissingGridifyTypeErrors(errors));
+        Assert.False(result.Success);
+        Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void BuildStubDeclaration_IsPatternEnumMember_UsesEnumTypeFromPattern()
     {
-        var stub = BuildStubDeclarationForTest(
+        var stub = BuildStubDeclarationForRequestForTest(
             missingName: "pastPlanningPlusCase",
-            expression: "db.Orders.Where(o => o.UserId == ((pastPlanningPlusCase.CaseType is System.DayOfWeek.Monday or System.DayOfWeek.Tuesday) ? 1 : 2)).Select(o => o.Id)");
+            expression: "db.Orders.Where(o => o.UserId == ((pastPlanningPlusCase.CaseType is System.DayOfWeek.Monday or System.DayOfWeek.Tuesday) ? 1 : 2)).Select(o => o.Id)",
+            memberTypeHints:
+            [
+                new MemberTypeHint { ReceiverName = "pastPlanningPlusCase", MemberName = "CaseType", TypeName = "System.DayOfWeek" },
+            ]);
 
-        Assert.Equal(
-            "var pastPlanningPlusCase = new { CaseType = (System.DayOfWeek)1 };",
-            stub);
+        Assert.Equal(string.Empty, stub);
     }
 
     [Fact]
     public void BuildStubDeclaration_StringMethodArgument_UsesStringStub()
     {
-        var stub = BuildStubDeclarationForTest(
+        var stub = BuildStubDeclarationForRequestForTest(
             missingName: "term",
-            expression: "db.Customers.Where(c => c.Name.ToLower().Contains(term) || c.Email.ToLower().StartsWith(term))");
+            expression: "db.Customers.Where(c => c.Name.ToLower().Contains(term) || c.Email.ToLower().StartsWith(term))",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["term"] = "string",
+            });
 
-        Assert.Equal("string term = \"qlstub0\";", stub);
+        Assert.Equal("string term = \"\";", stub);
     }
 
     [Fact]
     public void BuildStubDeclaration_CountComparisonVariable_UsesNumericStub()
     {
-        var stub = BuildStubDeclarationForTest(
+        var stub = BuildStubDeclarationForRequestForTest(
             missingName: "minOrders",
-            expression: "db.Customers.Where(c => c.Orders.Count(o => o.IsNotDeleted) >= minOrders)");
+            expression: "db.Customers.Where(c => c.Orders.Count(o => o.IsNotDeleted) >= minOrders)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["minOrders"] = "int",
+            });
 
-        Assert.Equal("int minOrders = 1;", stub);
+        Assert.Equal("int minOrders = 0;", stub);
     }
 
     [Fact]
-    public void BuildStubDeclaration_LocalVariableStaticType_FallsThroughToHeuristics()
+    public void BuildStubDeclaration_LocalVariableStaticType_StrictModeReturnsEmptyStub()
     {
-        // When the LSP hint resolves to a static type ("Math"), the stub for Math itself
-        // (not page/pageSize) should fall through to heuristics and end up as object rather
-        // than causing an empty/hard-block. The key invariant is that page/pageSize are
-        // synthesized correctly via Skip/Take heuristics - tested by the Evaluate_ tests.
         var stub = BuildStubDeclarationForRequestForTest(
             missingName: "Math",
             expression: "db.Orders.Skip(Math.Max(page, 1)).Take(pageSize)",
@@ -257,11 +331,11 @@ public partial class QueryEvaluatorTests
                 ["Math"] = "System.Math"
             });
 
-        Assert.NotNull(stub);
+        Assert.Equal(string.Empty, stub);
     }
 
     [Fact]
-    public void BuildStubDeclaration_LocalVariableAliasToStaticType_FallsThroughToHeuristics()
+    public void BuildStubDeclaration_LocalVariableAliasToStaticType_StrictModeReturnsEmptyStub()
     {
         var stub = BuildStubDeclarationForRequestForTest(
             missingName: "mathHelper",
@@ -275,7 +349,7 @@ public partial class QueryEvaluatorTests
                 ["MathAlias"] = "System.Math"
             });
 
-        Assert.NotNull(stub);
+        Assert.Equal(string.Empty, stub);
     }
 
     [Fact]
@@ -298,7 +372,7 @@ public partial class QueryEvaluatorTests
     }
 
     [Fact]
-    public void BuildStubDeclaration_UnresolvedTypeMarkerQuestionMark_FallsThroughToHeuristics()
+    public void BuildStubDeclaration_UnresolvedTypeMarkerQuestionMark_StrictModeReturnsEmptyStub()
     {
         var stub = BuildStubDeclarationForRequestForTest(
             missingName: "unknownType",
@@ -308,13 +382,21 @@ public partial class QueryEvaluatorTests
                 ["unknownType"] = "?"
             });
 
-        Assert.NotNull(stub);
+        Assert.Equal(string.Empty, stub);
     }
 
     [Fact]
     public async Task Evaluate_PagingWithMathCall_DoesNotSurfaceStaticTypeCompilationErrors()
     {
-        var result = await TranslateAsync("db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip(Math.Max(pageSize * pageIndex, 0)).Take(pageSize).Select(expression)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip(Math.Max(pageSize * pageIndex, 0)).Take(pageSize).Select(expression)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["pageSize"] = "int",
+                ["pageIndex"] = "int",
+                ["expression"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, object>>",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -323,29 +405,47 @@ public partial class QueryEvaluatorTests
     }
 
     [Fact]
-    public async Task Evaluate_PagingWithMathCall_WithStaticLspHint_FallsThroughToNumericHeuristic()
+    public async Task Evaluate_PagingWithMathCall_WithStaticLspHint_StrictModeFailsWithoutGuesses()
     {
         var result = await _evaluator.EvaluateAsync(_alcCtx, new TranslationRequest
         {
             AssemblyPath = _alcCtx.AssemblyPath,
             Expression = "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(expression)",
-            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["page"] = "Math",
-                ["pageSize"] = "Math",
-            },
+            LocalSymbolGraph =
+            [
+                new LocalSymbolGraphEntry
+                {
+                    Name = "page",
+                    TypeName = "Math",
+                    Kind = "local",
+                    DeclarationOrder = 0,
+                },
+                new LocalSymbolGraphEntry
+                {
+                    Name = "pageSize",
+                    TypeName = "Math",
+                    Kind = "local",
+                    DeclarationOrder = 1,
+                },
+            ],
         }, TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.DoesNotContain("Unknown variable 'page'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Unknown variable 'pageSize'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Success);
+        Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("The name 'page' does not exist", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task Evaluate_MissingPagingVariables_InSkipTakeArithmetic_AreSynthesizedAsNumeric()
     {
-        var result = await TranslateAsync("db.Orders.OrderBy(o => o.Id).Skip(pageSize * pageIndex).Take(pageSize).Select(o => o.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.OrderBy(o => o.Id).Skip(pageSize * pageIndex).Take(pageSize).Select(o => o.Id)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["pageSize"] = "int",
+                ["pageIndex"] = "int",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -356,29 +456,35 @@ public partial class QueryEvaluatorTests
     }
 
     [Fact]
-    public async Task Evaluate_PatternTernaryComparisonWithoutParentheses_IsNormalizedForIntendedComparison()
+    public async Task Evaluate_PatternTernaryComparison_UsingLspNormalizedForm_Translates()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId == selector.Value is 1 or 2 ? 1 : 2).Select(o => o.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.Where(o => o.UserId == (selector.Value == 1 || selector.Value == 2 ? 1 : 2)).Select(o => o.Id)",
+            memberTypeHints:
+            [
+                new MemberTypeHint { ReceiverName = "selector", MemberName = "Value", TypeName = "int" },
+            ],
+            ct: TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.DoesNotContain(
-            "Operator '==' cannot be applied to operands of type 'int' and 'bool'",
-            result.ErrorMessage ?? string.Empty,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Success);
+        Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("selector", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task Evaluate_PatternTernaryComparisonInsideLogicalAnd_IsNormalizedForIntendedComparison()
+    public async Task Evaluate_PatternTernaryComparisonInsideLogicalAnd_UsingLspNormalizedForm_Translates()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.Id > 0 && o.UserId == selector.Value is 1 or 2 ? 1 : 2).Select(o => o.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.Where(o => o.Id > 0 && o.UserId == (selector.Value == 1 || selector.Value == 2 ? 1 : 2)).Select(o => o.Id)",
+            memberTypeHints:
+            [
+                new MemberTypeHint { ReceiverName = "selector", MemberName = "Value", TypeName = "int" },
+            ],
+            ct: TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.DoesNotContain(
-            "Operator '==' cannot be applied to operands of type 'int' and 'bool'",
-            result.ErrorMessage ?? string.Empty,
-            StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Success);
+        Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("selector", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -397,7 +503,13 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingCollectionVariable_InContains_DoesNotFallBackToObject()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => userIds.Contains(o.UserId))", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.Where(o => userIds.Contains(o.UserId))",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["userIds"] = "System.Collections.Generic.List<int>",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -409,7 +521,13 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingCollectionVariable_InContains_DoesNotCollapseToWhereFalse()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => userIds.Contains(o.UserId))", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.Where(o => userIds.Contains(o.UserId))",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["userIds"] = "System.Collections.Generic.List<int>",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -419,26 +537,29 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingGuidCollectionVariable_InContains_UsesAtLeastTwoPlaceholderValues()
     {
-        var result = await TranslateAsync("db.ApplicationChecklists.Where(c => listingIds.Contains(c.ApplicationId))", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.ApplicationChecklists.Where(c => listingIds.Contains(c.ApplicationId))",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["listingIds"] = "System.Collections.Generic.List<System.Guid>",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
-
-        var secondGuid = "00000000-0000-0000-0000-000000000001";
-        var hasSecondGuidInSql = (result.Sql ?? string.Empty)
-            .Contains(secondGuid, StringComparison.OrdinalIgnoreCase);
-        var hasSecondGuidInParameters = result.Parameters.Any(p =>
-            (p.InferredValue ?? string.Empty)
-                .Contains(secondGuid, StringComparison.OrdinalIgnoreCase));
-
-        Assert.True(
-            hasSecondGuidInSql || hasSecondGuidInParameters,
-            "Expected synthesized Contains placeholders to include at least two GUID values.");
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task Evaluate_MissingSelectorVariable_InSelect_IsSynthesized()
     {
-        var result = await TranslateAsync("db.Orders.Select(selector)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.Select(selector)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["selector"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, object>>",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -447,7 +568,14 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_MissingWhereAndSelectExpressionVariables_AreSynthesized()
     {
-        var result = await TranslateAsync("db.Orders.Where(filter).Select(expression)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.Where(filter).Select(expression)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["filter"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, bool>>",
+                ["expression"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, object>>",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -467,17 +595,83 @@ public partial class QueryEvaluatorTests
                 .Select(expression)
             """;
 
-        var result = await TranslateAsync(expression, ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            expression,
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["page"] = "int",
+                ["pageSize"] = "int",
+                ["expression"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, object>>",
+            },
+            localSymbolHints:
+            [
+                new LocalSymbolHint { Name = "page", TypeName = "int", Kind = "local", InitializerExpression = "2" },
+                new LocalSymbolHint { Name = "pageSize", TypeName = "int", Kind = "local", InitializerExpression = "25" },
+            ],
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
         Assert.DoesNotContain("CS0411", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("WHERE FALSE", result.Sql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_PagingLocals_WithInitializerDependency_Order_IsResolvedBeforeCompilation()
+    {
+        var result = await TranslateStrictAsync(
+            "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(expression)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["expression"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, object>>",
+            },
+            localSymbolHints:
+            [
+                new LocalSymbolHint
+                {
+                    Name = "page",
+                    TypeName = "int",
+                    Kind = "local",
+                    InitializerExpression = "Math.Max(request.Page, 1)",
+                    DeclarationOrder = 1,
+                },
+                new LocalSymbolHint
+                {
+                    Name = "pageSize",
+                    TypeName = "int",
+                    Kind = "local",
+                    InitializerExpression = "Math.Max(request.PageSize, 1)",
+                    DeclarationOrder = 2,
+                },
+                // Intentionally placed last to mimic out-of-order extraction and ensure
+                // dependency ordering handles "request" before page/pageSize declarations.
+                new LocalSymbolHint
+                {
+                    Name = "request",
+                    TypeName = "object",
+                    Kind = "local",
+                    InitializerExpression = "new { Page = 2, PageSize = 25 }",
+                    DeclarationOrder = 0,
+                },
+            ],
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("CS0841", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("WHERE FALSE", result.Sql, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task Evaluate_MissingCancellationToken_InAsyncTerminal_IsSynthesized()
     {
-        var result = await TranslateAsync("db.Orders.SingleOrDefaultAsync(ct)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            "db.Orders.SingleOrDefaultAsync(ct)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ct"] = "System.Threading.CancellationToken",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);

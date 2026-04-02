@@ -64,22 +64,6 @@ public partial class LspSyntaxHelperTests
     }
 
     [Fact]
-    public void IsLikelyDbContextRootIdentifier_UnderscoreDb_ReturnsTrue()
-    {
-        var candidate = LspSyntaxHelper.IsLikelyDbContextRootIdentifier("_db");
-
-        Assert.True(candidate);
-    }
-
-    [Fact]
-    public void IsLikelyDbContextRootIdentifier_Service_ReturnsFalse()
-    {
-        var candidate = LspSyntaxHelper.IsLikelyDbContextRootIdentifier("service");
-
-        Assert.False(candidate);
-    }
-
-    [Fact]
     public void TryExtractLinqExpression_QueryExpression_FromWhereSelect_ExtractsExpressionAndContext()
     {
         var source = """

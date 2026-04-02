@@ -112,7 +112,7 @@ public sealed partial class QueryEvaluator
                 return; // DI not loaded, skip
 
             // Use reflection to attempt setting a default service provider or modifying service discovery
-            // This is a fallback mechanism in case EF Core has a mechanism to look up services globally
+            // This is a secondary mechanism in case EF Core has a mechanism to look up services globally
             // Without this, the AsyncLocal context and factory-level service provision should still work
         }
         catch

@@ -93,6 +93,9 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         IReadOnlyList<string>? additionalImports = null,
         IReadOnlyDictionary<string, string>? usingAliases = null,
         IReadOnlyList<string>? usingStaticTypes = null,
+        IReadOnlyDictionary<string, string>? localVariableTypes = null,
+        IReadOnlyList<LocalSymbolHint>? localSymbolHints = null,
+        IReadOnlyList<MemberTypeHint>? memberTypeHints = null,
         bool useAsyncRunner = false,
         CancellationToken ct = default) =>
         _evaluator.EvaluateAsync(_alcCtx,
@@ -105,8 +108,34 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
                 UsingAliases = usingAliases
                     ?? new Dictionary<string, string>(StringComparer.Ordinal),
                 UsingStaticTypes = usingStaticTypes ?? [],
+                LocalSymbolGraph = BuildSymbolGraph(
+                    localVariableTypes ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                    localSymbolHints ?? []),
                 UseAsyncRunner = useAsyncRunner,
             }, ct);
+
+    private Task<QueryTranslationResult> TranslateStrictAsync(
+        string expression,
+        IReadOnlyDictionary<string, string>? localVariableTypes = null,
+        IReadOnlyList<LocalSymbolHint>? localSymbolHints = null,
+        IReadOnlyList<MemberTypeHint>? memberTypeHints = null,
+        string? dbContextTypeName = null,
+        IReadOnlyList<string>? additionalImports = null,
+        IReadOnlyDictionary<string, string>? usingAliases = null,
+        IReadOnlyList<string>? usingStaticTypes = null,
+        bool useAsyncRunner = false,
+        CancellationToken ct = default) =>
+        TranslateAsync(
+            expression,
+            dbContextTypeName,
+            additionalImports,
+            usingAliases,
+            usingStaticTypes,
+            localVariableTypes,
+            localSymbolHints,
+            memberTypeHints,
+            useAsyncRunner,
+            ct);
 
     // ─── Basic translation ────────────────────────────────────────────────────
 
@@ -115,8 +144,12 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
 
     // ─── Result shape ─────────────────────────────────────────────────────────
 
-    private string BuildStubDeclarationForTest(string missingName, string expression)
-        => BuildStubDeclarationForRequestForTest(missingName, expression);
+    private string BuildStubDeclarationForTest(
+        string missingName,
+        string expression)
+        => BuildStubDeclarationForRequestForTest(
+            missingName,
+            expression);
 
     private string BuildStubDeclarationForRequestForTest(
         string missingName,
@@ -131,10 +164,10 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         {
             AssemblyPath = _alcCtx.AssemblyPath,
             Expression = expression,
-            LocalVariableTypes = localVariableTypes ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            LocalSymbolGraph = BuildSymbolGraph(
+                localVariableTypes ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                localSymbolHints ?? []),
             UsingAliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            LocalSymbolHints = localSymbolHints ?? [],
-            MemberTypeHints = memberTypeHints ?? [],
         };
 
         var method = typeof(StubSynthesizer).GetMethod(
@@ -151,33 +184,57 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         return stub!;
     }
 
-    private static IReadOnlyList<Diagnostic> CreateCompilationErrors(string source)
+    private static IReadOnlyList<LocalSymbolGraphEntry> BuildSymbolGraph(
+        IReadOnlyDictionary<string, string> localVariableTypes,
+        IReadOnlyList<LocalSymbolHint> localSymbolHints)
     {
-        var tree = CSharpSyntaxTree.ParseText(source);
-        var compilation = CSharpCompilation.Create(
-            assemblyName: "GridifyPredicateTests",
-            syntaxTrees: [tree],
-            references:
-            [
-                MetadataReference.CreateFromFile(typeof(object).Assembly.Location)
-            ],
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var byName = new Dictionary<string, LocalSymbolGraphEntry>(StringComparer.Ordinal);
+        var order = 0;
 
-        return compilation.GetDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error)
+        foreach (var hint in localSymbolHints)
+        {
+            if (string.IsNullOrWhiteSpace(hint.Name) || string.IsNullOrWhiteSpace(hint.TypeName))
+            {
+                continue;
+            }
+
+            byName[hint.Name] = new LocalSymbolGraphEntry
+            {
+                Name = hint.Name,
+                TypeName = hint.TypeName,
+                Kind = hint.Kind,
+                InitializerExpression = hint.InitializerExpression,
+                DeclarationOrder = hint.DeclarationOrder > 0 ? hint.DeclarationOrder : order++,
+                Dependencies = hint.Dependencies,
+                Scope = hint.Scope,
+            };
+        }
+
+        foreach (var kv in localVariableTypes.OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(kv.Key) || string.IsNullOrWhiteSpace(kv.Value))
+            {
+                continue;
+            }
+
+            if (byName.ContainsKey(kv.Key))
+            {
+                continue;
+            }
+
+            byName[kv.Key] = new LocalSymbolGraphEntry
+            {
+                Name = kv.Key,
+                TypeName = kv.Value,
+                Kind = "local",
+                DeclarationOrder = order++,
+            };
+        }
+
+        return byName.Values
+            .OrderBy(s => s.DeclarationOrder)
+            .ThenBy(s => s.Name, StringComparer.Ordinal)
             .ToArray();
-    }
-
-    private static bool InvokeHasMissingGridifyTypeErrors(IReadOnlyList<Diagnostic> errors)
-    {
-        var method = typeof(StubSynthesizer).GetMethod(
-            "HasMissingGridifyTypeErrors",
-            BindingFlags.NonPublic | BindingFlags.Static);
-
-        Assert.NotNull(method);
-
-        var value = method!.Invoke(null, [errors]);
-        return Assert.IsType<bool>(value);
     }
 
     private static IReadOnlyList<string> InvokeInferMissingExtensionStaticImports(

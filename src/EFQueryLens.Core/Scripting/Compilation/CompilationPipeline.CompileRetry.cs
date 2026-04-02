@@ -40,58 +40,19 @@ internal sealed partial class CompilationPipeline
         List<string> stubs,
         ISet<string> synthesizedUsingStaticTypes,
         ISet<string> synthesizedUsingNamespaces,
-        ref string workingExpression,
-        ref bool includeGridifyFallbackExtensions)
+        ref string workingExpression)
     {
         var changed = false;
 
-        changed |= ApplyMissingIdentifierStubRule(errors, workingRequest, dbContextType, stubs);
         changed |= ApplyMissingTypeImportRule(errors, knownNamespaces, knownTypes, synthesizedUsingStaticTypes, synthesizedUsingNamespaces);
         changed |= ApplyArgumentTypeRestubRule(errors, dbContextType, workingRequest, stubs);
-        changed |= ApplyExpressionNormalizationRules(errors, compilation, workingRequest.Expression, dbContextType, ref workingExpression);
+        // LSP-authoritative mode only: daemon expression rewrites are disabled.
+        // Keep only CS0122 inaccessible projection normalization, which is required
+        // as a generated-assembly visibility bridge.
+        changed |= ApplyInaccessibleProjectionNormalizationRule(errors, ref workingExpression);
 
         changed |= ApplyMissingExtensionImportRule(errors, compilation, compilationAssemblies, synthesizedUsingStaticTypes);
-
-        if (StubSynthesizer.TryApplyGridifyFallbackFromErrors(errors, stubs, ref includeGridifyFallbackExtensions))
-        {
-            changed = true;
-        }
-
-        return changed;
-    }
-
-    private bool ApplyMissingIdentifierStubRule(
-        IReadOnlyList<Diagnostic> errors,
-        TranslationRequest workingRequest,
-        Type dbContextType,
-        ICollection<string> stubs)
-    {
-        var changed = false;
-        var missingNames = errors
-            .Where(d => d.Id == "CS0103")
-            .Select(TryExtractMissingIdentifierFromDiagnostic)
-            .Where(n => n is not null)
-            .Distinct()
-            .Where(n => !string.IsNullOrWhiteSpace(n)
-                        && !StubSynthesizer.LooksLikeTypeOrNamespacePrefix(n, workingRequest.Expression, workingRequest.UsingAliases))
-            .ToList();
-
-        LogDebug($"compile-retry cs0103-missing-names={string.Join(",", missingNames)}");
-
-        var rootId = ImportResolver.TryExtractRootIdentifier(workingRequest.Expression);
-        foreach (var missingName in missingNames)
-        {
-            if (stubs.Any(s => s.Contains($" {missingName} ", StringComparison.Ordinal) || s.Contains($" {missingName};", StringComparison.Ordinal)))
-                continue;
-
-            var stub = StubSynthesizer.BuildStubDeclaration(missingName!, rootId, workingRequest, dbContextType);
-            if (string.IsNullOrWhiteSpace(stub))
-                continue;
-
-            LogDebug($"compile-retry stub-added name={missingName} stub={stub.Trim()}");
-            stubs.Add(stub);
-            changed = true;
-        }
+        changed |= ReorderStubsByDependency(stubs);
 
         return changed;
     }
@@ -204,50 +165,10 @@ internal sealed partial class CompilationPipeline
         return changed;
     }
 
-    private bool ApplyExpressionNormalizationRules(
+    private bool ApplyInaccessibleProjectionNormalizationRule(
         IReadOnlyList<Diagnostic> errors,
-        CSharpCompilation compilation,
-        string originalExpression,
-        Type dbContextType,
         ref string workingExpression)
     {
-        var changed = false;
-
-        if (ImportResolver.TryNormalizeRootContextHopFromErrors(
-                errors,
-                compilation,
-                originalExpression,
-                dbContextType,
-                out var normalizedExpression)
-            && !string.Equals(normalizedExpression, workingExpression, StringComparison.Ordinal))
-        {
-            LogDebug($"compile-retry expression-mutation rule=root-hop trigger=CS1061 before-len={workingExpression.Length} after-len={normalizedExpression.Length}");
-            workingExpression = normalizedExpression;
-            changed = true;
-        }
-
-        if (ImportResolver.TryNormalizePatternTernaryComparisonFromErrors(
-                errors,
-                workingExpression,
-                out var ternaryNormalizedExpression)
-            && !string.Equals(ternaryNormalizedExpression, workingExpression, StringComparison.Ordinal))
-        {
-            LogDebug($"compile-retry expression-mutation rule=pattern-ternary trigger=CS0019 before-len={workingExpression.Length} after-len={ternaryNormalizedExpression.Length}");
-            workingExpression = ternaryNormalizedExpression;
-            changed = true;
-        }
-
-        if (ImportResolver.TryNormalizeUnsupportedPatternMatchingFromErrors(
-                errors,
-                workingExpression,
-                out var patternNormalizedExpression)
-            && !string.Equals(patternNormalizedExpression, workingExpression, StringComparison.Ordinal))
-        {
-            LogDebug($"compile-retry expression-mutation rule=is-pattern trigger=CS8122 before-len={workingExpression.Length} after-len={patternNormalizedExpression.Length}");
-            workingExpression = patternNormalizedExpression;
-            changed = true;
-        }
-
         if (TryNormalizeInaccessibleProjectionTypeFromErrors(
                 errors,
                 workingExpression,
@@ -256,10 +177,10 @@ internal sealed partial class CompilationPipeline
         {
             LogDebug($"compile-retry expression-mutation rule=inaccessible-projection trigger=CS0122 before-len={workingExpression.Length} after-len={inaccessibleProjectionNormalizedExpression.Length}");
             workingExpression = inaccessibleProjectionNormalizedExpression;
-            changed = true;
+            return true;
         }
 
-        return changed;
+        return false;
     }
 
     private static bool ApplyMissingExtensionImportRule(
@@ -278,6 +199,98 @@ internal sealed partial class CompilationPipeline
         }
 
         return changed;
+    }
+
+    private static bool ReorderStubsByDependency(List<string> stubs)
+    {
+        if (stubs.Count <= 1)
+            return false;
+
+        var nodes = stubs
+            .Select((stub, index) => ParseStubNode(stub, index))
+            .ToList();
+
+        var declared = nodes
+            .Where(n => !string.IsNullOrWhiteSpace(n.Name))
+            .Select(n => n.Name!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (declared.Count <= 1)
+            return false;
+
+        foreach (var node in nodes)
+        {
+            if (node.Dependencies.Count == 0)
+                continue;
+
+            node.Dependencies.RemoveWhere(d =>
+                !declared.Contains(d) || string.Equals(d, node.Name, StringComparison.Ordinal));
+        }
+
+        var remaining = new List<StubNode>(nodes);
+        var ordered = new List<StubNode>(nodes.Count);
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+
+        while (remaining.Count > 0)
+        {
+            var progressed = false;
+
+            for (var i = 0; i < remaining.Count; i++)
+            {
+                var node = remaining[i];
+                if (!node.Dependencies.All(emitted.Contains))
+                    continue;
+
+                ordered.Add(node);
+                if (!string.IsNullOrWhiteSpace(node.Name))
+                    emitted.Add(node.Name!);
+                remaining.RemoveAt(i);
+                i--;
+                progressed = true;
+            }
+
+            if (progressed)
+                continue;
+
+            // Cycle or unresolved dependency chain among stubs: preserve original ordering for the rest.
+            ordered.AddRange(remaining);
+            break;
+        }
+
+        var reordered = ordered.Select(n => n.Text).ToList();
+        if (reordered.SequenceEqual(stubs, StringComparer.Ordinal))
+            return false;
+
+        stubs.Clear();
+        stubs.AddRange(reordered);
+        return true;
+    }
+
+    private static StubNode ParseStubNode(string stub, int index)
+    {
+        var normalized = stub.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return new StubNode(index, normalized, null, []);
+
+        var statement = SyntaxFactory.ParseStatement(normalized.TrimEnd(';') + ";");
+        if (statement is not LocalDeclarationStatementSyntax localDecl
+            || localDecl.Declaration.Variables.Count != 1)
+        {
+            return new StubNode(index, normalized, null, []);
+        }
+
+        var variable = localDecl.Declaration.Variables[0];
+        var name = variable.Identifier.ValueText;
+        var deps = variable.Initializer?.Value is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : variable.Initializer.Value
+                .DescendantNodesAndSelf()
+                .OfType<IdentifierNameSyntax>()
+                .Select(id => id.Identifier.ValueText)
+                .Where(id => !string.Equals(id, name, StringComparison.Ordinal))
+                .ToHashSet(StringComparer.Ordinal);
+
+        return new StubNode(index, normalized, name, deps);
     }
 
     /// <summary>
@@ -300,5 +313,11 @@ internal sealed partial class CompilationPipeline
             ? identifier.Identifier.ValueText
             : null;
     }
+
+    private sealed record StubNode(
+        int Index,
+        string Text,
+        string? Name,
+        HashSet<string> Dependencies);
 
 }

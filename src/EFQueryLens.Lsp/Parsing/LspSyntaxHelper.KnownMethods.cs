@@ -89,16 +89,4 @@ public static partial class LspSyntaxHelper
         "ExecuteUpdate", "ExecuteUpdateAsync", "ExecuteDelete", "ExecuteDeleteAsync",
     };
 
-    /// <summary>
-    /// Common variable names used for DbContext instances.
-    /// Used for heuristic-based query detection when the DbContext type name is not resolvable.
-    /// </summary>
-    private static readonly HashSet<string> KnownDbContextRootNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "db",
-        "_db",
-        "context",
-        "dbContext",
-        "_dbContext",
-    };
 }

@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using EFQueryLens.Core.Contracts;
+using System.Text.RegularExpressions;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -16,7 +17,16 @@ public static partial class LspSyntaxHelper
     internal static Dictionary<string, string> ExtractLocalVariableTypesAtPosition(
         string sourceText, int line, int character)
     {
-        var hints = ExtractLocalSymbolHintsAtPosition(sourceText, line, character);
+        var hints = ExtractLocalSymbolHintsAtPosition(sourceText, line, character, targetAssemblyPath: null);
+        return hints
+            .GroupBy(h => h.Name, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().TypeName, StringComparer.Ordinal);
+    }
+
+    internal static Dictionary<string, string> ExtractLocalVariableTypesAtPosition(
+        string sourceText, int line, int character, string? targetAssemblyPath)
+    {
+        var hints = ExtractLocalSymbolHintsAtPosition(sourceText, line, character, targetAssemblyPath);
         return hints
             .GroupBy(h => h.Name, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First().TypeName, StringComparer.Ordinal);
@@ -28,12 +38,27 @@ public static partial class LspSyntaxHelper
     /// </summary>
     internal static IReadOnlyList<LocalSymbolHint> ExtractLocalSymbolHintsAtPosition(
         string sourceText, int line, int character)
+        => ExtractLocalSymbolHintsAtPosition(sourceText, line, character, targetAssemblyPath: null);
+
+    internal static IReadOnlyList<LocalSymbolHint> ExtractLocalSymbolHintsAtPosition(
+        string sourceText, int line, int character, string? targetAssemblyPath)
     {
         var result = new Dictionary<string, LocalSymbolHint>(StringComparer.Ordinal);
         try
         {
-            var tree = CSharpSyntaxTree.ParseText(sourceText);
-            var root = tree.GetRoot();
+            SyntaxTree tree;
+            SyntaxNode root;
+            SemanticModel? semanticModel = null;
+            if (TryCreateSemanticModel(sourceText, targetAssemblyPath, out tree, out root, out var model))
+            {
+                semanticModel = model;
+            }
+            else
+            {
+                tree = CSharpSyntaxTree.ParseText(sourceText);
+                root = tree.GetRoot();
+            }
+
             var textLines = tree.GetText().Lines;
 
             if (line >= textLines.Count) return [];
@@ -46,7 +71,7 @@ public static partial class LspSyntaxHelper
             var anchorStatement = node.FirstAncestorOrSelf<StatementSyntax>();
             if (anchorStatement is null) return [];
 
-            CollectLocalsInScope(anchorStatement, result);
+            CollectLocalsInScope(anchorStatement, result, semanticModel);
         }
         catch
         {
@@ -54,6 +79,31 @@ public static partial class LspSyntaxHelper
         }
 
         return result.Values.ToArray();
+    }
+
+    internal static IReadOnlyList<LocalSymbolGraphEntry> ExtractLocalSymbolGraphAtPosition(
+        string sourceText,
+        int line,
+        int character,
+        string? targetAssemblyPath)
+    {
+        var hints = ExtractLocalSymbolHintsAtPosition(sourceText, line, character, targetAssemblyPath);
+        return hints
+            .GroupBy(h => h.Name, StringComparer.Ordinal)
+            .Select(g => g.OrderBy(h => h.DeclarationOrder).First())
+            .OrderBy(h => h.DeclarationOrder)
+            .ThenBy(h => h.Name, StringComparer.Ordinal)
+            .Select(h => new LocalSymbolGraphEntry
+            {
+                Name = h.Name,
+                TypeName = h.TypeName,
+                Kind = h.Kind,
+                InitializerExpression = h.InitializerExpression,
+                DeclarationOrder = h.DeclarationOrder,
+                Dependencies = h.Dependencies,
+                Scope = h.Scope,
+            })
+            .ToArray();
     }
 
     internal static IReadOnlyList<MemberTypeHint> BuildMemberTypeHints(
@@ -136,22 +186,39 @@ public static partial class LspSyntaxHelper
         return false;
     }
 
-    private static void CollectLocalsInScope(StatementSyntax anchorStatement, Dictionary<string, LocalSymbolHint> result)
+    private static void CollectLocalsInScope(
+        StatementSyntax anchorStatement,
+        Dictionary<string, LocalSymbolHint> result,
+        SemanticModel? semanticModel)
     {
+        var declarationOrder = 0;
         var visited = anchorStatement;
+        var scopeId = anchorStatement.FirstAncestorOrSelf<MemberDeclarationSyntax>()?.ToString();
+        var scopeChain = new List<SyntaxNode>();
 
         for (SyntaxNode? scope = anchorStatement.Parent; scope is not null; scope = scope.Parent)
         {
-            // Collect parameters from any enclosing method / constructor / local function.
-            CollectParametersFromScope(scope, result);
+            scopeChain.Add(scope);
+        }
 
+        // Collect parameter symbols first (outer-to-inner) so dependent locals
+        // (for example page/pageSize initialized from request.*) always sort after
+        // the parameters they depend on.
+        for (var i = scopeChain.Count - 1; i >= 0; i--)
+        {
+            CollectParametersFromScope(scopeChain[i], result, ref declarationOrder, scopeId);
+        }
+
+        for (var scopeIndex = 0; scopeIndex < scopeChain.Count; scopeIndex++)
+        {
+            var scope = scopeChain[scopeIndex];
             if (!TryGetStatementContainer(scope, out var statements))
                 continue;
 
             var anchorIndex = statements.FindIndex(s => ReferenceEquals(s, visited));
             if (anchorIndex >= 0)
             {
-                for (var i = anchorIndex - 1; i >= 0; i--)
+                for (var i = 0; i < anchorIndex; i++)
                 {
                     if (statements[i] is not LocalDeclarationStatementSyntax localDecl)
                         continue;
@@ -159,18 +226,26 @@ public static partial class LspSyntaxHelper
                     foreach (var variable in localDecl.Declaration.Variables)
                     {
                         var varName = variable.Identifier.ValueText;
-                        if (result.ContainsKey(varName)) continue;
-
-                        var typeName = GetTypeStringForDeclaration(localDecl.Declaration.Type, variable);
-                        if (typeName is not null)
+                        var typeName = GetTypeStringForDeclaration(localDecl.Declaration.Type, variable, semanticModel);
+                        if (typeName is null)
                         {
-                            result[varName] = new LocalSymbolHint
-                            {
-                                Name = varName,
-                                TypeName = typeName,
-                                Kind = "local",
-                            };
+                            continue;
                         }
+
+                        var initializerExpression = variable.Initializer?.Value is { } init
+                            ? NormalizeInitializerExpression(init)
+                            : null;
+
+                        result[varName] = new LocalSymbolHint
+                        {
+                            Name = varName,
+                            TypeName = typeName,
+                            Kind = "local",
+                            InitializerExpression = initializerExpression,
+                            DeclarationOrder = declarationOrder++,
+                            Dependencies = ExtractInitializerDependencies(variable, semanticModel),
+                            Scope = scopeId,
+                        };
                     }
                 }
             }
@@ -182,7 +257,11 @@ public static partial class LspSyntaxHelper
         }
     }
 
-    private static void CollectParametersFromScope(SyntaxNode scope, Dictionary<string, LocalSymbolHint> result)
+    private static void CollectParametersFromScope(
+        SyntaxNode scope,
+        Dictionary<string, LocalSymbolHint> result,
+        ref int declarationOrder,
+        string? scopeId)
     {
         ParameterListSyntax? paramList = scope switch
         {
@@ -207,18 +286,19 @@ public static partial class LspSyntaxHelper
                     Name = paramName,
                     TypeName = typeName!,
                     Kind = "lambda-parameter",
+                    DeclarationOrder = declarationOrder++,
+                    Scope = scopeId,
                 };
             }
         }
 
         if (paramList is null) return;
 
-        // Collect open generic type parameter names so we can skip method parameters whose
-        // declared types reference them. For example, in GetResults<TResult>(...,
-        // Expression<Func<Entity, TResult>> selector), the string "TResult" cannot be
-        // resolved inside the eval script and causes a compile error. Excluding the parameter
-        // from LocalVariableTypes lets the existing Expression<Func<...>> heuristic in
-        // BuildStubDeclaration generate a correct "_ => default!" stub instead.
+        // Collect open generic type parameter names so we can normalize parameter types that
+        // reference them. For example, in GetResults<TResult>(...,
+        // Expression<Func<Entity, TResult>> selector), "TResult" cannot be resolved in the
+        // daemon eval script. We replace open generic parameter names with "object" so Core
+        // can still build a deterministic typed stub without semantic-model binding.
         var openTypeParams = scope switch
         {
             MethodDeclarationSyntax { TypeParameterList: { } tpl } =>
@@ -236,35 +316,56 @@ public static partial class LspSyntaxHelper
             var typeName = param.Type.ToString();
             if (string.IsNullOrWhiteSpace(typeName)) continue;
 
-            // Skip parameters whose declared type contains an open generic type parameter name.
-            if (openTypeParams is not null &&
-                openTypeParams.Any(tp => typeName.Contains(tp, StringComparison.Ordinal)))
-            {
-                // Log: parameter skipped due to open generic type reference
-                System.Diagnostics.Debug.WriteLine(
-                    $"[LspSyntaxHelper] skip-param name={paramName} type={typeName} contains-open-generic");
-                continue;
-            }
+            if (openTypeParams is not null && openTypeParams.Count > 0)
+                typeName = ReplaceOpenGenericTypeParameters(typeName, openTypeParams);
 
             result[paramName] = new LocalSymbolHint
             {
                 Name = paramName,
                 TypeName = typeName,
                 Kind = scope is ParenthesizedLambdaExpressionSyntax ? "lambda-parameter" : "parameter",
+                DeclarationOrder = declarationOrder++,
+                Scope = scopeId,
             };
         }
     }
 
     private static string? GetTypeStringForDeclaration(TypeSyntax typeSyntax, VariableDeclaratorSyntax variable)
+        => GetTypeStringForDeclaration(typeSyntax, variable, semanticModel: null);
+
+    private static string? GetTypeStringForDeclaration(
+        TypeSyntax typeSyntax,
+        VariableDeclaratorSyntax variable,
+        SemanticModel? semanticModel)
     {
         // Explicit type declaration: int x = ..., Guid id = ..., List<string> names = ...
         if (typeSyntax is not IdentifierNameSyntax { IsVar: true })
             return typeSyntax.ToString();
 
         // var x = ... — try to infer from initializer expression.
-        return variable.Initializer?.Value is { } initializer
-            ? TryInferTypeFromInitializer(initializer)
-            : null;
+        if (variable.Initializer?.Value is { } initializer)
+        {
+            var syntaxType = TryInferTypeFromInitializer(initializer);
+            if (!string.IsNullOrWhiteSpace(syntaxType))
+                return syntaxType;
+        }
+
+        return TryInferVarTypeFromSemanticModel(variable, semanticModel);
+    }
+
+    private static string? TryInferVarTypeFromSemanticModel(
+        VariableDeclaratorSyntax variable,
+        SemanticModel? semanticModel)
+    {
+        if (semanticModel is null)
+            return null;
+
+        var symbol = semanticModel.GetDeclaredSymbol(variable) as ILocalSymbol;
+        var type = symbol?.Type;
+        if (type is null || type.TypeKind == TypeKind.Error)
+            return null;
+
+        return type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
     }
 
     private static string? TryInferTypeFromInitializer(ExpressionSyntax initializer) =>
@@ -307,29 +408,6 @@ public static partial class LspSyntaxHelper
             // $"..." is always System.String
             InterpolatedStringExpressionSyntax => "string",
 
-            // TypeName.Property — heuristic: PascalCase receiver is likely a type.
-            // Skip known static utility classes (e.g. Math.PI) for the same reason as
-            // the InvocationExpressionSyntax arm below: emitting "Math" as a type name
-            // causes the evaluator to block stub generation for the variable entirely.
-            MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax receiver }
-                when IsProbablyTypeName(receiver.Identifier.ValueText)
-                  && !IsKnownStaticUtilityClass(receiver.Identifier.ValueText)
-                => receiver.Identifier.ValueText,
-
-            // TypeName.Method(...)
-            // Only emit a type name when the receiver looks like a concrete instance type,
-            // not a static BCL utility class (Math, Convert, Enum, etc.). Static types
-            // cannot be instantiated as stubs, so returning their name here causes the
-            // evaluator to skip the variable entirely and then fail with an unknown-variable
-            // error. Returning null lets numeric/heuristic synthesis handle paging variables
-            // like `var page = Math.Max(...)` or `var clamped = Math.Clamp(...)`.
-            InvocationExpressionSyntax
-            {
-                Expression: MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax receiver2 }
-            } when IsProbablyTypeName(receiver2.Identifier.ValueText)
-                  && !IsKnownStaticUtilityClass(receiver2.Identifier.ValueText)
-                => receiver2.Identifier.ValueText,
-
             _ => null,
         };
 
@@ -344,23 +422,47 @@ public static partial class LspSyntaxHelper
         return "int";
     }
 
-    private static bool IsProbablyTypeName(string identifier) =>
-        !string.IsNullOrEmpty(identifier) && char.IsUpper(identifier[0]);
-
-    // Well-known BCL static utility classes whose methods return primitives or unrelated
-    // types. When an initializer like `var page = Math.Max(...)` is encountered, inferring
-    // the type as "Math" would cause the evaluator to skip stub generation for the variable.
-    // Returning null here lets numeric/heuristic synthesis produce a correct int/decimal stub.
-    private static readonly HashSet<string> _knownStaticUtilityClasses = new(StringComparer.Ordinal)
+    private static string ReplaceOpenGenericTypeParameters(string typeName, IReadOnlyCollection<string> openTypeParams)
     {
-        "Math", "Convert", "Enum", "BitConverter", "Buffer",
-        "GC", "GCSettings", "Environment", "Console",
-        "Path", "File", "Directory", "Interlocked",
-        "Monitor", "Mutex", "Semaphore", "Thread",
-        "Activator", "Marshal", "RuntimeHelpers",
-        "Regex", "Encoding", "Uri",
-    };
+        var rewritten = typeName;
+        foreach (var typeParam in openTypeParams)
+        {
+            if (string.IsNullOrWhiteSpace(typeParam))
+                continue;
 
-    private static bool IsKnownStaticUtilityClass(string identifier) =>
-        _knownStaticUtilityClasses.Contains(identifier);
+            rewritten = Regex.Replace(
+                rewritten,
+                $@"\b{Regex.Escape(typeParam)}\b",
+                "object",
+                RegexOptions.CultureInvariant);
+        }
+
+        return rewritten;
+    }
+
+    private static string NormalizeInitializerExpression(ExpressionSyntax initializer) =>
+        initializer.WithoutTrivia().NormalizeWhitespace().ToString();
+
+    private static IReadOnlyList<string> ExtractInitializerDependencies(
+        VariableDeclaratorSyntax variable,
+        SemanticModel? semanticModel)
+    {
+        if (semanticModel is null || variable.Initializer?.Value is not { } init)
+            return [];
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in init.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+        {
+            var symbol = semanticModel.GetSymbolInfo(id).Symbol;
+            if (symbol is ILocalSymbol or IParameterSymbol)
+            {
+                var name = id.Identifier.ValueText;
+                if (!string.Equals(name, variable.Identifier.ValueText, StringComparison.Ordinal))
+                    names.Add(name);
+            }
+        }
+
+        return names.OrderBy(n => n, StringComparer.Ordinal).ToArray();
+    }
+
 }

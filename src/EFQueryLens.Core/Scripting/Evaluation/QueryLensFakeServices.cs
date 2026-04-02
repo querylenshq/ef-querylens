@@ -93,7 +93,7 @@ internal abstract class QueryLensFakeServices
     }
 
     /// <summary>
-    /// Fake configuration section that acts as a null/empty fallback section.
+    /// Fake configuration section that acts as a null/empty section.
     /// </summary>
     internal sealed class ConfigurationSection : IConfigurationSection
     {

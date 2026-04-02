@@ -101,7 +101,6 @@ internal sealed partial class CompilationPipeline
         TimeSpan elapsed,
         IEnumerable<Assembly>? loadedAssemblies,
         CancellationToken ct,
-        ref bool includeGridifyFallbackExtensions,
         ref string workingExpression,
         ref int compilationRetryCount,
         out CSharpCompilation compilation)
@@ -127,8 +126,7 @@ internal sealed partial class CompilationPipeline
                 knownNamespaces,
                 knownTypes,
                 synthesizedUsingStaticTypes,
-                synthesizedUsingNamespaces,
-                includeGridifyFallbackExtensions);
+                synthesizedUsingNamespaces);
             lastSrc = src;
 
             if (_dumpSourceEnabled)
@@ -142,7 +140,7 @@ internal sealed partial class CompilationPipeline
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .ToList();
 
-            var hardErrors = errors.Where(e => e.Id is not ("CS0103" or "CS1061" or "CS1929" or "CS7036" or "CS0019" or "CS8122" or "CS0246" or "CS0234" or "CS0400" or "CS1503"
+            var hardErrors = errors.Where(e => e.Id is not ("CS1061" or "CS1929" or "CS7036" or "CS0019" or "CS8122" or "CS0246" or "CS0234" or "CS0400" or "CS1503"
                 or "CS0122")).ToList();
             if (hardErrors.Count > 0)
             {
@@ -192,8 +190,7 @@ internal sealed partial class CompilationPipeline
                 stubs,
                 synthesizedUsingStaticTypes,
                 synthesizedUsingNamespaces,
-                ref workingExpression,
-                ref includeGridifyFallbackExtensions);
+                ref workingExpression);
 
             if (!changed)
             {

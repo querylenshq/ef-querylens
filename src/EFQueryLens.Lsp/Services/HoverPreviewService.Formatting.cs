@@ -388,49 +388,52 @@ internal sealed partial class HoverPreviewService
 
     private static ExternalFormatterResponse? TryFormatWithExternalFormatter(string code)
     {
-        try
+        foreach (var processInfo in ResolveFormatterProcessStartInfos())
         {
-            var processInfo = ResolveFormatterProcessStartInfo();
-            if (processInfo is null)
+            try
             {
-                return null;
-            }
+                using var process = new Process { StartInfo = processInfo };
+                if (!process.Start())
+                {
+                    continue;
+                }
 
-            using var process = new Process { StartInfo = processInfo };
-            if (!process.Start())
+                var requestJson = JsonSerializer.Serialize(new ExternalFormatterRequest(code));
+                process.StandardInput.Write(requestJson);
+                process.StandardInput.Close();
+
+                var stdoutTask = process.StandardOutput.ReadToEndAsync();
+                var stderrTask = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(FormatterTimeoutMs))
+                {
+                    TryKillProcess(process);
+                    continue;
+                }
+
+                var stdout = stdoutTask.GetAwaiter().GetResult();
+                _ = stderrTask.GetAwaiter().GetResult();
+                if (string.IsNullOrWhiteSpace(stdout))
+                {
+                    continue;
+                }
+
+                var deserialized = JsonSerializer.Deserialize<ExternalFormatterResponse>(stdout);
+                if (deserialized is not null)
+                {
+                    return deserialized;
+                }
+            }
+            catch
             {
-                return null;
+                // Try next formatter host strategy.
             }
-
-            var requestJson = JsonSerializer.Serialize(new ExternalFormatterRequest(code));
-            process.StandardInput.Write(requestJson);
-            process.StandardInput.Close();
-
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
-
-            if (!process.WaitForExit(FormatterTimeoutMs))
-            {
-                TryKillProcess(process);
-                return null;
-            }
-
-            var stdout = stdoutTask.GetAwaiter().GetResult();
-            _ = stderrTask.GetAwaiter().GetResult();
-            if (string.IsNullOrWhiteSpace(stdout))
-            {
-                return null;
-            }
-
-            return JsonSerializer.Deserialize<ExternalFormatterResponse>(stdout);
         }
-        catch
-        {
-            return null;
-        }
+
+        return null;
     }
 
-    private static ProcessStartInfo? ResolveFormatterProcessStartInfo()
+    private static IEnumerable<ProcessStartInfo> ResolveFormatterProcessStartInfos()
     {
         var formatterDir = Path.Combine(AppContext.BaseDirectory, "formatter");
         var isWindows = OperatingSystem.IsWindows();
@@ -438,16 +441,14 @@ internal sealed partial class HoverPreviewService
         var exePath = Path.Combine(formatterDir, exeName);
         if (File.Exists(exePath))
         {
-            return CreateFormatterProcessStartInfo(exePath, string.Empty);
+            yield return CreateFormatterProcessStartInfo(exePath, string.Empty);
         }
 
         var dllPath = Path.Combine(formatterDir, "EFQueryLens.Formatter.dll");
-        if (!File.Exists(dllPath))
+        if (File.Exists(dllPath))
         {
-            return null;
+            yield return CreateFormatterProcessStartInfo("dotnet", $"\"{dllPath}\"");
         }
-
-        return CreateFormatterProcessStartInfo("dotnet", $"\"{dllPath}\"");
     }
 
     private static ProcessStartInfo CreateFormatterProcessStartInfo(string fileName, string arguments)

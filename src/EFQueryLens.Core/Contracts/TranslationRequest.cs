@@ -3,10 +3,33 @@ namespace EFQueryLens.Core.Contracts;
 public record TranslationRequest
 {
     /// <summary>
+    /// Request payload contract version for LSP -> daemon wire compatibility.
+    /// Daemon rejects requests that do not match <see cref="TranslationRequestContract.Version"/>.
+    /// </summary>
+    public int RequestContractVersion { get; init; } = TranslationRequestContract.Version;
+
+    /// <summary>
     /// LINQ expression as C# source text.
     /// Example: "db.Orders.Where(o => o.UserId == 5).Include(o => o.Items)"
     /// </summary>
     public required string Expression { get; init; }
+
+    /// <summary>
+    /// The source-authored expression as seen in the editor before LSP rewrites.
+    /// Optional: falls back to <see cref="Expression"/> when omitted.
+    /// </summary>
+    public string? OriginalExpression { get; init; }
+
+    /// <summary>
+    /// The LSP-authoritative rewritten expression to execute.
+    /// Optional: falls back to <see cref="Expression"/> when omitted.
+    /// </summary>
+    public string? RewrittenExpression { get; init; }
+
+    /// <summary>
+    /// Names of LSP rewrite passes that were applied (for diagnostics/telemetry).
+    /// </summary>
+    public IReadOnlyList<string> RewriteFlags { get; init; } = [];
 
     public required string AssemblyPath { get; init; }
 
@@ -36,31 +59,14 @@ public record TranslationRequest
     public IReadOnlyList<string> UsingStaticTypes { get; init; } = [];
 
     /// <summary>
-    /// CLR type name strings for local variables visible at the cursor position,
-    /// extracted by the LSP from the source file's syntax tree.
-    /// The engine uses these as authoritative types when synthesising stub declarations,
-    /// falling back to heuristics only for variables absent from this map.
+    /// Authoritative local symbol graph extracted by LSP at the expression origin scope.
+    /// Daemon uses this graph as the sole source for local variable declaration synthesis.
     /// </summary>
-    public IReadOnlyDictionary<string, string> LocalVariableTypes { get; init; } =
-        new Dictionary<string, string>(StringComparer.Ordinal);
+    public IReadOnlyList<LocalSymbolGraphEntry> LocalSymbolGraph { get; init; } = [];
 
     /// <summary>
-    /// Rich local symbol hints extracted by the LSP at the hover position.
-    /// Includes symbol kind/scope and preserves source-authored type strings.
-    /// Core prefers these hints over heuristic inference.
-    /// </summary>
-    public IReadOnlyList<LocalSymbolHint> LocalSymbolHints { get; init; } = [];
-
-    /// <summary>
-    /// Member-level type hints keyed by receiver/member names
-    /// (for example: <c>minTotal.HasValue -> bool</c>, <c>minTotal.Value -> decimal</c>).
-    /// Lets Core synthesize object-member stubs without name-based guesses.
-    /// </summary>
-    public IReadOnlyList<MemberTypeHint> MemberTypeHints { get; init; } = [];
-
-    /// <summary>
-    /// When true, generates and invokes an async runner method (<c>RunAsync</c>)
-    /// without sync fallback. Default is false for compatibility.
+    /// When true, generates and invokes an async runner method (<c>RunAsync</c>).
+    /// Default is false for compatibility with existing execution flow.
     /// </summary>
     public bool UseAsyncRunner { get; init; } = false;
 
@@ -85,6 +91,17 @@ public record TranslationRequest
     /// Used by daemon for validation and debugging; enables cross-version compatibility checks.
     /// </summary>
     public ParsedExpressionMetadata? ExpressionMetadata { get; init; }
+
+    /// <summary>
+    /// Source origin where the final executable expression was extracted from.
+    /// For helper extraction this points to helper-method source, not call-site source.
+    /// </summary>
+    public ExtractionOriginSnapshot? ExtractionOrigin { get; init; }
+}
+
+public static class TranslationRequestContract
+{
+    public const int Version = 2;
 }
 
 /// <summary>
@@ -163,7 +180,7 @@ public record ParsedExpressionMetadata
 
     /// <summary>
     /// LSP's confidence that this is a valid LINQ query chain (0.0 to 1.0).
-    /// High confidence = recognized pattern (method chain); low = heuristic fallback.
+    /// High confidence = recognized pattern (method chain); low = ambiguous extraction.
     /// Helpful for daemon diagnostics.
     /// </summary>
     public double Confidence { get; init; } = 1.0;
@@ -177,6 +194,37 @@ public sealed record LocalSymbolHint
     public required string Name { get; init; }
     public required string TypeName { get; init; }
     public string Kind { get; init; } = "local";
+    public string? InitializerExpression { get; init; }
+    public int DeclarationOrder { get; init; }
+    public IReadOnlyList<string> Dependencies { get; init; } = [];
+    public string? Scope { get; init; }
+}
+
+/// <summary>
+/// Deterministic symbol graph node for local/parameter symbols required by extracted expression.
+/// </summary>
+public sealed record LocalSymbolGraphEntry
+{
+    public required string Name { get; init; }
+    public required string TypeName { get; init; }
+    public string Kind { get; init; } = "local";
+    public string? InitializerExpression { get; init; }
+    public int DeclarationOrder { get; init; }
+    public IReadOnlyList<string> Dependencies { get; init; } = [];
+    public string? Scope { get; init; }
+}
+
+/// <summary>
+/// Source location snapshot where executable expression origin was resolved.
+/// </summary>
+public sealed record ExtractionOriginSnapshot
+{
+    public string? FilePath { get; init; }
+    public int Line { get; init; }
+    public int Character { get; init; }
+    public int EndLine { get; init; }
+    public int EndCharacter { get; init; }
+    public string? Scope { get; init; }
 }
 
 /// <summary>

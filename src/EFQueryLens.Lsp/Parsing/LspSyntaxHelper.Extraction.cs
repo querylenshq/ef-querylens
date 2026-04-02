@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using EFQueryLens.Core.Contracts;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -9,13 +10,75 @@ namespace EFQueryLens.Lsp.Parsing;
 
 public static partial class LspSyntaxHelper
 {
+    public sealed record LinqExtractionResult(
+        string Expression,
+        string ContextVariableName,
+        string? CallSiteExpression,
+        ExtractionOriginSnapshot Origin);
+
+    public static LinqExtractionResult? TryExtractLinqExpressionDetailed(
+        string sourceText,
+        string filePath,
+        int line,
+        int character,
+        ProjectSourceIndex? sourceIndex = null)
+    {
+        var expression = TryExtractLinqExpression(
+            sourceText,
+            line,
+            character,
+            out var contextVariableName,
+            out var callSiteExpression,
+            out var extractionOrigin,
+            sourceIndex);
+
+        if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
+            return null;
+
+        return new LinqExtractionResult(
+            expression,
+            contextVariableName!,
+            callSiteExpression,
+            extractionOrigin is null
+                ? new ExtractionOriginSnapshot
+                {
+                    FilePath = filePath,
+                    Line = line,
+                    Character = character,
+                    EndLine = line,
+                    EndCharacter = character,
+                    Scope = "hover",
+                }
+                : extractionOrigin with
+                {
+                    FilePath = string.IsNullOrWhiteSpace(extractionOrigin.FilePath)
+                        ? filePath
+                        : extractionOrigin.FilePath,
+                });
+    }
+
     public static string? TryExtractLinqExpression(string sourceText, int line, int character,
         out string? contextVariableName,
         out string? callSiteExpression,
         ProjectSourceIndex? sourceIndex = null)
+        => TryExtractLinqExpression(
+            sourceText,
+            line,
+            character,
+            out contextVariableName,
+            out callSiteExpression,
+            out _,
+            sourceIndex);
+
+    public static string? TryExtractLinqExpression(string sourceText, int line, int character,
+        out string? contextVariableName,
+        out string? callSiteExpression,
+        out ExtractionOriginSnapshot? extractionOrigin,
+        ProjectSourceIndex? sourceIndex = null)
     {
         contextVariableName = null;
         callSiteExpression = null;
+        extractionOrigin = null;
 
         var tree = CSharpSyntaxTree.ParseText(sourceText);
         var root = tree.GetRoot();
@@ -89,10 +152,12 @@ public static partial class LspSyntaxHelper
                     position,
                     out var synthesizedExpression,
                     out var synthesizedContextVariableName,
-                        sourceIndex))
+                    out var helperOrigin,
+                    sourceIndex))
             {
                 contextVariableName = synthesizedContextVariableName;
                 callSiteExpression = finalInvocation.ToString();
+                extractionOrigin = helperOrigin;
                 return synthesizedExpression;
             }
 
@@ -102,10 +167,12 @@ public static partial class LspSyntaxHelper
                     position,
                     out synthesizedExpression,
                     out synthesizedContextVariableName,
+                    out helperOrigin,
                     sourceIndex))
             {
                 contextVariableName = synthesizedContextVariableName;
                 callSiteExpression = finalInvocation.ToString();
+                extractionOrigin = helperOrigin;
                 return synthesizedExpression;
             }
 
@@ -173,6 +240,7 @@ public static partial class LspSyntaxHelper
                 position,
                 out var helperExpression,
                 out var helperContextVariableName,
+                out var helperOrigin,
                 sourceIndex))
             {
                 try
@@ -182,6 +250,7 @@ public static partial class LspSyntaxHelper
                         ?? targetExpression.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>().FirstOrDefault();
                     contextVariableName = helperContextVariableName;
                     callSiteExpression = chainInvocation.ToString();
+                    extractionOrigin = helperOrigin;
                 }
                 catch
                 {
@@ -221,6 +290,11 @@ public static partial class LspSyntaxHelper
         // compile-retry loop sees a clean expression.  This is safe to do here
         // because these rewrites are purely syntactic and do not require runtime model
         // or assembly information.
+        if (extractionOrigin is null)
+        {
+            extractionOrigin = BuildExtractionOriginSnapshot(targetExpression, "hover-query");
+        }
+
         return PreNormalizeExtractedExpression(candidateExpression);
     }
 
@@ -451,11 +525,6 @@ public static partial class LspSyntaxHelper
             return false;
         }
 
-        if (LooksLikeDbContextRoot(receiver.Identifier.ValueText))
-        {
-            return true;
-        }
-
         var anchorStatement = invocation.FirstAncestorOrSelf<StatementSyntax>();
         if (anchorStatement is null)
         {
@@ -495,10 +564,8 @@ public static partial class LspSyntaxHelper
             }
 
             var methodName = memberAccess.Name.Identifier.ValueText;
-            var receiverRoot = TryExtractRootContextVariable(memberAccess.Expression);
             if (!QueryChainMethods.Contains(methodName)
                 && !TerminalMethods.Contains(methodName)
-                && !LooksLikeDbContextRoot(receiverRoot)
                 && current.Span.Contains(cursorPosition))
             {
                 helperInvocation = current;
@@ -534,26 +601,18 @@ public static partial class LspSyntaxHelper
         }
     }
 
-    private static bool LooksLikeDbContextRoot(string? rootName)
-    {
-        if (string.IsNullOrWhiteSpace(rootName))
-        {
-            return false;
-        }
-
-        return KnownDbContextRootNames.Contains(rootName);
-    }
-
     private static bool TryExtractFromExpressionParameterHelperCall(
         SyntaxNode root,
         InvocationExpressionSyntax invocation,
         int cursorPosition,
         out string expression,
         out string? contextVariableName,
+        out ExtractionOriginSnapshot? extractionOrigin,
         ProjectSourceIndex? sourceIndex = null)
     {
         expression = string.Empty;
         contextVariableName = null;
+        extractionOrigin = null;
 
         var helperName = GetInvokedMethodName(invocation);
         if (string.IsNullOrWhiteSpace(helperName))
@@ -601,7 +660,7 @@ public static partial class LspSyntaxHelper
             // The downstream guards (TryFindPrimaryQueryInvocation, IsLikelyQueryChain)
             // already reject methods whose bodies contain no EF query chain, so no
             // additional position narrowing is needed here.
-            if (!invocation.Span.Contains(cursorPosition))
+            if (!IsCursorRelevantToInvocation(cursorPosition, invocation))
             {
                 continue;
             }
@@ -614,6 +673,7 @@ public static partial class LspSyntaxHelper
 
             ExpressionSyntax queryExpression = queryInvocation;
             queryExpression = TryInlineLocalQueryRoot(queryExpression, queryInvocation);
+            queryExpression = TryInlineLocalIdentifierReferences(queryExpression, queryInvocation);
             queryExpression = StripTransparentQueryableCasts(queryExpression);
 
             var queryText = queryExpression.ToString();
@@ -656,6 +716,7 @@ public static partial class LspSyntaxHelper
 
             expression = parsed.ToString();
             contextVariableName = rootContext;
+            extractionOrigin = BuildExtractionOriginSnapshot(queryInvocation, "helper-method");
             return true;
         }
 
@@ -668,10 +729,12 @@ public static partial class LspSyntaxHelper
         int cursorPosition,
         out string expression,
         out string? contextVariableName,
+        out ExtractionOriginSnapshot? extractionOrigin,
         ProjectSourceIndex? sourceIndex = null)
     {
         expression = string.Empty;
         contextVariableName = null;
+        extractionOrigin = null;
 
         var helperName = GetInvokedMethodName(invocation);
         if (string.IsNullOrWhiteSpace(helperName))
@@ -703,7 +766,7 @@ public static partial class LspSyntaxHelper
 
         foreach (var method in candidates)
         {
-            if (!invocation.Span.Contains(cursorPosition))
+            if (!IsCursorRelevantToInvocation(cursorPosition, invocation))
             {
                 continue;
             }
@@ -721,6 +784,7 @@ public static partial class LspSyntaxHelper
 
             ExpressionSyntax queryExpression = queryInvocation;
             queryExpression = TryInlineLocalQueryRoot(queryExpression, queryInvocation);
+            queryExpression = TryInlineLocalIdentifierReferences(queryExpression, queryInvocation);
             queryExpression = StripTransparentQueryableCasts(queryExpression);
 
             var queryText = queryExpression.ToString();
@@ -763,6 +827,7 @@ public static partial class LspSyntaxHelper
 
             expression = parsed.ToString();
             contextVariableName = rootContext;
+            extractionOrigin = BuildExtractionOriginSnapshot(queryInvocation, "helper-method");
             return true;
         }
 
@@ -779,6 +844,52 @@ public static partial class LspSyntaxHelper
 
         return returnTypeText.Contains("IQueryable<", StringComparison.Ordinal)
                || returnTypeText.Contains("IOrderedQueryable<", StringComparison.Ordinal);
+    }
+
+    private static bool IsCursorRelevantToInvocation(int cursorPosition, InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Span.Contains(cursorPosition))
+        {
+            return true;
+        }
+
+        var declarator = invocation.FirstAncestorOrSelf<VariableDeclaratorSyntax>();
+        if (declarator is not null
+            && declarator.Identifier.Span.Contains(cursorPosition)
+            && declarator.Initializer?.Value is not null
+            && declarator.Initializer.Value.Span.Contains(invocation.Span))
+        {
+            return true;
+        }
+
+        var assignment = invocation.FirstAncestorOrSelf<AssignmentExpressionSyntax>();
+        if (assignment is not null
+            && assignment.Left.Span.Contains(cursorPosition)
+            && assignment.Right.Span.Contains(invocation.Span))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static ExtractionOriginSnapshot BuildExtractionOriginSnapshot(
+        SyntaxNode node,
+        string scope)
+    {
+        var lineSpan = node.GetLocation().GetLineSpan();
+        var start = lineSpan.StartLinePosition;
+        var end = lineSpan.EndLinePosition;
+
+        return new ExtractionOriginSnapshot
+        {
+            FilePath = lineSpan.Path,
+            Line = start.Line,
+            Character = start.Character,
+            EndLine = end.Line,
+            EndCharacter = end.Character,
+            Scope = scope,
+        };
     }
 
     private static bool TryGetRhsExpressionFromDeclarationOrAssignment(
@@ -1006,5 +1117,53 @@ public static partial class LspSyntaxHelper
         }
 
         return result;
+    }
+
+    private static ExpressionSyntax TryInlineLocalIdentifierReferences(
+        ExpressionSyntax expression,
+        InvocationExpressionSyntax queryInvocation)
+    {
+        var anchorStatement = queryInvocation.FirstAncestorOrSelf<StatementSyntax>();
+        if (anchorStatement is null)
+            return expression;
+
+        var rewritten = new LocalIdentifierInliner(anchorStatement).Visit(expression) as ExpressionSyntax;
+        return rewritten ?? expression;
+    }
+
+    private sealed class LocalIdentifierInliner : CSharpSyntaxRewriter
+    {
+        private readonly StatementSyntax _anchorStatement;
+
+        public LocalIdentifierInliner(StatementSyntax anchorStatement)
+        {
+            _anchorStatement = anchorStatement;
+        }
+
+        public override SyntaxNode? VisitIdentifierName(IdentifierNameSyntax node)
+        {
+            if (node.Parent is MemberAccessExpressionSyntax memberAccess
+                && ReferenceEquals(memberAccess.Name, node))
+            {
+                return node;
+            }
+
+            if (!TryResolveLocalExpressionCore(
+                    node.Identifier.ValueText,
+                    _anchorStatement,
+                    out var resolvedExpression,
+                    out _))
+            {
+                return node;
+            }
+
+            if (resolvedExpression is IdentifierNameSyntax id
+                && string.Equals(id.Identifier.ValueText, node.Identifier.ValueText, StringComparison.Ordinal))
+            {
+                return node;
+            }
+
+            return SyntaxFactory.ParenthesizedExpression(resolvedExpression.WithoutTrivia());
+        }
     }
 }

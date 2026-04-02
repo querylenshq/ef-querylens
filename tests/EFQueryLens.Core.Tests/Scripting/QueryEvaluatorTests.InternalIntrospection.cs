@@ -137,7 +137,6 @@ public partial class QueryEvaluatorTests
                 new HashSet<string>(StringComparer.Ordinal),
                 Array.Empty<string>(),
                 Array.Empty<string>(),
-                false,
             ]) as string;
 
         Assert.False(string.IsNullOrWhiteSpace(source));
@@ -190,7 +189,6 @@ public partial class QueryEvaluatorTests
                 },
                 Array.Empty<string>(),
                 Array.Empty<string>(),
-                false,
             ]) as string;
 
         Assert.False(string.IsNullOrWhiteSpace(source));
@@ -268,10 +266,16 @@ public partial class QueryEvaluatorTests
             {
                 ["Ent"] = "SampleMySqlApp.Domain.Entities",
             },
-            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["minId"] = "int",
-            },
+            LocalSymbolGraph =
+            [
+                new LocalSymbolGraphEntry
+                {
+                    Name = "minId",
+                    TypeName = "int",
+                    Kind = "local",
+                    DeclarationOrder = 0,
+                },
+            ],
             UsingContextSnapshot = new UsingContextSnapshot
             {
                 Imports = ["System.Linq", "SampleMySqlApp.Domain.Entities"],
@@ -346,11 +350,23 @@ public partial class QueryEvaluatorTests
                 ["B"] = "Namespace.B",
                 ["A"] = "Namespace.A",
             },
-            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["z"] = "int",
-                ["a"] = "int",
-            },
+            LocalSymbolGraph =
+            [
+                new LocalSymbolGraphEntry
+                {
+                    Name = "z",
+                    TypeName = "int",
+                    Kind = "local",
+                    DeclarationOrder = 1,
+                },
+                new LocalSymbolGraphEntry
+                {
+                    Name = "a",
+                    TypeName = "int",
+                    Kind = "local",
+                    DeclarationOrder = 0,
+                },
+            ],
         };
 
         var requestB = new TranslationRequest
@@ -363,11 +379,23 @@ public partial class QueryEvaluatorTests
                 ["A"] = "Namespace.A",
                 ["B"] = "Namespace.B",
             },
-            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["a"] = "int",
-                ["z"] = "int",
-            },
+            LocalSymbolGraph =
+            [
+                new LocalSymbolGraphEntry
+                {
+                    Name = "a",
+                    TypeName = "int",
+                    Kind = "local",
+                    DeclarationOrder = 0,
+                },
+                new LocalSymbolGraphEntry
+                {
+                    Name = "z",
+                    TypeName = "int",
+                    Kind = "local",
+                    DeclarationOrder = 1,
+                },
+            ],
         };
 
         var hashA = InvokeComputeRequestHash(requestA);

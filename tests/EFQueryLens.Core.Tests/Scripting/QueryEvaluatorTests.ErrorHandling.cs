@@ -76,7 +76,17 @@ public partial class QueryEvaluatorTests
             "    )" +
             "    .ToListAsync(ct)";
 
-        var result = await TranslateAsync(expression, additionalImports: ["SampleMySqlApp.Application.Orders"], useAsyncRunner: true, ct: TestContext.Current.CancellationToken);
+        var result = await TranslateStrictAsync(
+            expression,
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["customerId"] = "System.Guid",
+                ["utcNow"] = "System.DateTime",
+                ["ct"] = "System.Threading.CancellationToken",
+            },
+            additionalImports: ["SampleMySqlApp.Application.Orders"],
+            useAsyncRunner: true,
+            ct: TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         Assert.NotNull(result.ErrorMessage);
@@ -106,8 +116,14 @@ public partial class QueryEvaluatorTests
             ")" +
             ".ToListAsync(ct)";
 
-        var result = await TranslateAsync(
+        var result = await TranslateStrictAsync(
             expression,
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["customerId"] = "System.Guid",
+                ["utcNow"] = "System.DateTime",
+                ["ct"] = "System.Threading.CancellationToken",
+            },
             additionalImports: ["SampleMySqlApp.Application.Orders"],
             useAsyncRunner: true);
 
@@ -134,8 +150,14 @@ public partial class QueryEvaluatorTests
             ".ToListAsync(ct)";
 
         var normalized = LspSyntaxHelper.PreNormalizeExtractedExpression(expression);
-        var result = await TranslateAsync(
+        var result = await TranslateStrictAsync(
             normalized,
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["customerId"] = "System.Guid",
+                ["utcNow"] = "System.DateTime",
+                ["ct"] = "System.Threading.CancellationToken",
+            },
             additionalImports: ["SampleMySqlApp.Application.Orders"],
             useAsyncRunner: true,
             ct: TestContext.Current.CancellationToken);

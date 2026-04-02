@@ -1,4 +1,6 @@
 using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Scripting.Compilation;
+using System.Reflection;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
@@ -7,18 +9,75 @@ internal static partial class StubSynthesizer
     // Stub generation and type inference helpers extracted from QueryEvaluator.cs
     // to keep EvaluateAsync flow readable.
 
+    internal static List<string> BuildInitialStubs(TranslationRequest request, Type dbContextType)
+    {
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+        if (dbContextType is null)
+            throw new ArgumentNullException(nameof(dbContextType));
+
+        var stubs = new List<string>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var rootId = ImportResolver.TryExtractRootIdentifier(request.Expression);
+        var graph = request.LocalSymbolGraph;
+
+        foreach (var hint in graph.OrderBy(h => h.DeclarationOrder))
+        {
+            if (string.IsNullOrWhiteSpace(hint.Name))
+                continue;
+            if (seenNames.Contains(hint.Name))
+                continue;
+            if (string.Equals(hint.Name, request.ContextVariableName, StringComparison.Ordinal))
+                continue;
+            if (request.UseAsyncRunner && IsCancellationTokenTypeName(hint.TypeName))
+                continue;
+
+            var stub = BuildStubDeclaration(hint.Name, rootId, request, dbContextType);
+            if (string.IsNullOrWhiteSpace(stub))
+                continue;
+
+            stubs.Add(stub);
+            seenNames.Add(hint.Name);
+        }
+
+        return stubs;
+    }
+
+    private static bool IsCancellationTokenTypeName(string? typeName)
+    {
+        if (string.IsNullOrWhiteSpace(typeName))
+            return false;
+
+        var normalized = typeName.Replace("global::", string.Empty, StringComparison.Ordinal).Trim();
+        return string.Equals(normalized, "System.Threading.CancellationToken", StringComparison.Ordinal)
+               || string.Equals(normalized, "CancellationToken", StringComparison.Ordinal);
+    }
+
     internal static string BuildStubDeclaration(
         string name, string? rootId, TranslationRequest request, Type dbContextType)
     {
-        var expressionForInference = PreprocessExpressionForInference(request.Expression);
-
         if (!string.IsNullOrWhiteSpace(rootId)
             && string.Equals(name, rootId, StringComparison.Ordinal)
             && !string.Equals(name, request.ContextVariableName, StringComparison.Ordinal))
             return $"var {name} = {request.ContextVariableName};";
 
-        var hintedTypeName = request.LocalSymbolHints
-            .FirstOrDefault(h => string.Equals(h.Name, name, StringComparison.Ordinal))?.TypeName;
+        var localHint = request.LocalSymbolGraph
+            .FirstOrDefault(h => string.Equals(h.Name, name, StringComparison.Ordinal));
+
+        var hintedTypeName = localHint?.TypeName;
+        if (!string.IsNullOrWhiteSpace(localHint?.InitializerExpression))
+        {
+            var initializerStub = BuildStubFromInitializer(
+                name,
+                hintedTypeName,
+                localHint!.InitializerExpression!,
+                dbContextType,
+                request.UsingAliases);
+
+            if (!string.IsNullOrWhiteSpace(initializerStub))
+                return initializerStub;
+        }
+
         if (!string.IsNullOrWhiteSpace(hintedTypeName))
         {
             var hintedStub = BuildStubFromTypeName(hintedTypeName!, name, dbContextType, request.UsingAliases);
@@ -26,133 +85,9 @@ internal static partial class StubSynthesizer
                 return hintedStub;
         }
 
-        // Use LSP-provided authoritative type when available — skip heuristics entirely.
-        if (request.LocalVariableTypes.TryGetValue(name, out var knownTypeName)
-            && !string.IsNullOrWhiteSpace(knownTypeName))
-        {
-            var knownTypeStub = BuildStubFromTypeName(knownTypeName, name, dbContextType, request.UsingAliases);
-            if (!string.IsNullOrWhiteSpace(knownTypeStub))
-                return knownTypeStub;
-            // The LSP hint resolved to an uninstantiable type (e.g. a static class like Math).
-            // Fall through to expression-based heuristics — usage context such as Skip/Take
-            // numeric arguments can infer the correct type without a valid LSP type name.
-        }
-
-        // Gridify placeholders must win over generic member-access synthesis.
-        // `query` is commonly used both as IGridifyQuery and as `query.Page` / `query.PageSize`.
-        // If we synthesize it as anonymous object first, extension calls fail with CS1503.
-        if (TryBuildGridifyStubDeclaration(name, expressionForInference, dbContextType, out var gridifyStub))
-            return gridifyStub;
-
-        var memberTypes = BuildMemberTypesFromHints(name, request, dbContextType);
-        foreach (var kv in InferMemberAccessTypes(name, expressionForInference, dbContextType, request.UsingAliases))
-        {
-            if (!memberTypes.ContainsKey(kv.Key))
-                memberTypes[kv.Key] = kv.Value;
-        }
-        if (memberTypes.Count > 0)
-        {
-            var memberInitializers = string.Join(
-                ", ",
-                memberTypes.Select(kvp =>
-                    $"{kvp.Key} = {BuildScalarPlaceholderExpression(kvp.Value)}"));
-
-            return $"var {name} = new {{ {memberInitializers} }};";
-        }
-
-        var inferred = InferVariableType(name, expressionForInference, dbContextType);
-        inferred ??= InferMethodArgumentType(name, expressionForInference, dbContextType);
-        inferred ??= InferComparisonOperandType(name, expressionForInference, dbContextType);
-        if (inferred is not null)
-        {
-            if (IsStaticClassType(inferred))
-                return string.Empty;
-
-            var tn = ToCSharpTypeName(inferred);
-            var value = BuildScalarPlaceholderExpression(inferred);
-            return $"{tn} {name} = {value};";
-        }
-
-        if (LooksLikeBooleanConditionIdentifier(name, expressionForInference))
-            return $"bool {name} = true;";
-
-        if (LooksLikeNumericArithmeticIdentifier(name, expressionForInference))
-            return $"int {name} = 1;";
-
-        var elem = InferContainsElementType(name, expressionForInference, dbContextType);
-        if (elem is not null)
-        {
-            var en = ToCSharpTypeName(elem);
-            var containsValues = BuildContainsPlaceholderValues(elem);
-            return $"System.Collections.Generic.List<{en}> {name} = new() {{ {containsValues} }};";
-        }
-
-        var sel = InferSelectEntityType(name, expressionForInference, dbContextType);
-        if (sel is not null)
-        {
-            var sn = ToCSharpTypeName(sel);
-            return $"System.Linq.Expressions.Expression<System.Func<{sn}, object>> {name} = _ => default!;";
-        }
-
-        var whereEntity = InferWhereEntityType(name, expressionForInference, dbContextType);
-        if (whereEntity is not null)
-        {
-            var wn = ToCSharpTypeName(whereEntity);
-            return $"System.Linq.Expressions.Expression<System.Func<{wn}, bool>> {name} = _ => true;";
-        }
-
-        if (LooksLikeCancellationTokenArgument(name, expressionForInference))
-            return $"System.Threading.CancellationToken {name} = default;";
-
-        return $"object {name} = default;";
-    }
-
-    private static string PreprocessExpressionForInference(string expression)
-    {
-        if (string.IsNullOrWhiteSpace(expression))
-            return expression;
-
-        // LSP semantic-dedup preamble is emitted as line comments ("// var ...").
-        // Remove comment-only lines before regex/AST heuristics so query-root
-        // detection still sees the actual LINQ chain head.
-        var filteredLines = expression
-            .Split('\n')
-            .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal));
-
-        return string.Join("\n", filteredLines);
-    }
-
-    private static Dictionary<string, Type> BuildMemberTypesFromHints(
-        string variableName,
-        TranslationRequest request,
-        Type dbContextType)
-    {
-        var result = new Dictionary<string, Type>(StringComparer.Ordinal);
-
-        foreach (var hint in request.MemberTypeHints.Where(h =>
-                     string.Equals(h.ReceiverName, variableName, StringComparison.Ordinal)
-                     && !string.IsNullOrWhiteSpace(h.MemberName)
-                     && !string.IsNullOrWhiteSpace(h.TypeName)))
-        {
-            var resolved = TryResolveStubType(hint.TypeName, dbContextType, request.UsingAliases);
-            if (resolved is null)
-            {
-                resolved = hint.TypeName switch
-                {
-                    "bool" or "System.Boolean" => typeof(bool),
-                    "string" or "System.String" => typeof(string),
-                    "int" or "System.Int32" => typeof(int),
-                    "long" or "System.Int64" => typeof(long),
-                    "decimal" or "System.Decimal" => typeof(decimal),
-                    _ => null,
-                };
-            }
-
-            if (resolved is not null && !result.ContainsKey(hint.MemberName))
-                result[hint.MemberName] = resolved;
-        }
-
-        return result;
+        // Strict semantic mode only: if LSP did not provide a deterministic type/member hint
+        // for this symbol, let compile diagnostics surface the missing symbol.
+        return string.Empty;
     }
 
     internal static string BuildStubFromTypeName(
@@ -177,6 +112,18 @@ internal static partial class StubSynthesizer
         {
             var underlying = ToCSharpTypeName(resolvedType!);
             return $"{underlying}? {varName} = {BuildScalarPlaceholderExpression(resolvedType!)};";
+        }
+
+        if (string.Equals(normalizedTypeName, "Gridify.IGridifyQuery", StringComparison.Ordinal)
+            || string.Equals(normalizedTypeName, "global::Gridify.IGridifyQuery", StringComparison.Ordinal))
+        {
+            return $"{normalizedTypeName} {varName} = new global::Gridify.GridifyQuery();";
+        }
+
+        if (normalizedTypeName.StartsWith("Gridify.IGridifyMapper<", StringComparison.Ordinal)
+            || normalizedTypeName.StartsWith("global::Gridify.IGridifyMapper<", StringComparison.Ordinal))
+        {
+            return $"{normalizedTypeName} {varName} = null!;";
         }
 
         return normalizedTypeName switch
@@ -249,16 +196,18 @@ internal static partial class StubSynthesizer
             return aliasType;
 
         var aliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal);
-        var resolved = ResolveTypeFromName(normalized, dbContextType, aliases);
+        var expanded = ExpandAlias(normalized, aliases);
+
+        var resolved = ResolveTypeFromName(expanded, dbContextType, aliases);
         if (resolved is not null)
             return resolved;
 
-        resolved = Type.GetType(normalized, throwOnError: false, ignoreCase: false);
+        resolved = Type.GetType(expanded, throwOnError: false, ignoreCase: false);
         if (resolved is not null)
             return resolved;
 
-        if (!normalized.Contains('.', StringComparison.Ordinal))
-            return Type.GetType($"System.{normalized}", throwOnError: false, ignoreCase: false);
+        if (!expanded.Contains('.', StringComparison.Ordinal))
+            return Type.GetType($"System.{expanded}", throwOnError: false, ignoreCase: false);
 
         return null;
     }
@@ -286,6 +235,62 @@ internal static partial class StubSynthesizer
         };
 
         return type is not null;
+    }
+
+    private static Type? ResolveTypeFromName(
+        string typeName,
+        Type dbContextType,
+        IReadOnlyDictionary<string, string> usingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(typeName))
+            return null;
+
+        var expanded = ExpandAlias(typeName.Trim(), usingAliases);
+
+        var direct = dbContextType.Assembly.GetType(expanded, throwOnError: false, ignoreCase: false);
+        if (direct is not null)
+            return direct;
+
+        if (expanded.Contains('.', StringComparison.Ordinal))
+            return null;
+
+        var fullNameSuffix = $".{expanded}";
+        try
+        {
+            return dbContextType.Assembly
+                .GetTypes()
+                .FirstOrDefault(t =>
+                    string.Equals(t.Name, expanded, StringComparison.Ordinal)
+                    || (t.FullName is not null && t.FullName.EndsWith(fullNameSuffix, StringComparison.Ordinal)));
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types
+                .Where(t => t is not null)
+                .Select(t => t!)
+                .FirstOrDefault(t =>
+                    string.Equals(t.Name, expanded, StringComparison.Ordinal)
+                    || (t.FullName is not null && t.FullName.EndsWith(fullNameSuffix, StringComparison.Ordinal)));
+        }
+    }
+
+    private static string ExpandAlias(string typeName, IReadOnlyDictionary<string, string> usingAliases)
+    {
+        if (usingAliases.Count == 0)
+            return typeName;
+
+        if (usingAliases.TryGetValue(typeName, out var exactAlias) && !string.IsNullOrWhiteSpace(exactAlias))
+            return exactAlias;
+
+        var dotIndex = typeName.IndexOf('.');
+        if (dotIndex <= 0)
+            return typeName;
+
+        var alias = typeName[..dotIndex];
+        if (!usingAliases.TryGetValue(alias, out var aliasExpansion) || string.IsNullOrWhiteSpace(aliasExpansion))
+            return typeName;
+
+        return aliasExpansion + typeName[dotIndex..];
     }
 
     private static bool IsStaticClassType(Type? type)
@@ -332,6 +337,38 @@ internal static partial class StubSynthesizer
         return t.EndsWith(", bool>>", StringComparison.Ordinal)
             || t.EndsWith(",bool>>", StringComparison.Ordinal)
             || t.EndsWith(", bool?>>", StringComparison.Ordinal);
+    }
+
+    private static string BuildStubFromInitializer(
+        string variableName,
+        string? hintedTypeName,
+        string initializerExpression,
+        Type dbContextType,
+        IReadOnlyDictionary<string, string>? usingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(initializerExpression))
+            return string.Empty;
+
+        if (RequiresTargetType(initializerExpression)
+            && !string.IsNullOrWhiteSpace(hintedTypeName)
+            && !string.Equals(hintedTypeName, "?", StringComparison.Ordinal))
+        {
+            var normalizedTypeName = hintedTypeName.Trim();
+            var resolvedType = TryResolveStubType(normalizedTypeName, dbContextType, usingAliases);
+            if (IsStaticClassType(resolvedType))
+                return string.Empty;
+
+            return $"{normalizedTypeName} {variableName} = {initializerExpression};";
+        }
+
+        return $"var {variableName} = {initializerExpression};";
+    }
+
+    private static bool RequiresTargetType(string initializerExpression)
+    {
+        var trimmed = initializerExpression.Trim();
+        return string.Equals(trimmed, "default", StringComparison.Ordinal)
+               || string.Equals(trimmed, "new()", StringComparison.Ordinal);
     }
 
 }

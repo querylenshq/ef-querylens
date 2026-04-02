@@ -98,8 +98,7 @@ public static partial class LspSyntaxHelper
             return IsLikelyQueryChain(receiverInvocation);
         }
 
-        var rootName = TryExtractRootContextVariable(receiver);
-        return LooksLikeDbContextRoot(rootName);
+        return true;
     }
 
     private static ExpressionSyntax UnwrapParenthesizedExpression(ExpressionSyntax expression)
@@ -209,6 +208,7 @@ public static partial class LspSyntaxHelper
         return expression switch
         {
             InvocationExpressionSyntax invocation => IsLikelyQueryChain(GetOutermostInvocationChain(invocation)),
+            QueryExpressionSyntax => true,
             MemberAccessExpressionSyntax => true,
             _ => false,
         };

@@ -156,12 +156,11 @@ public sealed partial class QueryEvaluator
             compilationAssemblyList);
 
         // Compile -> emit -> load into user ALC -> invoke Run.
-        // Retry with auto-stub declarations on CS0103 (missing local variables).
+        // Stubs are synthesized deterministically from the LSP-provided symbol graph.
         var workingExpression = request.Expression;
-        var stubs = new List<string>();
+        var stubs = StubSynthesizer.BuildInitialStubs(request, dbContextType);
         var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);
         var synthesizedUsingNamespaces = new HashSet<string>(StringComparer.Ordinal);
-        var includeGridifyFallbackExtensions = false;
         var roslynCompilationWatch = Stopwatch.StartNew();
         var compileFailure = _compilationPipeline.TryBuildCompilationWithRetries(
             request,
@@ -176,7 +175,6 @@ public sealed partial class QueryEvaluator
             elapsed,
             alcCtx.LoadedAssemblies,
             ct,
-            ref includeGridifyFallbackExtensions,
             ref workingExpression,
             ref compilationRetryCount,
             out var compilation);

@@ -12,10 +12,23 @@ public partial class QueryEvaluatorTests
             AssemblyPath = _alcCtx.AssemblyPath,
             DbContextTypeName = DefaultMySqlDbContextType,
             Expression = "db.Orders.Where(filter).ToListAsync(ct)",
-            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["filter"] = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, bool>>",
-            },
+            LocalSymbolGraph =
+            [
+                new LocalSymbolGraphEntry
+                {
+                    Name = "filter",
+                    TypeName = "System.Linq.Expressions.Expression<System.Func<SampleMySqlApp.Domain.Entities.Order, bool>>",
+                    Kind = "local",
+                    DeclarationOrder = 0,
+                },
+                new LocalSymbolGraphEntry
+                {
+                    Name = "ct",
+                    TypeName = "System.Threading.CancellationToken",
+                    Kind = "local",
+                    DeclarationOrder = 1,
+                },
+            ],
         }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
@@ -32,10 +45,23 @@ public partial class QueryEvaluatorTests
             DbContextTypeName = DefaultMySqlDbContextType,
             Expression = "db.Orders.Where(filter).ToListAsync(ct)",
             AdditionalImports = ["System.Linq.Expressions"],
-            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["filter"] = "Expression<Func<SampleMySqlApp.Domain.Entities.Order, bool>>",
-            },
+            LocalSymbolGraph =
+            [
+                new LocalSymbolGraphEntry
+                {
+                    Name = "filter",
+                    TypeName = "Expression<Func<SampleMySqlApp.Domain.Entities.Order, bool>>",
+                    Kind = "local",
+                    DeclarationOrder = 0,
+                },
+                new LocalSymbolGraphEntry
+                {
+                    Name = "ct",
+                    TypeName = "System.Threading.CancellationToken",
+                    Kind = "local",
+                    DeclarationOrder = 1,
+                },
+            ],
         }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);

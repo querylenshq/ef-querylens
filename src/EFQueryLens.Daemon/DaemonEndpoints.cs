@@ -20,7 +20,18 @@ internal static class DaemonEndpoints
         app.MapPost("/translate", async (TranslationRequest request) =>
         {
             runtime.Touch();
-            DaemonRuntime.ValidateSnapshotConsistency(request);
+            try
+            {
+                DaemonRuntime.ValidateSnapshotConsistency(request);
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new QueryTranslationResult
+                {
+                    Success = false,
+                    ErrorMessage = ex.Message,
+                });
+            }
 
             var cacheKey = DaemonRuntime.ComputeCacheKey(request);
 
@@ -56,7 +67,14 @@ internal static class DaemonEndpoints
         app.MapPost("/translate/warm", (TranslationRequest request) =>
         {
             runtime.Touch();
-            DaemonRuntime.ValidateSnapshotConsistency(request);
+            try
+            {
+                DaemonRuntime.ValidateSnapshotConsistency(request);
+            }
+            catch
+            {
+                return Results.BadRequest();
+            }
             var cacheKey = DaemonRuntime.ComputeCacheKey(request);
 
             if (runtime.IsCached(cacheKey))

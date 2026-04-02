@@ -85,6 +85,8 @@ public sealed partial class QueryEvaluator
     private static void AppendRequestShape(StringBuilder sb, TranslationRequest request)
     {
         sb.Append(request.Expression).Append('\0');
+        sb.Append(request.OriginalExpression ?? string.Empty).Append('\0');
+        sb.Append(request.RewrittenExpression ?? string.Empty).Append('\0');
         sb.Append(request.ContextVariableName).Append('\0');
         foreach (var import in request.AdditionalImports)
             sb.Append(import).Append('\0');
@@ -92,17 +94,26 @@ public sealed partial class QueryEvaluator
             sb.Append(kv.Key).Append('=').Append(kv.Value).Append('\0');
         foreach (var staticType in request.UsingStaticTypes)
             sb.Append(staticType).Append('\0');
-        foreach (var kv in request.LocalVariableTypes.OrderBy(x => x.Key, StringComparer.Ordinal))
-            sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
-        foreach (var hint in request.LocalSymbolHints
-                     .OrderBy(h => h.Name, StringComparer.Ordinal)
-                     .ThenBy(h => h.Kind, StringComparer.Ordinal))
-            sb.Append("sym:").Append(hint.Name).Append(':').Append(hint.TypeName).Append(':').Append(hint.Kind).Append('\0');
-        foreach (var hint in request.MemberTypeHints
-                     .OrderBy(h => h.ReceiverName, StringComparer.Ordinal)
-                     .ThenBy(h => h.MemberName, StringComparer.Ordinal))
-            sb.Append("mem:").Append(hint.ReceiverName).Append('.').Append(hint.MemberName).Append(':').Append(hint.TypeName).Append('\0');
+        sb.Append("requestContractVersion=").Append(request.RequestContractVersion).Append('\0');
+        foreach (var symbol in request.LocalSymbolGraph
+                     .OrderBy(s => s.DeclarationOrder)
+                     .ThenBy(s => s.Name, StringComparer.Ordinal))
+        {
+            sb.Append("sym:")
+                .Append(symbol.DeclarationOrder).Append(':')
+                .Append(symbol.Name).Append(':')
+                .Append(symbol.TypeName).Append(':')
+                .Append(symbol.Kind).Append(':')
+                .Append(symbol.Scope ?? string.Empty).Append(':')
+                .Append(symbol.InitializerExpression ?? string.Empty)
+                .Append('\0');
+
+            foreach (var dep in symbol.Dependencies.OrderBy(x => x, StringComparer.Ordinal))
+                sb.Append("dep:").Append(symbol.Name).Append("->").Append(dep).Append('\0');
+        }
         sb.Append("useAsyncRunner=").Append(request.UseAsyncRunner ? '1' : '0').Append('\0');
+        foreach (var flag in request.RewriteFlags.OrderBy(x => x, StringComparer.Ordinal))
+            sb.Append("rw:").Append(flag).Append('\0');
         sb.Append("payloadContractVersion=").Append(QueryLensGeneratedPayloadContract.Version).Append('\0');
     }
 
@@ -152,6 +163,18 @@ public sealed partial class QueryEvaluator
         var metadata = request.ExpressionMetadata;
         sb.Append("exprMeta=").Append(metadata.SourceLine).Append(':')
           .Append(metadata.SourceCharacter).Append('\0');
+
+        if (request.ExtractionOrigin is null)
+            return;
+
+        sb.Append("origin=")
+          .Append(request.ExtractionOrigin.FilePath ?? string.Empty).Append('|')
+          .Append(request.ExtractionOrigin.Line).Append(':')
+          .Append(request.ExtractionOrigin.Character).Append('|')
+          .Append(request.ExtractionOrigin.EndLine).Append(':')
+          .Append(request.ExtractionOrigin.EndCharacter).Append('|')
+          .Append(request.ExtractionOrigin.Scope ?? string.Empty)
+          .Append('\0');
     }
 
     private void LogDebug(string message)

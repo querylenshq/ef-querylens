@@ -60,12 +60,30 @@ public partial class QueryEvaluatorTests
                 AssemblyPath = sqlAlcCtx.AssemblyPath,
                 Expression = "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(expression)",
                 DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
-                LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["page"] = "int",
-                    ["pageSize"] = "int",
-                    ["expression"] = "System.Linq.Expressions.Expression<System.Func<SampleSqlServerApp.Domain.Entities.Order, int>>",
-                },
+                LocalSymbolGraph =
+                [
+                    new LocalSymbolGraphEntry
+                    {
+                        Name = "page",
+                        TypeName = "int",
+                        Kind = "local",
+                        DeclarationOrder = 0,
+                    },
+                    new LocalSymbolGraphEntry
+                    {
+                        Name = "pageSize",
+                        TypeName = "int",
+                        Kind = "local",
+                        DeclarationOrder = 1,
+                    },
+                    new LocalSymbolGraphEntry
+                    {
+                        Name = "expression",
+                        TypeName = "System.Linq.Expressions.Expression<System.Func<SampleSqlServerApp.Domain.Entities.Order, int>>",
+                        Kind = "local",
+                        DeclarationOrder = 2,
+                    },
+                ],
             }, TestContext.Current.CancellationToken);
 
         if (result.Success)

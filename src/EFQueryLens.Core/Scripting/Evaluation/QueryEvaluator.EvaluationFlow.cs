@@ -18,7 +18,8 @@ public sealed partial class QueryEvaluator
         var sw = Stopwatch.StartNew();
         var compilationRetryCount = 0;
         IDbContextLease? dbContextLease = null;
-        var originalExpression = request.Expression;
+        var originalExpression = request.OriginalExpression ?? request.Expression;
+        var rewrittenExpression = request.RewrittenExpression ?? request.Expression;
 
         try
         {
@@ -28,7 +29,7 @@ public sealed partial class QueryEvaluator
             contextResolutionWatch.Stop();
             TimeSpan? contextResolutionTime = contextResolutionWatch.Elapsed;
 
-            if (ImportResolver.IsUnsupportedTopLevelMethodInvocation(request.Expression, request.ContextVariableName))
+            if (ImportResolver.IsUnsupportedTopLevelMethodInvocation(rewrittenExpression, request.ContextVariableName))
             {
                 return Failure(
                     "Top-level method invocations (e.g. service.GetXxx(...)) are not supported " +
@@ -52,7 +53,7 @@ public sealed partial class QueryEvaluator
             TimeSpan? dbContextCreationTime = dbContextCreationWatch.Elapsed;
 
             var preCompilationFailure = TryNormalizeAndValidateExpression(
-                request,
+                request with { Expression = rewrittenExpression },
                 dbContextType,
                 dbInstance,
                 sw.Elapsed,

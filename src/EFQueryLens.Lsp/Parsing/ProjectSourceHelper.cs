@@ -133,7 +133,7 @@ public sealed class ProjectSourceIndex
 
                 try
                 {
-                    roots.Add(CSharpSyntaxTree.ParseText(text).GetRoot());
+                    roots.Add(CSharpSyntaxTree.ParseText(text, path: path).GetRoot());
                 }
                 catch
                 {

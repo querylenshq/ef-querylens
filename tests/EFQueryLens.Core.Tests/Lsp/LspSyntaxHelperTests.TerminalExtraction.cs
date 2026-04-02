@@ -395,6 +395,93 @@ public partial class LspSyntaxHelperTests
     }
 
     [Fact]
+    public void TryExtractLinqExpression_HelperMethodReturningQueryable_InlinesHelperLocalsUsedInSkipTake()
+    {
+        var source = """
+            public sealed class DemoService
+            {
+                public IQueryable<Customer> GetCustomersQuery(CustomerQueryRequest request)
+                {
+                    var page = Math.Max(request.Page, 1);
+                    var pageSize = Math.Clamp(request.PageSize, 1, 200);
+
+                    return _dbContext.Customers
+                        .Where(c => c.IsNotDeleted)
+                        .OrderByDescending(c => c.CreatedUtc)
+                        .Skip((page - 1) * pageSize)
+                        .Take(pageSize);
+                }
+
+                public IQueryable<Customer> Run(CustomerQueryRequest customerQuery)
+                {
+                    return GetCustomersQuery(customerQuery);
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "GetCustomersQuery(customerQuery)");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Equal("_dbContext", contextVariableName);
+        Assert.DoesNotContain("Skip((page - 1) * pageSize)", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Take(pageSize)", expression, StringComparison.Ordinal);
+        Assert.Contains("Math.Max(customerQuery.Page, 1)", expression, StringComparison.Ordinal);
+        Assert.Contains("Math.Clamp(customerQuery.PageSize, 1, 200)", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_HelperMethodReturningQueryable_HoverOnAssignedVariable_StillInlinesUnderlyingDbQuery()
+    {
+        var source = """
+            public sealed class ProgramLike
+            {
+                public void Run(OrderQueries orderQueries, Guid customerId)
+                {
+                    var customerOrders = GetCustomerOrdersQuery(
+                        customerId,
+                        o => o.Total >= 100 && o.Status != OrderStatus.Cancelled,
+                        o => new OrderListItemDto(o.Id, o.Customer.CustomerId, o.Total, o.Status, o.CreatedUtc));
+                }
+
+                private static IQueryable<OrderListItemDto> GetCustomerOrdersQuery(
+                    Guid customerId,
+                    Expression<Func<Order, bool>> whereExpression,
+                    Expression<Func<Order, OrderListItemDto>> selector)
+                {
+                    return _dbContext
+                        .Orders
+                        .Where(o => o.Customer.CustomerId == customerId)
+                        .Where(o => o.IsNotDeleted)
+                        .Where(whereExpression)
+                        .Select(selector);
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "customerOrders");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Equal("_dbContext", contextVariableName);
+        Assert.Contains("_dbContext", expression, StringComparison.Ordinal);
+        Assert.Contains(".Orders", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetCustomerOrdersQuery", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryExtractLinqExpression_HelperMethodWithLocalExpressionVariable_InlinesVariableExpression()
     {
         var source = """
@@ -425,7 +512,10 @@ public partial class LspSyntaxHelperTests
             }
             """;
 
-        var (line, character) = FindPosition(source, "whereExpression,");
+        var (line, character) = FindPosition(source, """
+            whereExpression,
+                        o => new { o.Id, o.Total }
+            """);
 
         var expression = LspSyntaxHelper.TryExtractLinqExpression(
             source,

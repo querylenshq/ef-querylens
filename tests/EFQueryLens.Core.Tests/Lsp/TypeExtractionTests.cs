@@ -433,6 +433,79 @@ public class TypeExtractionTests
     }
 
     [Fact]
+    public void ExtractLocalVariableTypes_WithSemanticModel_InfersVarFromMathMethods()
+    {
+        var source = """
+            internal sealed class Probe
+            {
+                public void Run(int requestPage, int requestPageSize)
+                {
+                    var page = System.Math.Max(requestPage, 1);
+                    var pageSize = System.Math.Clamp(requestPageSize, 1, 200);
+                    _ = page + pageSize;
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "_ = page + pageSize;");
+        var targetAssembly = EFQueryLens.Core.Tests.Scripting.QueryEvaluatorTests.GetSampleMySqlAppDll();
+        var types = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition(source, line, character, targetAssembly);
+
+        Assert.True(types.TryGetValue("page", out var pageType));
+        Assert.Equal("int", pageType);
+        Assert.True(types.TryGetValue("pageSize", out var pageSizeType));
+        Assert.Equal("int", pageSizeType);
+    }
+
+    [Fact]
+    public void ExtractLocalVariableTypes_WithSemanticModel_InfersVarFromPlainMathIdentifier()
+    {
+        var source = """
+            using System;
+            internal sealed class Probe
+            {
+                public void Run(int requestPage, int requestPageSize)
+                {
+                    var page = Math.Max(requestPage, 1);
+                    var pageSize = Math.Clamp(requestPageSize, 1, 200);
+                    _ = page + pageSize;
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "_ = page + pageSize;");
+        var types = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition(source, line, character, targetAssemblyPath: null);
+
+        Assert.True(types.TryGetValue("page", out var pageType));
+        Assert.Equal("int", pageType);
+        Assert.True(types.TryGetValue("pageSize", out var pageSizeType));
+        Assert.Equal("int", pageSizeType);
+    }
+
+    [Fact]
+    public void ExtractLocalSymbolHints_CapturesLocalInitializerExpressions()
+    {
+        var source = """
+            using System;
+            internal sealed class Probe
+            {
+                public void Run(int requestPage)
+                {
+                    var page = Math.Max(requestPage, 1);
+                    _ = page;
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "_ = page;");
+        var hints = LspSyntaxHelper.ExtractLocalSymbolHintsAtPosition(source, line, character, targetAssemblyPath: null);
+
+        var pageHint = Assert.Single(hints, h => h.Name == "page");
+        Assert.Equal("int", pageHint.TypeName);
+        Assert.Equal("Math.Max(requestPage, 1)", pageHint.InitializerExpression);
+    }
+
+    [Fact]
     public void ExtractLocalVariableTypes_VarWithConvertToInt32_DoesNotInferConvertAsType()
     {
         var source = """
@@ -453,6 +526,37 @@ public class TypeExtractionTests
     {
         var types = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition("", 0, 0);
         Assert.Empty(types);
+    }
+
+    [Fact]
+    public void ExtractLocalSymbolGraphAtPosition_PreservesDeclarationOrderForDependentPagingLocals()
+    {
+        var source = """
+            class Request { public int Page { get; set; } public int PageSize { get; set; } }
+            class Order { public int Id { get; set; } }
+            int M(Request request, System.Linq.Expressions.Expression<System.Func<Order, object>> expression)
+            {
+                var page = System.Math.Max(request.Page, 1);
+                var pageSize = System.Math.Max(request.PageSize, 1);
+                var query = _dbContext.Orders
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(expression);
+                return 0;
+            }
+            """;
+
+        var (line, character) = FindPosition(source, ".Skip((page - 1) * pageSize)");
+        var graph = LspSyntaxHelper.ExtractLocalSymbolGraphAtPosition(source, line, character, targetAssemblyPath: null);
+
+        var request = Assert.Single(graph.Where(g => g.Name == "request"));
+        var page = Assert.Single(graph.Where(g => g.Name == "page"));
+        var pageSize = Assert.Single(graph.Where(g => g.Name == "pageSize"));
+
+        Assert.True(request.DeclarationOrder < page.DeclarationOrder);
+        Assert.True(request.DeclarationOrder < pageSize.DeclarationOrder);
+        Assert.Contains("request", page.Dependencies, StringComparer.Ordinal);
+        Assert.Contains("request", pageSize.Dependencies, StringComparer.Ordinal);
     }
 
     [Fact]

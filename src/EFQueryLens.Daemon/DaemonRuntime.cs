@@ -72,6 +72,7 @@ internal sealed class DaemonRuntime(IMemoryCache cache)
         sb.Append(r.AssemblyPath ?? string.Empty).Append('\0');
         sb.Append(r.DbContextTypeName ?? string.Empty).Append('\0');
         sb.Append(r.ContextVariableName).Append('\0');
+        sb.Append("requestContractVersion=").Append(r.RequestContractVersion).Append('\0');
         sb.Append("useAsyncRunner=").Append(r.UseAsyncRunner ? '1' : '0').Append('\0');
         sb.Append("payloadContractVersion=").Append(QueryLensGeneratedPayloadContract.Version).Append('\0');
         foreach (var ns in r.AdditionalImports.OrderBy(x => x, StringComparer.Ordinal))
@@ -80,19 +81,20 @@ internal sealed class DaemonRuntime(IMemoryCache cache)
             sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
         foreach (var st in r.UsingStaticTypes.OrderBy(x => x, StringComparer.Ordinal))
             sb.Append(st).Append('\0');
-        foreach (var kv in r.LocalVariableTypes.OrderBy(x => x.Key, StringComparer.Ordinal))
-            sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
-        foreach (var hint in r.LocalSymbolHints
-                     .OrderBy(h => h.Name, StringComparer.Ordinal)
-                     .ThenBy(h => h.Kind, StringComparer.Ordinal))
+        foreach (var hint in r.LocalSymbolGraph
+                     .OrderBy(h => h.DeclarationOrder)
+                     .ThenBy(h => h.Name, StringComparer.Ordinal))
         {
-            sb.Append("sym:").Append(hint.Name).Append(':').Append(hint.TypeName).Append(':').Append(hint.Kind).Append('\0');
-        }
-        foreach (var hint in r.MemberTypeHints
-                     .OrderBy(h => h.ReceiverName, StringComparer.Ordinal)
-                     .ThenBy(h => h.MemberName, StringComparer.Ordinal))
-        {
-            sb.Append("mem:").Append(hint.ReceiverName).Append('.').Append(hint.MemberName).Append(':').Append(hint.TypeName).Append('\0');
+            sb.Append("sym:")
+                .Append(hint.DeclarationOrder).Append(':')
+                .Append(hint.Name).Append(':')
+                .Append(hint.TypeName).Append(':')
+                .Append(hint.Kind).Append(':')
+                .Append(hint.Scope ?? string.Empty).Append(':')
+                .Append(hint.InitializerExpression ?? string.Empty)
+                .Append('\0');
+            foreach (var dep in hint.Dependencies.OrderBy(x => x, StringComparer.Ordinal))
+                sb.Append("dep:").Append(hint.Name).Append("->").Append(dep).Append('\0');
         }
 
         if (r.DbContextResolution is not null)
@@ -132,12 +134,30 @@ internal sealed class DaemonRuntime(IMemoryCache cache)
               .Append('\0');
         }
 
+        if (r.ExtractionOrigin is not null)
+        {
+            sb.Append("origin=")
+              .Append(r.ExtractionOrigin.FilePath ?? string.Empty).Append('|')
+              .Append(r.ExtractionOrigin.Line).Append(':')
+              .Append(r.ExtractionOrigin.Character).Append('|')
+              .Append(r.ExtractionOrigin.EndLine).Append(':')
+              .Append(r.ExtractionOrigin.EndCharacter).Append('|')
+              .Append(r.ExtractionOrigin.Scope ?? string.Empty)
+              .Append('\0');
+        }
+
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
         return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
     }
 
     internal static void ValidateSnapshotConsistency(TranslationRequest request)
     {
+        if (request.RequestContractVersion != TranslationRequestContract.Version)
+        {
+            throw new InvalidOperationException(
+                $"Unsupported translation request contract version {request.RequestContractVersion}. Expected {TranslationRequestContract.Version}.");
+        }
+
         if (request.UsingContextSnapshot is null)
             return;
 

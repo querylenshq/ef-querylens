@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using EFQueryLens.Core.Contracts;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -15,57 +15,89 @@ public static partial class LspSyntaxHelper
             return false;
         }
 
-        ExpressionSyntax parsed;
         try
         {
-            parsed = SyntaxFactory.ParseExpression(expression);
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (parsed is InvocationExpressionSyntax invocation)
-        {
-            var hasKnownQueryMethods = GetInvocationChainMethodNames(invocation)
-                .Any(name => TerminalMethods.Contains(name) || QueryChainMethods.Contains(name));
-            if (hasKnownQueryMethods)
+            var wrapped = $$"""
+            class __QlCandidateProbe
             {
-                var rootName = TryExtractRootContextVariable(invocation);
-                // Convention-based heuristic: C# types use PascalCase, instance variables use camelCase/_-prefix.
-                // This helps us avoid treating static method calls like Math.Max() as query candidates.
-                // Methods like Max/Min/Count/Sum exist in both System.Linq and System.Math, so we use
-                // naming convention as a disambiguator when the root is not a known DbContext variable.
-                if (!LooksLikeDbContextRoot(rootName) && char.IsUpper(rootName?[0] ?? 'x'))
+                object __Run()
+                {
+                    var __candidate = {{expression}};
+                    return __candidate!;
+                }
+            }
+            """;
+
+            var root = CSharpSyntaxTree.ParseText(wrapped).GetRoot();
+            var parsed = root
+                .DescendantNodes()
+                .OfType<LocalDeclarationStatementSyntax>()
+                .FirstOrDefault()?
+                .Declaration
+                .Variables
+                .FirstOrDefault()?
+                .Initializer?
+                .Value;
+
+            if (parsed is null)
+            {
+                return false;
+            }
+            if (parsed is QueryExpressionSyntax queryExpression)
+            {
+                return IsLikelyQueryableExpression(queryExpression);
+            }
+
+            if (parsed is InvocationExpressionSyntax invocation)
+            {
+                var outermost = GetOutermostInvocationChain(invocation);
+                if (IsLikelyStaticTypeInvocation(outermost))
                 {
                     return false;
+                }
+
+                if (!IsLikelyQueryChain(outermost))
+                {
+                    return false;
+                }
+
+                var methods = GetInvocationChainMethodNames(outermost).ToArray();
+                if (methods.Any(m => EfSpecificMethods.Contains(m)))
+                {
+                    return true;
                 }
 
                 return true;
             }
 
-            var invocationRootName = TryExtractRootContextVariable(invocation);
-            return LooksLikeDbContextRoot(invocationRootName);
+            return IsLikelyQueryableExpression(parsed);
         }
-
-        if (parsed is MemberAccessExpressionSyntax memberAccess)
+        catch
         {
-            var rootName = TryExtractRootContextVariable(memberAccess);
-            return LooksLikeDbContextRoot(rootName);
+            return false;
         }
-
-        if (parsed is QueryExpressionSyntax queryExpression)
-        {
-            var rootName = TryExtractRootContextVariable(queryExpression);
-            return LooksLikeDbContextRoot(rootName);
-        }
-
-        return false;
     }
 
-    public static bool IsLikelyDbContextRootIdentifier(string? rootName)
+    private static bool IsLikelyStaticTypeInvocation(InvocationExpressionSyntax invocation)
     {
-        return LooksLikeDbContextRoot(rootName);
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        ExpressionSyntax receiver = memberAccess.Expression;
+        while (receiver is MemberAccessExpressionSyntax member)
+        {
+            receiver = member.Expression;
+        }
+
+        if (receiver is not IdentifierNameSyntax identifier)
+        {
+            return false;
+        }
+
+        var name = identifier.Identifier.ValueText;
+        return name.Length > 0 && char.IsUpper(name[0]);
     }
 
     public static IReadOnlyList<LinqChainInfo> FindAllLinqChains(string sourceText)
@@ -147,16 +179,6 @@ public static partial class LspSyntaxHelper
             }
 
             if (string.IsNullOrWhiteSpace(contextVariableName))
-            {
-                continue;
-            }
-
-            // Reject in-memory LINQ on plain objects (e.g. someDto.Items.Select(...).ToList()).
-            // Keep only chains that are clearly EF: rooted at a recognisable DbContext variable
-            // OR that use at least one EF-Core-specific method (Include, AsNoTracking, etc.).
-            var hasEfSpecificMethod = GetInvocationChainMethodNames(outermostInvocation)
-                .Any(m => EfSpecificMethods.Contains(m));
-            if (!LooksLikeDbContextRoot(contextVariableName) && !hasEfSpecificMethod)
             {
                 continue;
             }
@@ -245,8 +267,7 @@ public static partial class LspSyntaxHelper
                     .Select(i => i.Identifier.Text)
                     .FirstOrDefault();
 
-            if (string.IsNullOrWhiteSpace(contextVariableName)
-                || !LooksLikeDbContextRoot(contextVariableName))
+            if (string.IsNullOrWhiteSpace(contextVariableName))
             {
                 continue;
             }

@@ -29,24 +29,29 @@ public partial class QueryEvaluatorTests
     }
 
     [Fact]
-    public async Task Evaluate_RootWrapperContextHop_IsNormalizedFromCompilerDiagnostics()
+    public async Task Evaluate_RootWrapperContextHop_WithoutLspRewrite_FailsInStrictMode()
     {
         var result = await TranslateAsync("services.Context.Orders.Select(o => o.Id)", ct: TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.NotNull(result.Sql);
-        Assert.DoesNotContain("does not contain a definition for 'Context'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Success);
+        Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("services", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task Evaluate_ChecklistSelectManyVariant_ReturnsSql()
     {
-        var result = await TranslateAsync("db.ApplicationChecklists.AsNoTracking()" +
+        var result = await TranslateStrictAsync("db.ApplicationChecklists.AsNoTracking()" +
             ".Where(w => !w.IsDeleted && w.IsLatest)" +
             ".Where(w => w.ApplicationId == applicationId)" +
             ".SelectMany(x => x.ChecklistChangeTypes)" +
             ".Where(w => !w.IsDeleted)" +
-            ".Select(s => s.ChangeType)", ct: TestContext.Current.CancellationToken);
+            ".Select(s => s.ChangeType)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["applicationId"] = "System.Guid",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -57,12 +62,17 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_ChecklistSelectManyVariant_DoesNotSurfaceBufferedReaderFieldCountFailure()
     {
-        var result = await TranslateAsync("db.ApplicationChecklists.AsNoTracking()" +
+        var result = await TranslateStrictAsync("db.ApplicationChecklists.AsNoTracking()" +
             ".Where(w => !w.IsDeleted && w.IsLatest)" +
             ".Where(w => w.ApplicationId == applicationId)" +
             ".SelectMany(x => x.ChecklistChangeTypes)" +
             ".Where(w => !w.IsDeleted)" +
-            ".Select(s => s.ChangeType)", ct: TestContext.Current.CancellationToken);
+            ".Select(s => s.ChangeType)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["applicationId"] = "System.Guid",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.DoesNotContain("underlying reader doesn't have as many fields", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -71,7 +81,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_ExpressionSelectorNestedToList_NoPartialRiskWarning()
     {
-        var result = await TranslateAsync("db.ApplicationChecklists.AsNoTracking()" +
+        var result = await TranslateStrictAsync("db.ApplicationChecklists.AsNoTracking()" +
             ".Where(w => !w.IsDeleted && w.IsLatest)" +
             ".Where(w => w.ApplicationId == applicationId)" +
             ".Select(app => new {" +
@@ -79,7 +89,12 @@ public partial class QueryEvaluatorTests
             "        .Where(t => !t.IsDeleted)" +
             "        .Select(t => t.ChangeType)" +
             "        .ToList()" +
-            "})", ct: TestContext.Current.CancellationToken);
+            "})",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["applicationId"] = "System.Guid",
+            },
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);

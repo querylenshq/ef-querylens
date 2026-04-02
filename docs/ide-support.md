@@ -43,3 +43,10 @@ All three IDE clients use:
 - `EFQueryLens.Core` for transport-agnostic engine contracts
 
 This shared architecture keeps behavior consistent across IDEs and reduces feature drift.
+
+### Expression Ownership Split
+
+- `EFQueryLens.Lsp` is the primary owner of expression shaping before translation.
+- LSP sends both the source expression and the authoritative rewritten expression to daemon.
+- `EFQueryLens.Daemon`/`EFQueryLens.Core` execute the rewritten expression first and only apply compile-retry expression rewrites when fallback is explicitly enabled.
+- Core continues to own runtime/provider diagnostics and execution safety nets.

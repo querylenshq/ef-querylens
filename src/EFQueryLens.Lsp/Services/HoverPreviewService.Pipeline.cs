@@ -76,7 +76,15 @@ internal sealed partial class HoverPreviewService
         var sourceLine = line + 1;
 
     var sourceIndex = ProjectSourceHelper.GetProjectIndex(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, out var callSiteExpression, sourceIndex);
+        var extraction = LspSyntaxHelper.TryExtractLinqExpressionDetailed(
+            sourceText,
+            filePath,
+            line,
+            character,
+            sourceIndex);
+        var expression = extraction?.Expression;
+        var contextVariableName = extraction?.ContextVariableName;
+        var callSiteExpression = extraction?.CallSiteExpression;
         var expressionPreview = string.IsNullOrWhiteSpace(expression)
             ? string.Empty
             : expression.Replace("\r", string.Empty, StringComparison.Ordinal)
@@ -87,6 +95,10 @@ internal sealed partial class HoverPreviewService
         }
 
         log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName} exprLen={expression?.Length ?? 0} preview={expressionPreview} indexedFiles={sourceIndex.FileCount}");
+        if (extraction?.Origin is not null)
+        {
+            log($"extract-origin path={extraction.Origin.FilePath} line={extraction.Origin.Line} char={extraction.Origin.Character} scope={extraction.Origin.Scope}");
+        }
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
@@ -101,14 +113,75 @@ internal sealed partial class HoverPreviewService
             return Fail("Could not locate compiled target assembly for this file. Build the project and try again.", sourceLine);
         }
 
+        if (!LspSyntaxHelper.PassesSemanticLinqGate(sourceText, line, character, targetAssembly, out var gateReason))
+        {
+            log($"semantic-gate-block line={line} char={character} reason={gateReason ?? "unknown"}");
+            return Fail("No queryable LINQ expression was resolved at this cursor location.", sourceLine);
+        }
+
         var usingContext = LspSyntaxHelper.ExtractUsingContext(sourceText);
         var additionalImports = BuildAdditionalImports(usingContext.Imports);
-        var localSymbolHints = LspSyntaxHelper.ExtractLocalSymbolHintsAtPosition(sourceText, line, character);
-        var localVariableTypes = localSymbolHints
-            .GroupBy(h => h.Name, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First().TypeName, StringComparer.Ordinal);
-        var memberTypeHints = LspSyntaxHelper.BuildMemberTypeHints(expression, localSymbolHints);
-        log($"extract-local-types line={line} char={character} count={localVariableTypes.Count} vars={string.Join(",", localVariableTypes.Keys)} memberHints={memberTypeHints.Count}");
+        var extractionLine = extraction?.Origin?.Line ?? line;
+        var extractionChar = extraction?.Origin?.Character ?? character;
+        var extractionFilePath = extraction?.Origin?.FilePath;
+        var extractionSourceText = sourceText;
+        if (!string.IsNullOrWhiteSpace(extractionFilePath)
+            && !string.Equals(
+                Path.GetFullPath(extractionFilePath),
+                Path.GetFullPath(filePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                extractionSourceText = File.ReadAllText(extractionFilePath);
+            }
+            catch (Exception ex)
+            {
+                log($"preview-blocked line={line} char={character} reason=origin-read-failed path={extractionFilePath} error={ex.GetType().Name}:{ex.Message}");
+                return Fail("No preview: failed to read extraction-origin source for symbol graph.", sourceLine);
+            }
+        }
+
+        var localSymbolGraph = LspSyntaxHelper.ExtractLocalSymbolGraphAtPosition(
+            extractionSourceText,
+            extractionLine,
+            extractionChar,
+            targetAssembly);
+        var unresolvedNames = FindUnresolvedSymbols(expression, contextVariableName!, localSymbolGraph);
+        var declaredNames = new HashSet<string>(
+            localSymbolGraph.Select(s => s.Name),
+            StringComparer.Ordinal);
+        var unresolvedDependencies = localSymbolGraph
+            .SelectMany(s => s.Dependencies.Select(d => (symbol: s.Name, dep: d)))
+            .Where(p => !declaredNames.Contains(p.dep))
+            .ToArray();
+        var graphComplete = unresolvedNames.Count == 0
+                            && unresolvedDependencies.Length == 0;
+        log(
+            $"extract-local-types line={line} char={character} originLine={extractionLine} originChar={extractionChar} " +
+            $"count={localSymbolGraph.Count} vars={string.Join(",", localSymbolGraph.Select(s => s.Name))} " +
+            $"unresolved={unresolvedNames.Count} unresolvedDeps={unresolvedDependencies.Length} complete={graphComplete}");
+
+        if (!graphComplete)
+        {
+            string reason;
+            if (localSymbolGraph.Count == 0 && unresolvedNames.Count > 0)
+            {
+                reason = "incomplete-symbol-graph:empty";
+            }
+            else if (unresolvedNames.Count > 0)
+            {
+                reason = $"incomplete-symbol-graph:missing={string.Join(",", unresolvedNames)}";
+            }
+            else
+            {
+                var deps = string.Join(",", unresolvedDependencies.Select(p => $"{p.symbol}->{p.dep}"));
+                reason = $"incomplete-symbol-graph:dependencies={deps}";
+            }
+
+            log($"preview-blocked line={line} char={character} reason={reason}");
+            return Fail($"No preview: symbol graph incomplete ({reason}).", sourceLine);
+        }
         var factoryDbContextCandidates = AssemblyResolver.TryExtractDbContextTypeNamesFromFactories(targetAssembly);
         var dbContextResolution = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
             sourceText,
@@ -125,16 +198,18 @@ internal sealed partial class HoverPreviewService
             {
                 AssemblyPath = targetAssembly,
                 Expression = expression,
+                OriginalExpression = callSiteExpression ?? expression,
+                RewrittenExpression = expression,
+                RewriteFlags = BuildRewriteFlags(callSiteExpression, expression),
                 ContextVariableName = contextVariableName,
                 DbContextTypeName = dbContextTypeName,
                 DbContextResolution = dbContextResolution,
                 AdditionalImports = additionalImports,
                 UsingAliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
                 UsingStaticTypes = usingContext.StaticTypes.ToArray(),
-                LocalVariableTypes = localVariableTypes,
-                LocalSymbolHints = localSymbolHints,
-                MemberTypeHints = memberTypeHints,
+                LocalSymbolGraph = localSymbolGraph,
                 UseAsyncRunner = true,
+                ExtractionOrigin = extraction?.Origin,
                 UsingContextSnapshot = new UsingContextSnapshot
                 {
                     Imports = usingContext.Imports.ToList(),
@@ -146,7 +221,7 @@ internal sealed partial class HoverPreviewService
                     ExpressionType = "Invocation", // Expression type will be determined at parse time
                     SourceLine = line,
                     SourceCharacter = character,
-                    Confidence = 0.95, // LSP extraction is high-confidence
+                    Confidence = 1.0,
                 },
             };
 
@@ -231,6 +306,56 @@ internal sealed partial class HoverPreviewService
         }
     }
 
+    private static IReadOnlyList<string> FindUnresolvedSymbols(
+        string expression,
+        string contextVariableName,
+        IReadOnlyList<LocalSymbolGraphEntry> graph)
+    {
+        var parsed = Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ParseExpression(expression);
+        var declared = new HashSet<string>(StringComparer.Ordinal)
+        {
+            contextVariableName,
+        };
+
+        foreach (var symbol in graph)
+            declared.Add(symbol.Name);
+
+        foreach (var lambdaParam in parsed.DescendantNodesAndSelf()
+                     .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax>()
+                     .Select(p => p.Identifier.ValueText))
+        {
+            if (!string.IsNullOrWhiteSpace(lambdaParam))
+                declared.Add(lambdaParam);
+        }
+
+        var unresolved = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in parsed.DescendantNodesAndSelf().OfType<Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax>())
+        {
+            if (id.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax member
+                && ReferenceEquals(member.Name, id))
+            {
+                continue;
+            }
+            if (id.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax invocation
+                && ReferenceEquals(invocation.Expression, id))
+            {
+                continue;
+            }
+
+            var name = id.Identifier.ValueText;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+            if (char.IsUpper(name[0]))
+                continue;
+            if (declared.Contains(name))
+                continue;
+
+            unresolved.Add(name);
+        }
+
+        return unresolved.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+    }
+
     internal async Task<CombinedHoverResult> BuildCombinedAsync(
         string filePath,
         string sourceText,
@@ -294,5 +419,29 @@ internal sealed partial class HoverPreviewService
         }
 
         return imports;
+    }
+
+    private static IReadOnlyList<string> BuildRewriteFlags(string? callSiteExpression, string extractedExpression)
+    {
+        var flags = new List<string>(capacity: 4) { "lsp-extraction" };
+
+        if (!string.IsNullOrWhiteSpace(callSiteExpression)
+            && !string.Equals(callSiteExpression, extractedExpression, StringComparison.Ordinal))
+        {
+            flags.Add("callsite-rewritten");
+        }
+
+        if (extractedExpression.Contains("Concat(", StringComparison.Ordinal))
+        {
+            flags.Add("setop-checked");
+        }
+
+        if (extractedExpression.Contains("ToListAsync(", StringComparison.Ordinal)
+            || extractedExpression.Contains("ToList(", StringComparison.Ordinal))
+        {
+            flags.Add("materialization-boundary");
+        }
+
+        return flags;
     }
 }

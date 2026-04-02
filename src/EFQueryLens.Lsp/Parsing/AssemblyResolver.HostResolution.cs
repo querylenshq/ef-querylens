@@ -307,7 +307,7 @@ public static partial class AssemblyResolver
         {
             var projDir = Path.GetDirectoryName(csprojPath)!;
 
-            // Resolve all output paths for this host executable (bin glob + MSBuild fallback)
+            // Resolve all output paths for this host executable (bin glob + MSBuild query path)
             var hostDllPaths = FindProjectOutputDllPaths(csprojPath, exeAssemblyName, ref debugLog);
             if (hostDllPaths.Count == 0)
             {
@@ -368,7 +368,7 @@ public static partial class AssemblyResolver
 
     /// <summary>
     /// Returns all candidate output DLL paths for a project, trying the bin/ folder first
-    /// and falling back to an MSBuild TargetPath query for non-standard layouts such as
+    /// and then using an MSBuild TargetPath query for non-standard layouts such as
     /// UseArtifactsOutput=true.
     /// </summary>
     private static List<string> FindProjectOutputDllPaths(

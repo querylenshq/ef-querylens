@@ -123,6 +123,25 @@ public class DaemonRuntimeTests
         DaemonRuntime.ValidateSnapshotConsistency(mismatched);
     }
 
+    [Fact]
+    public void ValidateSnapshotConsistency_Throws_ForUnsupportedContractVersion()
+    {
+        var request = BuildRequest() with
+        {
+            RequestContractVersion = TranslationRequestContract.Version - 1,
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => DaemonRuntime.ValidateSnapshotConsistency(request));
+        Assert.Contains("Unsupported translation request contract version", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateSnapshotConsistency_DoesNotThrow_ForEmptySymbolGraph()
+    {
+        var request = BuildRequest() with { LocalSymbolGraph = [] };
+        DaemonRuntime.ValidateSnapshotConsistency(request);
+    }
+
     private static TranslationRequest BuildRequest(
         IReadOnlyList<string>? additionalImports = null,
         IReadOnlyDictionary<string, string>? aliases = null,
@@ -139,7 +158,16 @@ public class DaemonRuntimeTests
             AdditionalImports = additionalImports ?? ["System", "System.Linq"],
             UsingAliases = aliases ?? new Dictionary<string, string> { ["X"] = "A.B" },
             UsingStaticTypes = staticTypes ?? ["System.Math"],
-            LocalVariableTypes = localTypes ?? new Dictionary<string, string> { ["a"] = "System.String" },
+            LocalSymbolGraph = (localTypes ?? new Dictionary<string, string> { ["a"] = "System.String" })
+                .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
+                .Select((kvp, idx) => new LocalSymbolGraphEntry
+                {
+                    Name = kvp.Key,
+                    TypeName = kvp.Value,
+                    Kind = "local",
+                    DeclarationOrder = idx,
+                })
+                .ToArray(),
             DbContextResolution = new DbContextResolutionSnapshot
             {
                 DeclaredTypeName = "MyDb",

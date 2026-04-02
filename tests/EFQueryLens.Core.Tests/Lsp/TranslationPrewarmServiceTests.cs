@@ -487,6 +487,27 @@ public class LspHoverAndCommandFlowTests
 public class LspWarmupAndPreviewWrapperTests
 {
     [Fact]
+    public async Task BuildStructuredAsync_SendsAuthoritativeRewriteContractToEngine()
+    {
+        using var project = TranslationPrewarmServiceTests.TempLspProject.Create(withAssembly: true);
+        var engine = new CapturingTranslateEngine();
+        var service = new HoverPreviewService(engine);
+
+        var result = await service.BuildStructuredAsync(
+            project.SourceFilePath,
+            project.QuerySource,
+            11,
+            24,
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(engine.LastRequest);
+        Assert.False(string.IsNullOrWhiteSpace(engine.LastRequest.RewrittenExpression));
+        Assert.False(string.IsNullOrWhiteSpace(engine.LastRequest.OriginalExpression));
+        Assert.Contains("lsp-extraction", engine.LastRequest.RewriteFlags);
+    }
+
+    [Fact]
     public async Task BuildMarkdownAsync_WithValidQuery_ReturnsReadyMarkdown()
     {
         using var project = TranslationPrewarmServiceTests.TempLspProject.Create(withAssembly: true);
@@ -614,6 +635,36 @@ public class LspWarmupAndPreviewWrapperTests
 
             return Task.FromResult(new ModelSnapshot { DbContextType = "AppDbContext" });
         }
+
+        public Task<FactoryGenerationResult> GenerateFactoryAsync(FactoryGenerationRequest request, CancellationToken ct = default)
+            => Task.FromResult(new FactoryGenerationResult { Content = "// generated", SuggestedFileName = "Factory.cs", DbContextTypeFullName = "AppDbContext" });
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CapturingTranslateEngine : IQueryLensEngine
+    {
+        public TranslationRequest? LastRequest { get; private set; }
+
+        public Task<QueryTranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new QueryTranslationResult
+            {
+                Success = true,
+                Sql = "SELECT 1",
+                Metadata = new TranslationMetadata
+                {
+                    DbContextType = "AppDbContext",
+                    EfCoreVersion = "9.0.0",
+                    ProviderName = "Provider",
+                    TranslationTime = TimeSpan.FromMilliseconds(1),
+                },
+            });
+        }
+
+        public Task<ModelSnapshot> InspectModelAsync(ModelInspectionRequest request, CancellationToken ct = default)
+            => Task.FromResult(new ModelSnapshot { DbContextType = "AppDbContext" });
 
         public Task<FactoryGenerationResult> GenerateFactoryAsync(FactoryGenerationRequest request, CancellationToken ct = default)
             => Task.FromResult(new FactoryGenerationResult { Content = "// generated", SuggestedFileName = "Factory.cs", DbContextTypeFullName = "AppDbContext" });

@@ -24,4 +24,8 @@
     <None Update="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="Application\Customers\" />
+  </ItemGroup>
+
 </Project>

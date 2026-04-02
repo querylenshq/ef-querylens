@@ -105,12 +105,12 @@ public sealed partial class QueryEvaluator
                 }
             }
         }
-        catch { /* fall through to convention */ }
+        catch
+        {
+            // Model-based PK resolution is required; do not apply naming conventions.
+        }
 
-        // --- Convention fallback: Id or {TypeName}Id CLR property ---
-        var idProp = entityClrType.GetProperty("Id", BindingFlags.Public | BindingFlags.Instance)
-                  ?? entityClrType.GetProperty($"{entityClrType.Name}Id", BindingFlags.Public | BindingFlags.Instance);
-        return idProp != null ? [idProp.PropertyType] : [];
+        return [];
     }
 
     private static string GetCSharpTypeName(Type type) => type switch
