@@ -191,5 +191,6 @@ Or: _"Code quality analysis skipped — SonarQube not configured."_
 
 | Date | Change | Reason |
 | --- | --- | --- |
+| 2026-04-04 | P0 regression fix: v2 integration gate condition corrected | QueryEvaluator.EvaluationFlow condition 'if (!v2Decision.ShouldUseV2Path)' was incorrect, blocking all non-v2 queries as v2 rejections. Changed to 'if (v2Decision.BlockReason is not null)' to properly gate failure only on explicit v2 blocks. Non-v2 paths now transparent. Restored: 103/106 QueryEvaluator tests passing (was 0/16 failing). |
 | 2026-04-04 | Implementation complete | Slice 3b integrated V2RuntimeAdapter decision logic into QueryEvaluator entry point, updated EvalSourceBuilder and RunnerGenerator to consume capture-plan policies, created 33 v2 tests (32 passing, 1 skipped pending format investigation), made RunnerGenerator partial for V2Support extension. All acceptance criteria met. 2 deferred items: (1) manual harness spot-check steps documented in end-to-end-testing.md for post-merge validation, (2) skipped test format pending minor investigation. No regression in non-v2 paths. |
 | 2026-04-04 | Initial impldoc drafted for Slice 3b | Codegen and evaluation integration phase of v2 extraction runtime work. Completes runtime path after Slice 3a contract/validation complete. |
