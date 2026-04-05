@@ -153,6 +153,7 @@ internal sealed partial class HoverPreviewService
         // Return a deterministic guidance message instead of flowing into capture/runtime logic.
         if (ContainsToQueryStringCall(expression))
         {
+            log($"preview-blocked line={line} char={character} reason=toquerystring-wrapper");
             return Fail("This statement renders SQL text via ToQueryString(). Hover the underlying LINQ query expression to preview SQL.", sourceLine);
         }
 
