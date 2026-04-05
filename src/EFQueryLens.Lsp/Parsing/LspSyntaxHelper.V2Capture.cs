@@ -393,6 +393,11 @@ public static partial class LspSyntaxHelper
         // Strip nullable suffix for catalog lookup
         var core = normalized.EndsWith("?", StringComparison.Ordinal) ? normalized[..^1] : normalized;
 
+        // Collection placeholders are supported by EvalSourceBuilder and should be allowed as
+        // safe downgrade targets for unsafe replay initializers.
+        if (IsSupportedCollectionPlaceholderType(core))
+            return true;
+
         return core is
             // Strings
             "string" or "String" or "System.String" or
@@ -422,6 +427,42 @@ public static partial class LspSyntaxHelper
             "TimeOnly" or "System.TimeOnly" or
             "TimeSpan" or "System.TimeSpan" or
             "CancellationToken" or "System.Threading.CancellationToken";
+    }
+
+    private static bool IsSupportedCollectionPlaceholderType(string normalizedTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedTypeName))
+            return false;
+
+        if (normalizedTypeName.EndsWith("[]", StringComparison.Ordinal))
+            return true;
+
+        return IsGenericCollectionType(normalizedTypeName, "IEnumerable")
+            || IsGenericCollectionType(normalizedTypeName, "System.Collections.Generic.IEnumerable")
+            || IsGenericCollectionType(normalizedTypeName, "ICollection")
+            || IsGenericCollectionType(normalizedTypeName, "System.Collections.Generic.ICollection")
+            || IsGenericCollectionType(normalizedTypeName, "List")
+            || IsGenericCollectionType(normalizedTypeName, "System.Collections.Generic.List")
+            || IsGenericCollectionType(normalizedTypeName, "IReadOnlyCollection")
+            || IsGenericCollectionType(normalizedTypeName, "System.Collections.Generic.IReadOnlyCollection")
+            || IsGenericCollectionType(normalizedTypeName, "IReadOnlyList")
+            || IsGenericCollectionType(normalizedTypeName, "System.Collections.Generic.IReadOnlyList")
+            || IsGenericCollectionType(normalizedTypeName, "ISet")
+            || IsGenericCollectionType(normalizedTypeName, "System.Collections.Generic.ISet")
+            || IsGenericCollectionType(normalizedTypeName, "HashSet")
+            || IsGenericCollectionType(normalizedTypeName, "System.Collections.Generic.HashSet");
+    }
+
+    private static bool IsGenericCollectionType(string normalizedTypeName, string genericTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedTypeName)
+            || string.IsNullOrWhiteSpace(genericTypeName))
+        {
+            return false;
+        }
+
+        return normalizedTypeName.StartsWith(genericTypeName + "<", StringComparison.Ordinal)
+            && normalizedTypeName.EndsWith(">", StringComparison.Ordinal);
     }
 
     private static bool TryGetPlaceholderTypeForEntry(

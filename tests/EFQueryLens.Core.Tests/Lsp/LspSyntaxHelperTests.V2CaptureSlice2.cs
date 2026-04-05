@@ -432,6 +432,34 @@ public partial class LspSyntaxHelperTests
         Assert.Empty(capturePlan.Diagnostics);
     }
 
+    [Fact]
+    public void BuildV2CapturePlanFromGraph_UnsafeInitializer_KnownCollectionType_DowngradesToPlaceholder()
+    {
+        var graph = new LocalSymbolGraphEntry[]
+        {
+            new()
+            {
+                Name = "checkTransactionDateStatus",
+                TypeName = "global::System.Collections.Generic.List<global::System.DayOfWeek?>",
+                Kind = "local",
+                InitializerExpression = "new global::System.Collections.Generic.List<global::System.DayOfWeek?>()",
+                DeclarationOrder = 0,
+                ReplayPolicy = LocalSymbolReplayPolicies.ReplayInitializer,
+            },
+        };
+
+        var capturePlan = LspSyntaxHelper.BuildV2CapturePlanFromGraph(
+            "dbContext.Orders.Where(o => checkTransactionDateStatus.Contains(o.CreatedUtc.DayOfWeek))",
+            graph);
+
+        var entry = Assert.Single(capturePlan.Entries, e => string.Equals(e.Name, "checkTransactionDateStatus", StringComparison.Ordinal));
+        Assert.Equal(LocalSymbolReplayPolicies.UsePlaceholder, entry.CapturePolicy);
+        Assert.Equal("global::System.Collections.Generic.List<global::System.DayOfWeek?>", entry.TypeName);
+        Assert.Null(entry.InitializerExpression);
+        Assert.Empty(entry.Dependencies);
+        Assert.Empty(capturePlan.Diagnostics);
+    }
+
     private static V2CapturePlanSnapshot BuildCapturePlanAtMarker(string source, string marker)
     {
         var (line, character) = FindPosition(source, marker);
