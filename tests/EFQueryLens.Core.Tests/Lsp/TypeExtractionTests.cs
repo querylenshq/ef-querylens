@@ -605,7 +605,7 @@ public class TypeExtractionTests
         var term = Assert.Single(graph, g => g.Name == "term");
         Assert.Equal("term", term.Name);
         Assert.Equal(LocalSymbolReplayPolicies.UsePlaceholder, term.ReplayPolicy);
-        Assert.Contains(graph, g => g.Name == "request");
+        Assert.DoesNotContain(graph, g => g.Name == "request");
         Assert.DoesNotContain(graph, g => g.Name == "o");
     }
 

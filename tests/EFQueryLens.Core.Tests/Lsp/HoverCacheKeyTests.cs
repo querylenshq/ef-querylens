@@ -90,9 +90,20 @@ public class HoverCacheKeyTests
         var handler = CreateHandler();
         var filePath = Assembly.GetExecutingAssembly().Location; // any existing file
 
-        var key1 = InvokeBuildHoverCacheKey(handler, filePath, line: 10, character: 5, semanticContext: null);
-        // "changing" source text has no effect because the parameter was removed
-        var key2 = InvokeBuildHoverCacheKey(handler, filePath, line: 10, character: 5, semanticContext: null);
+        var key1 = InvokeBuildHoverCacheKey(
+            handler,
+            filePath,
+            sourceText: "var a = 1;",
+            line: 10,
+            character: 5,
+            semanticContext: null);
+        var key2 = InvokeBuildHoverCacheKey(
+            handler,
+            filePath,
+            sourceText: "var b = 2;",
+            line: 10,
+            character: 5,
+            semanticContext: null);
 
         Assert.Equal(key1, key2);
     }
@@ -103,8 +114,8 @@ public class HoverCacheKeyTests
         var handler = CreateHandler();
         var filePath = Assembly.GetExecutingAssembly().Location;
 
-        var key1 = InvokeBuildHoverCacheKey(handler, filePath, line: 10, character: 5, semanticContext: null);
-        var key2 = InvokeBuildHoverCacheKey(handler, filePath, line: 10, character: 6, semanticContext: null);
+        var key1 = InvokeBuildHoverCacheKey(handler, filePath, "var x = 1;", line: 10, character: 5, semanticContext: null);
+        var key2 = InvokeBuildHoverCacheKey(handler, filePath, "var x = 1;", line: 10, character: 6, semanticContext: null);
 
         Assert.NotEqual(key1, key2);
     }
@@ -116,7 +127,7 @@ public class HoverCacheKeyTests
         // Use a path that will never resolve to a .csproj → fingerprint is null → fallback key
         var filePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".cs");
 
-        var key = InvokeBuildHoverCacheKey(handler, filePath, line: 0, character: 0, semanticContext: null);
+        var key = InvokeBuildHoverCacheKey(handler, filePath, "var x = 1;", line: 0, character: 0, semanticContext: null);
 
         Assert.StartsWith("no-assembly|", key, StringComparison.OrdinalIgnoreCase);
     }
@@ -129,12 +140,11 @@ public class HoverCacheKeyTests
 
         var semanticContext = CreateSemanticHoverContext("sem-key-abc", effectiveLine: 20, effectiveCharacter: 3);
 
-        var key = InvokeBuildHoverCacheKey(handler, filePath, line: 99, character: 99, semanticContext: semanticContext);
+        var key = InvokeBuildHoverCacheKey(handler, filePath, "var x = 1;", line: 99, character: 99, semanticContext: semanticContext);
 
         Assert.Contains("semantic", key, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sem-key-abc", key);
-        // Effective position from semantic context used, not request position
-        Assert.Contains("|20|3", key);
+        Assert.DoesNotContain("|99|99", key, StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -160,6 +170,7 @@ public class HoverCacheKeyTests
     private static string InvokeBuildHoverCacheKey(
         HoverHandler handler,
         string filePath,
+        string sourceText,
         int line,
         int character,
         object? semanticContext)
@@ -169,7 +180,7 @@ public class HoverCacheKeyTests
             BindingFlags.NonPublic | BindingFlags.Instance);
 
         Assert.NotNull(method);
-        var result = method!.Invoke(handler, [filePath, line, character, semanticContext]);
+        var result = method!.Invoke(handler, [filePath, sourceText, line, character, semanticContext]);
         return Assert.IsType<string>(result);
     }
 

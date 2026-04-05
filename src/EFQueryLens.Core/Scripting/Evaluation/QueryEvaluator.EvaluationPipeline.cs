@@ -126,6 +126,7 @@ public sealed partial class QueryEvaluator
         string evalCacheKey,
         TimeSpan elapsed,
         CancellationToken ct,
+        V2RuntimeDecision v2Decision,
         ref int compilationRetryCount,
         out SyncRunnerInvoker? syncRunner,
         out AsyncRunnerInvoker? asyncRunner,
@@ -156,12 +157,23 @@ public sealed partial class QueryEvaluator
             compilationAssemblyList);
 
         // Compile -> emit -> load into user ALC -> invoke Run.
-        // Stubs are synthesized deterministically from the LSP-provided symbol graph.
+        // Stubs are sourced from the v2 capture plan when available, otherwise from the legacy symbol graph.
         var workingExpression = request.Expression;
-        LogDebug(
-            $"symbol-graph count={request.LocalSymbolGraph.Count} " +
-            $"entries={string.Join(",", request.LocalSymbolGraph.Select(s => $"{s.Name}:{s.TypeName}:{s.Kind}:{s.ReplayPolicy}"))}");
-        var stubs = StubSynthesizer.BuildInitialStubs(request, dbContextType);
+        List<string> stubs;
+        if (v2Decision.ShouldUseV2Path && v2Decision.CapturePlan is not null)
+        {
+            stubs = StubSynthesizer.BuildV2Stubs(v2Decision.CapturePlan);
+            LogDebug(
+                $"v2-stubs count={stubs.Count} " +
+                $"entries={string.Join(",", stubs.Select(s => s.Trim()))}");
+        }
+        else
+        {
+            LogDebug(
+                $"symbol-graph count={request.LocalSymbolGraph.Count} " +
+                $"entries={string.Join(",", request.LocalSymbolGraph.Select(s => $"{s.Name}:{s.TypeName}:{s.Kind}:{s.ReplayPolicy}"))}");
+            stubs = StubSynthesizer.BuildInitialStubs(request, dbContextType);
+        }
         LogDebug(
             $"stub-list count={stubs.Count} entries={string.Join(" || ", stubs)}");
         var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);

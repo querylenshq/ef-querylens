@@ -79,6 +79,33 @@ public partial class LspSyntaxHelperTests
     }
 
     [Fact]
+    public void TryBuildV2CapturePlan_StringSearchTerm_UsesTypedPlaceholder()
+    {
+        var source = """
+            class Demo
+            {
+                void Run(string term, CancellationToken ct)
+                {
+                    _ = dbContext.Customers
+                        .Where(c => c.Name.Contains(term) || c.Email.StartsWith(term))
+                        .ToListAsync(ct);
+                }
+            }
+            """;
+
+        var capturePlan = BuildCapturePlanAtMarker(source, "ToListAsync");
+
+        var term = Assert.Single(capturePlan.Entries, e => string.Equals(e.Name, "term", StringComparison.Ordinal));
+        Assert.Equal(LocalSymbolReplayPolicies.UsePlaceholder, term.CapturePolicy);
+        Assert.True(
+            string.Equals(term.TypeName, "string", StringComparison.OrdinalIgnoreCase)
+            || term.TypeName.Contains("System.String", StringComparison.Ordinal),
+            $"Expected string capture type for 'term' but got '{term.TypeName}'.");
+        Assert.Empty(capturePlan.Diagnostics);
+        Assert.True(capturePlan.IsComplete);
+    }
+
+    [Fact]
     public void BuildV2CapturePlanFromGraph_MissingDependency_RejectedWithDiagnostic()
     {
         var graph = new[]

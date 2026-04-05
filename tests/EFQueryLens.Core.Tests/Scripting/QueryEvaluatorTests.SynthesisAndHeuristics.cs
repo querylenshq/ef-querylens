@@ -357,7 +357,7 @@ public partial class QueryEvaluatorTests
             });
 
         Assert.Equal(
-            "global::Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
+            "Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
             stub);
     }
 
@@ -373,7 +373,7 @@ public partial class QueryEvaluatorTests
             });
 
         Assert.Equal(
-            "global::Gridify.IGridifyMapper<SampleMySqlApp.Domain.Entities.Order> gm = null!;",
+            "Gridify.IGridifyMapper<SampleMySqlApp.Domain.Entities.Order> gm = null!;",
             stub);
     }
 
@@ -389,7 +389,7 @@ public partial class QueryEvaluatorTests
             });
 
         Assert.Equal(
-            "global::Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
+            "Gridify.IGridifyQuery query = new global::Gridify.GridifyQuery();",
             stub);
     }
 

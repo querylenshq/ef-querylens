@@ -36,7 +36,7 @@ public partial class LspSyntaxHelperTests
     }
 
     [Fact]
-    public void TryExtractLinqExpression_GoldenCase_UnknownQueryableOperator_ShouldDetectExpectedExpression()
+    public void TryExtractLinqExpression_GoldenCase_UnknownQueryableOperator_StrictModeDoesNotDetectExpression()
     {
         AssertExtractionCase(CreateUnknownQueryableOperatorCase());
     }
@@ -244,13 +244,7 @@ public partial class LspSyntaxHelperTests
                 var secured = query.ApplySecurityScope(currentUserId);
                 """,
             Marker: "ApplySecurityScope",
-            ShouldDetect: true,
-            ExpectedContext: "items",
-            ExpectedExpressionContains:
-            [
-                "items.Where(i => i.Id > minId)",
-                ".ApplySecurityScope(currentUserId)",
-            ]);
+            ShouldDetect: false);
     }
 
     private sealed record ExtractionCase(

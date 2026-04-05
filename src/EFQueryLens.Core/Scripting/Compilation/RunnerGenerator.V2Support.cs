@@ -38,9 +38,13 @@ internal static partial class RunnerGenerator
                 var statement = SyntaxFactory.ParseStatement(initCode);
                 statements.Add(statement);
             }
-            catch
+            catch (Exception)
             {
-                // If parsing fails, skip this entry to avoid breaking codegen
+                // ParseStatement failure means the generated init code is malformed.
+                // Skip this entry rather than break codegen for the whole plan.
+                // Callers should validate InitializerExpression before reaching here.
+                System.Diagnostics.Debug.Fail(
+                    $"RunnerGenerator: failed to parse v2 capture init code for entry '{entry.Name}': {initCode}");
                 continue;
             }
         }

@@ -103,14 +103,9 @@ public static class V2RuntimeAnalyzer
             };
         }
 
-        // Extraction plan only (no capture) - cannot execute deterministically
-        return new V2RuntimeDecision
-        {
-            ShouldUseV2Path = false,
-            BlockReason = "extraction-only-no-capture",
-            BlockMessage = "V2 extraction plan present but capture plan missing. Runtime requires capture plan for deterministic variable handling.",
-            ExtractionPlan = request.V2ExtractionPlan,
-        };
+        // No v2 payloads at all — fall through to legacy path (covered by null-null check above).
+        // This return is a defensive fallback; control flow should not reach here.
+        return new V2RuntimeDecision { ShouldUseV2Path = false };
     }
 
     /// <summary>

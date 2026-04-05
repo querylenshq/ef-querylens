@@ -120,6 +120,7 @@ public sealed partial class QueryEvaluator
                     evalCacheKey,
                     sw.Elapsed,
                     ct,
+                    v2Decision,
                     ref compilationRetryCount,
                     out syncRunner,
                     out asyncRunner,

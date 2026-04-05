@@ -64,3 +64,20 @@
    - Hover over any legacy query pattern not covered by v2 extraction (e.g., complex LINQ expression, custom operators)
    - Expected: Legacy extraction and codegen path still works, SQL is returned, no change to existing behavior
    - Verify: Solution builds with no new errors or warnings in LSP/daemon components
+
+## V2 Production Wiring (Pipeline + VS Code)
+
+1. **Legacy payload path remains transparent**
+   - Open `samples/SampleMySqlApp` in VS Code with EF QueryLens extension running
+   - Hover over `db.Orders` or `db.Orders.Where(o => o.UserId > 0)`
+   - Expected: SQL preview appears successfully with no v2-specific diagnostics
+
+2. **V2-supported query uses capture-plan stubs**
+   - Hover over a direct chain eligible for v2 extraction/capture: `db.Orders.Where(o => o.UserId > 0).ToListAsync()`
+   - Expected: SQL preview appears and matches the legacy shape for equivalent query
+   - Verify: no fallback error message, no `(no v2 diagnostic)` text
+
+3. **V2 rejection surfaces structured diagnostic**
+   - Hover over a query shape known to generate capture diagnostics (unsupported outer symbol capture)
+   - Expected: hover shows error message including `capture-rejected:` and capture diagnostic detail
+   - Verify: no crash, no empty preview pane
