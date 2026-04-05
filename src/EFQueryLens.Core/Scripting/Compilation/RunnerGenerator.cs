@@ -169,7 +169,7 @@ internal static partial class RunnerGenerator
     }
 
     /// <summary>
-    /// Builds the async Run method: public static async Task&lt;object?&gt; RunAsync(object __ctx__, CancellationToken ct = default)
+    /// Builds the async Run method: public static async Task&lt;object?&gt; RunAsync(object __ctx__, CancellationToken __ql_runnerCt = default)
     /// </summary>
     private static MethodDeclarationSyntax BuildAsyncRunMethod(BlockSyntax body)
     {
@@ -179,7 +179,7 @@ internal static partial class RunnerGenerator
                 SyntaxFactory.Identifier("RunAsync"))
             .WithParameterList(
                 SyntaxFactory.ParseParameterList(
-                    "(object __ctx__, System.Threading.CancellationToken ct = default)"))
+                    "(object __ctx__, System.Threading.CancellationToken __ql_runnerCt = default)"))
             .WithBody(body);
 
         return AddPublicStaticAsyncModifiers(method);
@@ -293,7 +293,7 @@ internal static partial class RunnerGenerator
         // Unwrap Task if needed
         tryStmts.Add(
             useAsync
-                ? Parse("__query = await UnwrapTaskAsync(__query, ct).ConfigureAwait(false);")
+                ? Parse("__query = await UnwrapTaskAsync(__query, __ql_runnerCt).ConfigureAwait(false);")
                 : Parse("__query = UnwrapTask(__query);"));
 
         // Enumerate queryable if capture is installed
@@ -323,7 +323,7 @@ internal static partial class RunnerGenerator
         // Preserve existing behavior where query-like results are unwrapped and then enumerated.
         tryStmts.Add(
             useAsync
-                ? Parse("__query = await UnwrapTaskAsync(__query, ct).ConfigureAwait(false);")
+                ? Parse("__query = await UnwrapTaskAsync(__query, __ql_runnerCt).ConfigureAwait(false);")
                 : Parse("__query = UnwrapTask(__query);"));
 
         tryStmts.Add(Parse(

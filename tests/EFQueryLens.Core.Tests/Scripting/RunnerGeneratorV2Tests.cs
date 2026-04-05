@@ -235,4 +235,20 @@ public class RunnerGeneratorV2Tests
 
         Assert.Equal(0, count);
     }
+
+    [Fact]
+    public void GenerateRunnerClass_WithCtStub_UsesNonConflictingAsyncParameterName()
+    {
+        var source = RunnerGenerator.GenerateRunnerClass(
+            contextVarName: "db",
+            contextTypeFullName: "global::MyApp.AppDbContext",
+            expression: "db.Users.ToListAsync(ct)",
+            stubs: ["var ct = global::System.Threading.CancellationToken.None;"],
+            useAsync: true);
+
+        Assert.Contains("System.Threading.CancellationToken __ql_runnerCt = default", source);
+        Assert.Contains("var ct = global::System.Threading.CancellationToken.None;", source);
+        Assert.Contains("UnwrapTaskAsync(__query, __ql_runnerCt)", source);
+        Assert.DoesNotContain("UnwrapTaskAsync(__query, ct)", source, StringComparison.Ordinal);
+    }
 }
