@@ -6,6 +6,23 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-04-05
+
+### Added
+- **V2 Query Extraction Foundation**: Complete multi-slice refactor of LINQ extraction, capture planning, and runtime codegen. Improved determinism, type inference, and placeholder synthesis across v2 capture paths.
+- **Rider Parity Stabilization**: Rider now has consistent preview behavior with VS Code/VS, split UX (hover preview-only, Alt+Enter for all actions), and improved intention action availability for statement-level queries.
+- **Cross-File Query Synthesis**: Queries that span helper methods now resolve their symbol graph deterministically, enabling accurate capture of locals that depend on extracted method parameters.
+- **Multi-DbContext Factory Support**: Queries with multiple DbContext factories are now resolved intelligently using typed payload contracts and async runner mode, reducing false-positive errors during evaluation.
+
+### Fixed
+- V2 capture plan no longer rejects collection placeholder types (List<T>, IReadOnlyCollection<T>, etc.) when locals have unsafe initializers—now downgrades to placeholder synthesis instead of blocking preview.
+- Sample SQL Server DbContexts now respect host-provided `AddDbContext` options before falling back to offline configuration, fixing double-configuration issues in hosted environments.
+- Hover on wrapper statements that project SQL via `ToQueryString()` now emits explicit guidance ("hover the underlying LINQ query") instead of ambiguous preview unavailability.
+- Helper method extraction now succeeds when cursor is positioned on the method name or receiver, not just parameter positions.
+
+### Changed
+- Large test suites (QueryEvaluator, LspSyntaxHelper) split into focused file-per-feature organization for easier maintenance and CI parallelization.
+
 ## [1.0.11] - 2026-03-30
 
 ### Fixed
