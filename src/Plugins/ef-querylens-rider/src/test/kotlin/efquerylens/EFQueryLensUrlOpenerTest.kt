@@ -126,7 +126,7 @@ class EFQueryLensUrlOpenerTest {
     }
 
     @Test
-    fun `extractStructuredPreview returns null when ready response has no sql payload`() {
+    fun `extractStructuredPreview returns unavailable preview when ready response has no sql payload`() {
         val response =
             mapOf(
                 "hover" to
@@ -140,7 +140,10 @@ class EFQueryLensUrlOpenerTest {
 
         val preview = opener.extractStructuredPreview(response, "file:///fallback.cs", 3)
 
-        assertNull(preview)
+        assertNotNull(preview)
+        assertEquals("QueryLens · preview unavailable", preview.title)
+        assertEquals("", preview.actionSqlText)
+        assertEquals("READY", preview.statusText)
     }
 
     @Test

@@ -40,6 +40,15 @@ class EFQueryLensUiActionsTest {
     }
 
     @Test
+    fun `preview intention action reports static metadata`() {
+        val action = EFQueryLensPreviewSqlIntentionAction()
+
+        assertEquals("EF QueryLens: Preview SQL", action.text)
+        assertEquals("EF QueryLens", action.familyName)
+        assertFalse(action.startInWriteAction())
+    }
+
+    @Test
     fun `isAvailable returns false when editor is null`() {
         val action = EFQueryLensCopySqlIntentionAction()
 

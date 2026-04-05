@@ -146,13 +146,9 @@ internal sealed partial class HoverHandler
             hover = CreateMarkdownHover(markdownText);
         }
 
-        // Normalize "Could not extract" structured result to null — no hover at this position.
+        // Keep structured failure payloads so clients (especially intention-driven Rider)
+        // can surface deterministic "preview unavailable" feedback instead of silent null.
         QueryLensStructuredHoverResult? structured = combined.Structured;
-        if (structured is { Success: false }
-            && structured.ErrorMessage?.StartsWith("Could not extract a LINQ query expression", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            structured = null;
-        }
 
         return new ComputedEntry(hover, structured, combined.Markdown.Status);
     }

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using EFQueryLens.Core.Contracts;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -54,6 +55,22 @@ public static partial class LspSyntaxHelper
             sourceIndex,
             targetAssemblyPath);
 
+        if ((string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
+            && TryFindStatementInvocationAnchor(sourceText, line, character, out var anchorLine, out var anchorCharacter)
+            && (anchorLine != line || anchorCharacter != character))
+        {
+            expression = TryExtractLinqExpression(
+                sourceText,
+                anchorLine,
+                anchorCharacter,
+                out contextVariableName,
+                out callSiteExpression,
+                out extractionOrigin,
+                filePath,
+                sourceIndex,
+                targetAssemblyPath);
+        }
+
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
             return null;
 
@@ -77,6 +94,73 @@ public static partial class LspSyntaxHelper
                         ? filePath
                         : extractionOrigin.FilePath,
                 });
+    }
+
+    private static bool TryFindStatementInvocationAnchor(
+        string sourceText,
+        int line,
+        int character,
+        out int anchorLine,
+        out int anchorCharacter)
+    {
+        anchorLine = line;
+        anchorCharacter = character;
+
+        try
+        {
+            var tree = CSharpSyntaxTree.ParseText(sourceText);
+            var text = tree.GetText();
+
+            if (line < 0 || line >= text.Lines.Count)
+            {
+                return false;
+            }
+
+            var lineText = text.Lines[line];
+            var boundedCharacter = Math.Min(Math.Max(character, 0), lineText.End - lineText.Start);
+            var position = lineText.Start + boundedCharacter;
+
+            var node = tree.GetRoot().FindToken(position).Parent;
+            var statement = node?.FirstAncestorOrSelf<StatementSyntax>();
+            if (statement is null)
+            {
+                return false;
+            }
+
+            var invocation = statement
+                .DescendantNodesAndSelf()
+                .OfType<InvocationExpressionSyntax>()
+                .OrderBy(i => DistanceToPosition(i.Span, position))
+                .FirstOrDefault();
+            if (invocation is null)
+            {
+                return false;
+            }
+
+            var lineSpan = tree.GetLineSpan(invocation.GetFirstToken().Span);
+            anchorLine = lineSpan.StartLinePosition.Line;
+            anchorCharacter = lineSpan.StartLinePosition.Character;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int DistanceToPosition(TextSpan span, int position)
+    {
+        if (position < span.Start)
+        {
+            return span.Start - position;
+        }
+
+        if (position > span.End)
+        {
+            return position - span.End;
+        }
+
+        return 0;
     }
 
     public static string? TryExtractLinqExpression(string sourceText, int line, int character,
@@ -932,7 +1016,9 @@ public static partial class LspSyntaxHelper
         string? currentFilePath)
     {
         if (semanticModel is null)
-            return [];
+        {
+            return ResolveFromContainingTypeFallback(invocation, currentFilePath);
+        }
 
         var invocationForModel = invocation;
         if (!ReferenceEquals(semanticModel.SyntaxTree, invocation.SyntaxTree))
@@ -958,7 +1044,13 @@ public static partial class LspSyntaxHelper
             ?? symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
         if (methodSymbol is null)
         {
-            return ResolveFromReceiverTypeFallback(invocationForModel, semanticModel, currentFilePath);
+            var receiverFallback = ResolveFromReceiverTypeFallback(invocationForModel, semanticModel, currentFilePath);
+            if (receiverFallback.Count > 0)
+            {
+                return receiverFallback;
+            }
+
+            return ResolveFromContainingTypeFallback(invocationForModel, currentFilePath);
         }
 
         var declarations = new List<MethodDeclarationSyntax>();
@@ -976,6 +1068,37 @@ public static partial class LspSyntaxHelper
         }
 
         return declarations;
+    }
+
+    private static IReadOnlyList<MethodDeclarationSyntax> ResolveFromContainingTypeFallback(
+        InvocationExpressionSyntax invocation,
+        string? currentFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(currentFilePath))
+        {
+            return [];
+        }
+
+        var methodName = GetInvokedMethodName(invocation);
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            return [];
+        }
+
+        var containingTypeName = invocation
+            .FirstAncestorOrSelf<TypeDeclarationSyntax>()?
+            .Identifier
+            .ValueText;
+        if (string.IsNullOrWhiteSpace(containingTypeName))
+        {
+            return [];
+        }
+
+        return ResolveMethodsByContainingTypeName(
+            containingTypeName!,
+            methodName!,
+            invocation.ArgumentList.Arguments.Count,
+            currentFilePath);
     }
 
     private static IReadOnlyList<MethodDeclarationSyntax> ResolveFromReceiverTypeFallback(
@@ -1173,19 +1296,41 @@ public static partial class LspSyntaxHelper
 
         var declarator = invocation.FirstAncestorOrSelf<VariableDeclaratorSyntax>();
         if (declarator is not null
-            && declarator.Identifier.Span.Contains(cursorPosition)
             && declarator.Initializer?.Value is not null
             && declarator.Initializer.Value.Span.Contains(invocation.Span))
         {
-            return true;
+            // Accept any cursor within the whole local declaration statement:
+            //   var pagedOrders = GetPagedOrdersQuery(...)
+            // Rider hover often lands on 'var', the variable name, or '=' rather than
+            // inside the RHS invocation span, but the intent is the same.
+            var localDecl = declarator.FirstAncestorOrSelf<LocalDeclarationStatementSyntax>();
+            if (localDecl is not null && localDecl.Span.Contains(cursorPosition))
+            {
+                return true;
+            }
+
+            // Narrower legacy check: cursor on the identifier token specifically.
+            if (declarator.Identifier.Span.Contains(cursorPosition))
+            {
+                return true;
+            }
         }
 
         var assignment = invocation.FirstAncestorOrSelf<AssignmentExpressionSyntax>();
         if (assignment is not null
-            && assignment.Left.Span.Contains(cursorPosition)
             && assignment.Right.Span.Contains(invocation.Span))
         {
-            return true;
+            // Accept cursor anywhere on the LHS of the assignment as well as inside the RHS.
+            var assignmentStatement = assignment.FirstAncestorOrSelf<ExpressionStatementSyntax>();
+            if (assignmentStatement is not null && assignmentStatement.Span.Contains(cursorPosition))
+            {
+                return true;
+            }
+
+            if (assignment.Left.Span.Contains(cursorPosition))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -1399,32 +1544,86 @@ public static partial class LspSyntaxHelper
 
     private static InvocationExpressionSyntax? TryFindPrimaryQueryInvocation(MethodDeclarationSyntax method)
     {
+        var expressionParameterNames = method.ParameterList.Parameters
+            .Where(IsExpressionParameter)
+            .Select(p => p.Identifier.ValueText)
+            .Where(static n => !string.IsNullOrWhiteSpace(n))
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (method.ExpressionBody?.Expression is { } expressionBodyExpression)
+        {
+            var expressionCandidates = EnumerateQueryInvocationCandidates(expressionBodyExpression);
+            return SelectBestQueryInvocationCandidate(expressionCandidates, expressionParameterNames);
+        }
+
         var body = method.Body;
         if (body is null)
         {
             return null;
         }
 
+        var candidates = EnumerateQueryInvocationCandidates(body);
+        return SelectBestQueryInvocationCandidate(candidates, expressionParameterNames);
+    }
+
+    private static List<InvocationExpressionSyntax> EnumerateQueryInvocationCandidates(SyntaxNode scope)
+    {
+        return scope.DescendantNodesAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .Select(GetOutermostInvocationChain)
+            .Where(IsLikelyQueryChain)
+            .GroupBy(static i => (i.SpanStart, i.Span.Length))
+            .Select(static g => g.First())
+            .ToList();
+    }
+
+    private static InvocationExpressionSyntax? SelectBestQueryInvocationCandidate(
+        IEnumerable<InvocationExpressionSyntax> candidates,
+        IReadOnlySet<string> expressionParameterNames)
+    {
         InvocationExpressionSyntax? best = null;
-        var bestSpan = -1;
+        var bestScore = int.MinValue;
 
-        foreach (var invocation in body.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        foreach (var candidate in candidates)
         {
-            var outermost = GetOutermostInvocationChain(invocation);
-            if (!IsLikelyQueryChain(outermost))
+            var score = ScoreQueryInvocationCandidate(candidate, expressionParameterNames);
+            if (score > bestScore)
             {
-                continue;
-            }
-
-            var span = outermost.Span.Length;
-            if (span > bestSpan)
-            {
-                bestSpan = span;
-                best = outermost;
+                bestScore = score;
+                best = candidate;
             }
         }
 
         return best;
+    }
+
+    private static int ScoreQueryInvocationCandidate(
+        InvocationExpressionSyntax candidate,
+        IReadOnlySet<string> expressionParameterNames)
+    {
+        var score = candidate.Span.Length;
+
+        // The chain that is directly returned is the most likely authoritative query.
+        if (candidate.FirstAncestorOrSelf<ReturnStatementSyntax>() is not null
+            || candidate.FirstAncestorOrSelf<ArrowExpressionClauseSyntax>() is not null)
+        {
+            score += 1000;
+        }
+
+        // Prefer chains that actually consume expression parameters (where/select lambdas).
+        if (expressionParameterNames.Count > 0)
+        {
+            var matchedExpressionParameters = candidate.DescendantNodesAndSelf()
+                .OfType<IdentifierNameSyntax>()
+                .Select(i => i.Identifier.ValueText)
+                .Where(expressionParameterNames.Contains)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+
+            score += matchedExpressionParameters * 100;
+        }
+
+        return score;
     }
 
     private static ExpressionSyntax BindHelperMethodParameters(

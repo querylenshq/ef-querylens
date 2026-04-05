@@ -237,7 +237,6 @@ tasks {
         environment("QUERYLENS_CLIENT", "rider")
         environment("QUERYLENS_STARTUP_BROWSER", "true")
         environment("QUERYLENS_DEBUG", "true")
-        environment("QUERYLENS_FORCE_CODELENS", "true")
 
         val runtimeDir = bundledRuntimeOutputDir.get().asFile
 

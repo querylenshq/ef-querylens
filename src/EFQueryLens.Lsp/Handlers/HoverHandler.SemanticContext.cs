@@ -1,5 +1,6 @@
 using EFQueryLens.Lsp.Parsing;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -86,8 +87,16 @@ internal sealed partial class HoverHandler
             return true;
         }
 
+        var extractionLine = line;
+        var extractionCharacter = character;
+        if (TryFindStatementInvocationAnchor(sourceText, line, character, out var invocationLine, out var invocationCharacter))
+        {
+            extractionLine = invocationLine;
+            extractionCharacter = invocationCharacter;
+        }
+
         var sourceIndex = ProjectSourceHelper.GetProjectIndex(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, out _, sourceIndex);
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, extractionLine, extractionCharacter, out var contextVariableName, out _, sourceIndex);
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
@@ -99,12 +108,12 @@ internal sealed partial class HoverHandler
             contextVariableName,
             factoryDbContextCandidates);
         var fallbackDbContextToken = LspSyntaxHelper.GetDbContextResolutionCacheToken(fallbackResolution);
-        if (!TryGetAnchorRangeAtPosition(sourceText, line, character, out var anchorStartLine, out var anchorStartChar, out var anchorEndLine, out var anchorEndChar))
+        if (!TryGetAnchorRangeAtPosition(sourceText, extractionLine, extractionCharacter, out var anchorStartLine, out var anchorStartChar, out var anchorEndLine, out var anchorEndChar))
         {
-            anchorStartLine = line;
-            anchorStartChar = character;
-            anchorEndLine = line;
-            anchorEndChar = character;
+            anchorStartLine = extractionLine;
+            anchorStartChar = extractionCharacter;
+            anchorEndLine = extractionLine;
+            anchorEndChar = extractionCharacter;
         }
 
         var fallbackAnchorToken = $"{anchorStartLine}:{anchorStartChar}-{anchorEndLine}:{anchorEndChar}";
@@ -113,6 +122,66 @@ internal sealed partial class HoverHandler
             EffectiveLine: anchorStartLine,
             EffectiveCharacter: anchorStartChar);
         return true;
+    }
+
+    private static bool TryFindStatementInvocationAnchor(
+        string sourceText,
+        int line,
+        int character,
+        out int anchorLine,
+        out int anchorCharacter)
+    {
+        anchorLine = line;
+        anchorCharacter = character;
+
+        try
+        {
+            var tree = CSharpSyntaxTree.ParseText(sourceText);
+            var text = tree.GetText();
+            if (line < 0 || line >= text.Lines.Count)
+                return false;
+
+            var lineText = text.Lines[line];
+            var boundedChar = Math.Min(Math.Max(character, 0), lineText.End - lineText.Start);
+            var position = lineText.Start + boundedChar;
+
+            var node = tree.GetRoot().FindToken(position).Parent;
+            var statement = node?.FirstAncestorOrSelf<StatementSyntax>();
+            if (statement is null)
+                return false;
+
+            var invocation = statement
+                .DescendantNodesAndSelf()
+                .OfType<InvocationExpressionSyntax>()
+                .OrderBy(i => DistanceToPosition(i.Span, position))
+                .FirstOrDefault();
+            if (invocation is null)
+                return false;
+
+            var span = tree.GetLineSpan(invocation.GetFirstToken().Span);
+            anchorLine = span.StartLinePosition.Line;
+            anchorCharacter = span.StartLinePosition.Character;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int DistanceToPosition(TextSpan span, int position)
+    {
+        if (position < span.Start)
+        {
+            return span.Start - position;
+        }
+
+        if (position > span.End)
+        {
+            return position - span.End;
+        }
+
+        return 0;
     }
 
     private static bool TryGetAnchorRangeAtPosition(

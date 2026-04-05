@@ -161,6 +161,31 @@ public partial class LspSyntaxHelperTests
     }
 
     [Fact]
+    public void TryExtractLinqExpression_AsyncDbContextLocalInline_ParenthesizesAwaitedReceiver()
+    {
+        var source = """
+            var dbContext = await contextFactory.CreateDbContextAsync(ct);
+            var items = await dbContext.Products
+                .AsNoTracking()
+                .Where(m => m.IsNotDeleted)
+                .ToListAsync(ct);
+            """;
+
+        var (line, character) = FindPosition(source, "ToListAsync");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out _,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Contains("(await contextFactory.CreateDbContextAsync(ct)).Products", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("await contextFactory.CreateDbContextAsync(ct).Products", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryExtractLinqExpression_AnyAsync_PassesThroughToEngine()
     {
         var source = """
@@ -346,6 +371,54 @@ public partial class LspSyntaxHelperTests
     }
 
     [Fact]
+    public void TryExtractLinqExpression_HelperMethodWithCompetingQueryInvocation_PrefersReturnedSelectorChain()
+    {
+        var source = """
+            public class DemoService
+            {
+                private async Task<List<TResult>> GetOrdersAsync<TResult>(
+                    Guid customerId,
+                    Expression<Func<Order, TResult>> selector,
+                    CancellationToken ct)
+                {
+                    var auditRows = await dbContext.Orders
+                        .Where(o => o.IsDeleted)
+                        .ToListAsync(ct);
+
+                    return await dbContext.Orders
+                        .Where(o => o.CustomerId == customerId)
+                        .Select(selector)
+                        .ToListAsync(ct);
+                }
+
+                private async Task Run(Guid customerId, CancellationToken ct)
+                {
+                    var result = await GetOrdersAsync(
+                        customerId,
+                        o => new { o.Id, o.Total },
+                        ct);
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "o.Total");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Equal("dbContext", contextVariableName);
+        Assert.Contains("dbContext.Orders", expression, StringComparison.Ordinal);
+        Assert.Contains("o => new { o.Id, o.Total }", expression, StringComparison.Ordinal);
+        Assert.Contains("o => o.CustomerId == customerId", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("o => o.IsDeleted", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryExtractLinqExpression_HelperMethodReturningQueryable_InlinesUnderlyingDbQuery()
     {
         var source = """
@@ -465,6 +538,58 @@ public partial class LspSyntaxHelperTests
             """;
 
         var (line, character) = FindPosition(source, "customerOrders");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName,
+            out _);
+
+        Assert.NotNull(expression);
+        Assert.Equal("_dbContext", contextVariableName);
+        Assert.Contains("_dbContext", expression, StringComparison.Ordinal);
+        Assert.Contains(".Orders", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetCustomerOrdersQuery", expression, StringComparison.Ordinal);
+    }
+
+    // ── Rider declaration-position hover parity ──────────────────────────────
+
+    [Theory]
+    [InlineData("var")] // cursor on 'var' keyword
+    [InlineData("=")] // cursor on assignment operator — exact Rider trigger position from logs
+    [InlineData("customerOrders")] // cursor on identifier — VS Code typical position
+    public void TryExtractLinqExpression_HelperMethodDeclaration_AllStatementPositionsExtract(string marker)
+    {
+        // Regression: Rider hover/Alt+Enter often fires at 'var', the variable name, or '='
+        // rather than inside the RHS invocation span, causing IsCursorRelevantToInvocation
+        // to return false and extraction to silently produce found=False.
+        var source = """
+            public sealed class ProgramLike
+            {
+                public void Run(Guid customerId)
+                {
+                    var customerOrders = GetCustomerOrdersQuery(
+                        customerId,
+                        o => o.Total >= 100,
+                        o => new { o.Id, o.Total });
+                }
+
+                private static IQueryable<object> GetCustomerOrdersQuery(
+                    Guid customerId,
+                    Expression<Func<Order, bool>> whereExpression,
+                    Expression<Func<Order, object>> selector)
+                {
+                    return _dbContext
+                        .Orders
+                        .Where(o => o.Customer.CustomerId == customerId)
+                        .Where(whereExpression)
+                        .Select(selector);
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, marker);
 
         var expression = LspSyntaxHelper.TryExtractLinqExpression(
             source,

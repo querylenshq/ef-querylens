@@ -76,6 +76,30 @@ public class HoverPreviewServiceTests : IClassFixture<LspTestFixture>
         Assert.False(result.Structured.Success);
     }
 
+    [Fact]
+    public async Task BuildMarkdownAsync_ToQueryStringWrapper_ReturnsGuidanceFailure()
+    {
+        var engine = _fixture.CreatePlainEngine();
+        var service = new HoverPreviewService(engine);
+
+        var sourceText = """
+            var sqlItems = service
+                .BuildSqlPreviewCatalog(targetCustomerId, DateTime.UtcNow)
+                .Select(x => new SqlPreviewItem(x.Title, x.Query.ToQueryString()))
+                .ToArray();
+            """;
+
+        var result = await service.BuildMarkdownAsync(
+            filePath: "Fake.cs",
+            sourceText: sourceText,
+            line: 2,
+            character: 16,
+            cancellationToken: CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("ToQueryString", result.Output, StringComparison.Ordinal);
+    }
+
     // ── Fast-fail: assembly not found ────────────────────────────────────────
 
     [Theory]

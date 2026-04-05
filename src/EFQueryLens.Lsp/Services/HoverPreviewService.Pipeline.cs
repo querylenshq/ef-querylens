@@ -66,6 +66,28 @@ internal sealed partial class HoverPreviewService
         _ => "EF QueryLens - in queue",
     };
 
+    private static bool ContainsToQueryStringCall(string expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return false;
+        }
+
+        try
+        {
+            var parsed = Microsoft.CodeAnalysis.CSharp.SyntaxFactory.ParseExpression(expression);
+            return parsed
+                .DescendantNodesAndSelf()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+                .Any(invocation => invocation.Expression is Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax member
+                    && string.Equals(member.Name.Identifier.ValueText, "ToQueryString", StringComparison.Ordinal));
+        }
+        catch
+        {
+            return expression.Contains(".ToQueryString(", StringComparison.Ordinal);
+        }
+    }
+
     private async Task<HoverCanonicalComputationResult> BuildCanonicalAsync(
         string filePath,
         string sourceText,
@@ -125,6 +147,13 @@ internal sealed partial class HoverPreviewService
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
             return Fail("Could not extract a LINQ query expression at the current caret location.", sourceLine);
+        }
+
+        // Statements that project SQL strings via ToQueryString() are not a single query root.
+        // Return a deterministic guidance message instead of flowing into capture/runtime logic.
+        if (ContainsToQueryStringCall(expression))
+        {
+            return Fail("This statement renders SQL text via ToQueryString(). Hover the underlying LINQ query expression to preview SQL.", sourceLine);
         }
 
         if (string.IsNullOrWhiteSpace(targetAssembly)

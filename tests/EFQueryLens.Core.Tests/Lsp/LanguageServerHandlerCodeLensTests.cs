@@ -43,6 +43,64 @@ public class LanguageServerHandlerCodeLensTests
         Assert.Contains("efquerylens.reanalyze", commandIds);
     }
 
+    [Fact]
+    public void GetCodeLens_ReturnsEmpty_ForRiderClient_WhenNotForced()
+    {
+        var previousClient = Environment.GetEnvironmentVariable("QUERYLENS_CLIENT");
+        var previousForce = Environment.GetEnvironmentVariable("QUERYLENS_FORCE_CODELENS");
+        try
+        {
+            Environment.SetEnvironmentVariable("QUERYLENS_CLIENT", "rider");
+            Environment.SetEnvironmentVariable("QUERYLENS_FORCE_CODELENS", null);
+
+            var docs = new DocumentManager();
+            var uri = new Uri("file:///c:/repo/test.cs");
+            docs.UpdateDocument(uri.ToString(), "var q = db.Orders.Where(o => o.Id > 0);");
+            var handler = CreateHandler(docs);
+
+            var result = handler.GetCodeLens(new CodeLensParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+            });
+
+            Assert.Empty(result);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUERYLENS_CLIENT", previousClient);
+            Environment.SetEnvironmentVariable("QUERYLENS_FORCE_CODELENS", previousForce);
+        }
+    }
+
+    [Fact]
+    public void GetCodeLens_ReturnsCommands_ForRiderClient_WhenForced()
+    {
+        var previousClient = Environment.GetEnvironmentVariable("QUERYLENS_CLIENT");
+        var previousForce = Environment.GetEnvironmentVariable("QUERYLENS_FORCE_CODELENS");
+        try
+        {
+            Environment.SetEnvironmentVariable("QUERYLENS_CLIENT", "rider");
+            Environment.SetEnvironmentVariable("QUERYLENS_FORCE_CODELENS", "1");
+
+            var docs = new DocumentManager();
+            var uri = new Uri("file:///c:/repo/test.cs");
+            docs.UpdateDocument(uri.ToString(), "var q = db.Orders.Where(o => o.Id > 0);");
+            var handler = CreateHandler(docs);
+
+            var result = handler.GetCodeLens(new CodeLensParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = uri },
+            });
+
+            Assert.Equal(4, result.Length);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUERYLENS_CLIENT", previousClient);
+            Environment.SetEnvironmentVariable("QUERYLENS_FORCE_CODELENS", previousForce);
+        }
+    }
+
     private static LanguageServerHandler CreateHandler(DocumentManager docs)
     {
         var engine = new TestControllableEngine();

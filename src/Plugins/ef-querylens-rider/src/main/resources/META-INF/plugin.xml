@@ -15,6 +15,10 @@
             <category>EF QueryLens</category>
         </intentionAction>
         <intentionAction>
+            <className>efquerylens.EFQueryLensPreviewSqlIntentionAction</className>
+            <category>EF QueryLens</category>
+        </intentionAction>
+        <intentionAction>
             <className>efquerylens.EFQueryLensOpenSqlIntentionAction</className>
             <category>EF QueryLens</category>
         </intentionAction>
