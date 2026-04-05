@@ -55,6 +55,7 @@ internal static partial class EvalSourceBuilder
     /// <summary>
     /// Builds placeholder initialization code for a symbol.
     /// Emits a deterministic placeholder value for the symbol type.
+    /// If placeholder generation fails for unsupported types, emits a diagnostic and falls back to default(T).
     /// </summary>
     private static string BuildPlaceholderInitializationCode(V2CapturePlanEntry entry)
     {
@@ -68,7 +69,12 @@ internal static partial class EvalSourceBuilder
             return $"var {entry.Name} = {scalarPlaceholder};";
         }
 
-        // Deterministic fallback for uncatalogued types.
+        // Unsupported type: emit diagnostic and fall back to default(T).
+        var diagnostic = EvalSourceBuilderDiagnostics.DetailedPlaceholderUnsupported(
+            entry.Name,
+            entry.TypeName ?? "unknown");
+        EvalSourceBuilderDiagnosticContextHolder.Current.Emit(diagnostic);
+
         return $"var {entry.Name} = default({entry.TypeName});";
     }
 

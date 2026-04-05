@@ -266,13 +266,51 @@ public sealed record V2CapturePlanEntry
 }
 
 /// <summary>
-/// Diagnostic describing why a capture was rejected in v2 planning.
+/// Structured diagnostic describing why a capture was unresolved or rejected during v2 extraction planning.
+/// Implements the full diagnostic schema from docs/unresolved-capture-examples.md.
+/// 
+/// Diagnostic codes follow the pattern: QLDIAG_{CATEGORY}_{NUMBER}
+/// Examples: QLDIAG_CLOSURE_CHAIN_001, QLDIAG_NONDETERMINISTIC_SRC_001, QLDIAG_PLACEHOLDER_UNSUPPORTED_001
 /// </summary>
 public sealed record V2CaptureDiagnostic
 {
+    /// <summary>Stable diagnostic code (e.g., "QLDIAG_CLOSURE_CHAIN_001").</summary>
     public required string Code { get; init; }
+
+    /// <summary>Unresolved capture category from docs/unresolved-capture-examples.md:
+    /// closure-chain-not-materializable, nondeterministic-source, side-effectful-initializer,
+    /// unsupported-expression-form, generic-type-ambiguity, control-flow-dependent-value,
+    /// async-state-dependent, reflection-or-dynamic-invocation, cross-assembly-visibility-limit,
+    /// translation-semantics-unverifiable, or placeholder-unsupported (for v2 uses-placeholder rejection).
+    /// </summary>
+    public string Category { get; init; } = "unclassified";
+
+    /// <summary>Captured symbol identifier (e.g., "request", "token", "term").</summary>
     public required string SymbolName { get; init; }
+
+    /// <summary>Full member path when available (e.g., "request.AuthContext.CurrentTenant.Id").</summary>
+    public string? SymbolPath { get; init; }
+
+    /// <summary>Short machine-readable reason code (e.g., "unsafe-evaluation-side-effects", "initializer-not-observable").</summary>
+    public string Reason { get; init; } = "unknown";
+
+    /// <summary>Human-readable explanation of the unresolved capture.</summary>
     public required string Message { get; init; }
+
+    /// <summary>Optional actionable guidance (e.g., "Consider moving the value to a local variable outside the query").</summary>
+    public string? SuggestedFix { get; init; }
+
+    /// <summary>Optional provider context for translation-risk cases (e.g., "SqlServer", "Sqlite", "PostgreSQL").</summary>
+    public string? Provider { get; init; }
+
+    /// <summary>Source file location if available (e.g., "CustomerReadService.cs").</summary>
+    public string? SourceFile { get; init; }
+
+    /// <summary>Source line number (1-based) if available.</summary>
+    public int? SourceLine { get; init; }
+
+    /// <summary>Source character offset (0-based) if available.</summary>
+    public int? SourceCharacter { get; init; }
 }
 
 /// <summary>

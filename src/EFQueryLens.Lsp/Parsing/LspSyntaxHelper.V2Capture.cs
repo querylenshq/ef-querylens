@@ -115,7 +115,9 @@ public static partial class LspSyntaxHelper
                 diagnostics.Add(new V2CaptureDiagnostic
                 {
                     Code = "QLV2_CAPTURE_INVALID_REPLAY",
+                    Category = "replay-initializer-missing",
                     SymbolName = entry.Name,
+                    Reason = "missing-initializer-expression",
                     Message = $"Capture '{entry.Name}' was marked for replay but has no initializer expression.",
                 });
 
@@ -129,7 +131,9 @@ public static partial class LspSyntaxHelper
                 diagnostics.Add(new V2CaptureDiagnostic
                 {
                     Code = "QLV2_CAPTURE_MISSING_DEPENDENCY",
+                    Category = "missing-dependency",
                     SymbolName = entry.Name,
+                    Reason = "dependency-not-in-scope",
                     Message = $"Capture '{entry.Name}' depends on '{missingDependency}', which is not available in scope.",
                 });
 
@@ -141,7 +145,9 @@ public static partial class LspSyntaxHelper
                 diagnostics.Add(new V2CaptureDiagnostic
                 {
                     Code = "QLV2_CAPTURE_UNSAFE_INITIALIZER",
+                    Category = "unsafe-replay-initializer",
                     SymbolName = entry.Name,
+                    Reason = "non-deterministic-or-executable-syntax",
                     Message = $"Capture '{entry.Name}' uses initializer syntax that is not allowed for deterministic replay.",
                 });
 
@@ -159,7 +165,9 @@ public static partial class LspSyntaxHelper
                 diagnostics.Add(new V2CaptureDiagnostic
                 {
                     Code = "QLV2_CAPTURE_UNSAFE_DEPENDENCY",
+                    Category = "unsafe-dependency",
                     SymbolName = entry.Name,
+                    Reason = "depends-on-unsafe-capture",
                     Message = $"Capture '{entry.Name}' depends on unsafe capture '{unsafeDependency.Name}'.",
                 });
 
@@ -187,7 +195,9 @@ public static partial class LspSyntaxHelper
             diagnostics.Add(new V2CaptureDiagnostic
             {
                 Code = "QLV2_CAPTURE_UNKNOWN_TYPE",
+                Category = "unknown-type",
                 SymbolName = entry.Name,
+                Reason = "no-deterministic-type",
                 Message = $"Capture '{entry.Name}' has no deterministic type and cannot use placeholder policy.",
             });
 
