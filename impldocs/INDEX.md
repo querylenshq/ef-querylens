@@ -20,4 +20,5 @@
 | v2-production-wiring-p9 | in-progress | Wires v2 capture-plan codegen into the production stub pipeline, adds StubSynthesizer.BuildV2Stubs adapter, passes v2Decision into TryBuildRunnerForCacheMiss, fixes Slice 3b review findings (unreachable code, comment mismatch, silent catch), adds pipeline+VS Code tests. Pending manual VS Code smoke validation. |
 | v2-parity-extraction-k4 | in-progress | Accuracy-first extraction/runtime implementation in progress: core placeholder catalog and two-item deterministic collection seeding are now wired with focused tests. |
 | rider-parity-stability-h7 | in-progress | Stabilizes Rider query preview parity with VS/VS Code via query-triggered extraction semantics plus Rider preview-only hover and full Alt+Enter action menu. |
+| factory-root-substitution-j4 | completed | Adds safe root-receiver substitution for factory-created DbContext query chains so QueryLens runtime context executes supported factory patterns without placeholder-null failures. |
 | query-extraction-v2-cutover-r4 | planned | Slice 4 performs final v2 cutover, removes legacy extraction/runtime paths, and validates end-to-end behavior. |

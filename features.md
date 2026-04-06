@@ -37,3 +37,11 @@
 - RunnerGenerator.V2Support initialization code generation for v2 capture-plan statements (query-extraction-v2-runtime-3b)
 - Comprehensive v2 codegen unit tests validating policy interpretation and code emission (query-extraction-v2-runtime-3b)
 - End-to-end v2 integration tests for direct chains, helper composition, and rejection scenarios (query-extraction-v2-runtime-3b)
+
+## DbContext Support
+
+- Factory-root receiver substitution for `IDbContextFactory<TContext>` -rooted LINQ chains with strict type-compatibility gates (factory-root-substitution-j4)
+- Root-only rewriting strategy to avoid semantic drift in complex helper/subquery scenarios (factory-root-substitution-j4)
+- Deterministic substitution/skip diagnostics for factory pattern matching in capture planning (factory-root-substitution-j4)
+- Free variable collection filtering to exclude synthetic factory context receiver from capture graph (factory-root-substitution-j4)
+- Unit test coverage for async/sync factory patterns, ambiguity conflicts, and regression cases (factory-root-substitution-j4)
