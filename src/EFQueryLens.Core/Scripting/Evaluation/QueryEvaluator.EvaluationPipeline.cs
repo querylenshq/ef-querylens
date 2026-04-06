@@ -162,7 +162,10 @@ public sealed partial class QueryEvaluator
         List<string> stubs;
         if (v2Decision.ShouldUseV2Path && v2Decision.CapturePlan is not null)
         {
-            stubs = StubSynthesizer.BuildV2Stubs(v2Decision.CapturePlan);
+            stubs = StubSynthesizer.BuildV2Stubs(
+                v2Decision.CapturePlan,
+                request.Expression,
+                request.ContextVariableName);
             LogDebug(
                 $"v2-stubs count={stubs.Count} " +
                 $"entries={string.Join(",", stubs.Select(s => s.Trim()))}");

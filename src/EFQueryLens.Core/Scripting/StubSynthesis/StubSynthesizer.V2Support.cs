@@ -17,7 +17,10 @@ internal static partial class StubSynthesizer
     /// Each entry is converted via <see cref="EvalSourceBuilder.BuildV2CaptureInitializationCode"/>.
     /// Entries with <c>Reject</c> policy return null and are excluded from the stub list.
     /// </remarks>
-    internal static List<string> BuildV2Stubs(V2CapturePlanSnapshot capturePlan)
+    internal static List<string> BuildV2Stubs(
+        V2CapturePlanSnapshot capturePlan,
+        string executableExpression,
+        string contextVariableName)
     {
         var stubs = new List<string>();
 
@@ -29,6 +32,16 @@ internal static partial class StubSynthesizer
             var stub = global::EFQueryLens.Core.Scripting.Compilation.EvalSourceBuilder.BuildV2CaptureInitializationCode(entry);
             if (stub is not null)
                 stubs.Add(stub);
+        }
+
+        // Factory-root substitution rewrites receiver to __qlFactoryContext.*.
+        // Ensure generated source always has that identifier bound to the runtime context variable.
+        if (!string.IsNullOrWhiteSpace(executableExpression)
+            && executableExpression.Contains("__qlFactoryContext", StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(contextVariableName)
+            && !stubs.Any(s => s.Contains("__qlFactoryContext", StringComparison.Ordinal)))
+        {
+            stubs.Insert(0, $"var __qlFactoryContext = {contextVariableName};");
         }
 
         return stubs;

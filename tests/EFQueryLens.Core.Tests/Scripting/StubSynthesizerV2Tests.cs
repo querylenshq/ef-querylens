@@ -12,7 +12,7 @@ public class StubSynthesizerV2Tests
     [Fact]
     public void BuildV2Stubs_NullPlan_ReturnsEmpty()
     {
-        var stubs = StubSynthesizer.BuildV2Stubs(null!);
+        var stubs = StubSynthesizer.BuildV2Stubs(null!, string.Empty, "dbContext");
 
         Assert.Empty(stubs);
     }
@@ -27,7 +27,7 @@ public class StubSynthesizerV2Tests
             Entries = [],
         };
 
-        var stubs = StubSynthesizer.BuildV2Stubs(plan);
+        var stubs = StubSynthesizer.BuildV2Stubs(plan, plan.ExecutableExpression, "dbContext");
 
         Assert.Empty(stubs);
     }
@@ -51,7 +51,7 @@ public class StubSynthesizerV2Tests
             ],
         };
 
-        var stubs = StubSynthesizer.BuildV2Stubs(plan);
+        var stubs = StubSynthesizer.BuildV2Stubs(plan, plan.ExecutableExpression, "dbContext");
 
         Assert.Single(stubs);
         Assert.Contains("var user =", stubs[0]);
@@ -76,7 +76,7 @@ public class StubSynthesizerV2Tests
             ],
         };
 
-        var stubs = StubSynthesizer.BuildV2Stubs(plan);
+        var stubs = StubSynthesizer.BuildV2Stubs(plan, plan.ExecutableExpression, "dbContext");
 
         Assert.Single(stubs);
         Assert.Contains("var limit =", stubs[0]);
@@ -101,7 +101,7 @@ public class StubSynthesizerV2Tests
             ],
         };
 
-        var stubs = StubSynthesizer.BuildV2Stubs(plan);
+        var stubs = StubSynthesizer.BuildV2Stubs(plan, plan.ExecutableExpression, "dbContext");
 
         Assert.Empty(stubs);
     }
@@ -137,11 +137,34 @@ public class StubSynthesizerV2Tests
             ],
         };
 
-        var stubs = StubSynthesizer.BuildV2Stubs(plan);
+        var stubs = StubSynthesizer.BuildV2Stubs(plan, plan.ExecutableExpression, "dbContext");
 
         Assert.Equal(2, stubs.Count);
         Assert.DoesNotContain(stubs, s => s.Contains("rejected"));
         Assert.Contains(stubs, s => s.Contains("var u ="));
         Assert.Contains(stubs, s => s.Contains("var limit ="));
+    }
+
+    [Fact]
+    public void BuildV2Stubs_FactoryRootExpression_AddsSyntheticContextAliasStub()
+    {
+        var plan = new V2CapturePlanSnapshot
+        {
+            ExecutableExpression = "__qlFactoryContext.Rationales.AsNoTracking().OrderBy(x => x.Title).ToListAsync(ct)",
+            IsComplete = true,
+            Entries =
+            [
+                new V2CapturePlanEntry
+                {
+                    Name = "ct",
+                    TypeName = "CancellationToken",
+                    CapturePolicy = LocalSymbolReplayPolicies.UsePlaceholder,
+                },
+            ],
+        };
+
+        var stubs = StubSynthesizer.BuildV2Stubs(plan, plan.ExecutableExpression, "Rationales");
+
+        Assert.Contains(stubs, s => s.Contains("var __qlFactoryContext = Rationales;", StringComparison.Ordinal));
     }
 }
