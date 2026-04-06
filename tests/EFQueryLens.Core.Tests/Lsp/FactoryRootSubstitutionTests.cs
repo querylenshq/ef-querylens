@@ -6,39 +6,112 @@ namespace EFQueryLens.Core.Tests.Lsp;
 
 public class FactoryRootSubstitutionTests
 {
+    // --- Positive cases (detection and rewrite should succeed) ---
+
+    [Fact]
+    public void TrySubstituteFactoryRoot_AsyncWithChain_SampleAppPattern_ReplacesReceiver()
+    {
+        // This is the exact pattern that appears in SampleDbContextFactoryApp.
+        var expression = "(await _contextFactory.CreateDbContextAsync(ct)).Rationales\n            .AsNoTracking()\n            .OrderBy(x => x.Title)\n            .ToListAsync(ct)";
+        var candidates = new[] { "ApplicationDbContext" };
+
+        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "dbContext", candidates);
+
+        Assert.True(applied, "Factory root should be detected in the sample app pattern");
+        Assert.Contains("__qlFactoryContext", rewritten);
+        Assert.DoesNotContain("CreateDbContextAsync", rewritten);
+        Assert.DoesNotContain("_contextFactory", rewritten);
+        Assert.Equal("ApplicationDbContext", contextType);
+    }
+
+    [Fact]
+    public void TrySubstituteFactoryRoot_AsyncWithChain_PreservesDownstreamOperations()
+    {
+        var expression = "(await _contextFactory.CreateDbContextAsync(ct)).DbSet<User>().Where(u => u.Active).OrderBy(u => u.Name).ToListAsync(ct)";
+        var candidates = new[] { "ApplicationDbContext" };
+
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "dbContext", candidates);
+
+        Assert.True(applied);
+        Assert.Contains("__qlFactoryContext", rewritten);
+        Assert.DoesNotContain("CreateDbContextAsync", rewritten);
+        // Chain operations must be preserved
+        Assert.Contains("Where", rewritten);
+        Assert.Contains("OrderBy", rewritten);
+        Assert.Contains("ToListAsync", rewritten);
+    }
+
+    [Fact]
+    public void TrySubstituteFactoryRoot_AsyncWithoutParens_SimpleAwait_ReplacesReceiver()
+    {
+        // Simpler pattern: await factory.CreateDbContextAsync(ct) without (...)
+        // (less common in real code, but should still work)
+        var expression = "await _contextFactory.CreateDbContextAsync(ct)";
+        var candidates = new[] { "ApplicationDbContext" };
+
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "dbContext", candidates);
+
+        Assert.True(applied);
+        Assert.Contains("__qlFactoryContext", rewritten);
+    }
+
+    [Fact]
+    public void TrySubstituteFactoryRoot_SyncWithChain_ReplacesReceiver()
+    {
+        var expression = "_contextFactory.CreateDbContext().Set<User>().AsNoTracking().ToList()";
+        var candidates = new[] { "ApplicationDbContext" };
+
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "dbContext", candidates);
+
+        Assert.True(applied, "Sync pattern should be detected");
+        Assert.Contains("__qlFactoryContext", rewritten);
+        Assert.DoesNotContain("CreateDbContext()", rewritten);
+    }
+
+    [Fact]
+    public void TrySubstituteFactoryRoot_NullCandidates_StillDetectsPattern()
+    {
+        // When candidates list is null/empty, ambiguity gate doesn't apply.
+        var expression = "(await _contextFactory.CreateDbContextAsync(ct)).Users.ToListAsync(ct)";
+
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "dbContext", null);
+
+        Assert.True(applied, "Factory pattern should be detected even with null candidates");
+        Assert.Contains("__qlFactoryContext", rewritten);
+    }
+
+    // --- Negative cases (no detection) ---
+
     [Fact]
     public void TrySubstituteFactoryRoot_NoFactoryPattern_ReturnsOriginal()
     {
-        // Arrange
         var expression = "users.Where(u => u.Id == 1)";
-        var factoryCandidates = new[] { "ApplicationDbContext" };
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "users",
-            factoryCandidates);
+        var candidates = new[] { "ApplicationDbContext" };
 
-        // Assert
+        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "users", candidates);
+
         Assert.False(applied, "No factory pattern should be detected");
         Assert.Equal(expression, rewritten);
         Assert.Null(contextType);
     }
 
     [Fact]
-    public void TrySubstituteFactoryRoot_MultipleCandidates_SkipsSubstitutionForAmbiguity()
+    public void TrySubstituteFactoryRoot_MultipleCandidates_SkipsSubstitution()
     {
-        // Arrange
-        var expression = "await _contextFactory.CreateDbContextAsync(ct).DbSet<User>().ToListAsync()";
-        var factoryCandidates = new[] { "ApplicationDbContext", "CatalogDbContext" };  // Ambiguous
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "dbContext",
-            factoryCandidates);
+        // Ambiguity gate: when multiple factory candidates exist without a clear winner,
+        // don't rewrite to avoid cross-DbContext execution.
+        var expression = "(await _contextFactory.CreateDbContextAsync(ct)).Users.ToListAsync(ct)";
+        var candidates = new[] { "ApplicationDbContext", "CatalogDbContext" };
 
-        // Assert
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "dbContext", candidates);
+
         Assert.False(applied, "Substitution should be skipped when multiple factory candidates exist");
         Assert.Equal(expression, rewritten);
     }
@@ -46,106 +119,33 @@ public class FactoryRootSubstitutionTests
     [Fact]
     public void TrySubstituteFactoryRoot_EmptyExpression_ReturnsEmpty()
     {
-        // Arrange
-        var expression = "";
-        var factoryCandidates = new[] { "ApplicationDbContext" };
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "dbContext",
-            factoryCandidates);
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            "", "dbContext", ["ApplicationDbContext"]);
 
-        // Assert
         Assert.False(applied);
         Assert.Equal("", rewritten);
     }
 
     [Fact]
-    public void TrySubstituteFactoryRoot_DirectFactoryReceiver_RecognizesPattern()
+    public void TrySubstituteFactoryRoot_NormalDbContextVariable_ReturnsOriginal()
     {
-        // Arrange - This is the pattern we specifically support: factory receiver used directly
-        var expression = "_contextFactory";
-        var factoryCandidates = new[] { "ApplicationDbContext" };
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "dbContext",
-            factoryCandidates);
+        // Direct DbContext variable usage — must not be rewritten.
+        var expression = "_db.Users.Where(u => u.Active).ToList()";
+        var candidates = new[] { "ApplicationDbContext" };
 
-        // Assert
-        // Since this is just an identifier, not a factory invocation, it won't be detected
-        Assert.False(applied);
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            expression, "_db", candidates);
+
+        Assert.False(applied, "Direct DbContext variable should not be detected as factory pattern");
+        Assert.Equal(expression, rewritten);
     }
 
     [Fact]
-    public void TrySubstituteFactoryRoot_AwaitedFactoryWithMember_DetectsPatternStructure()
+    public void TrySubstituteFactoryRoot_RobustToMalformedExpression_DoesNotCrash()
     {
-        // Arrange - simpler pattern: just the await factory call without subsequent chain
-        var expression = "await _contextFactory.CreateDbContextAsync(ct)";
-        var factoryCandidates = new[] { "ApplicationDbContext" };
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "dbContext",
-            factoryCandidates);
+        var (rewritten, applied, _) = LspSyntaxHelper.TrySubstituteFactoryRoot(
+            "ctx)", "context", ["ApplicationDbContext"]);
 
-        // Assert
-        // This should be detected as a factory pattern
-        Assert.True(applied || !applied, "Pattern should be recognized or handled gracefully");
-    }
-
-    [Fact]
-    public void TrySubstituteFactoryRoot_NullCandidates_TreatsAsEmpty()
-    {
-        // Arrange
-        var expression = "await _contextFactory.CreateDbContextAsync(ct).DbSet<User>()";
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "dbContext",
-            null);  // No candidates
-
-        // Assert
-        // Factory pattern should still be detected even if no candidates - ambiguity gate doesn't apply
-        Assert.True(applied || !applied, "Should handle null candidates gracefully");
-    }
-
-    [Fact]
-    public void TrySubstituteFactoryRoot_FactoryCallAsArgumentToChain_RequiresNormalization()
-    {
-        // Arrange - factory call is normally used as the root before chained calls
-        var expression = "(await _contextFactory.CreateDbContextAsync(ct)).DbSet<User>().Count()";
-        var factoryCandidates = new[] { "ApplicationDbContext" };
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "dbContext",
-            factoryCandidates);
-
-        // Assert
-        // Parenthesized expressions should still work with pattern detection
-        Assert.True(applied || !applied, "Parenthesized factory should be detected or handled");
-    }
-
-    [Fact]
-    public void TrySubstituteFactoryRoot_RobustToParsingErrors()
-    {
-        // Arrange
-        var expression = "ctx)";  // Unbalanced parens
-        var factoryCandidates = new[] { "ApplicationDbContext" };
-        
-        // Act
-        var (rewritten, applied, contextType) = LspSyntaxHelper.TrySubstituteFactoryRoot(
-            expression,
-            "context",
-            factoryCandidates);
-
-        // Assert
         Assert.False(applied, "Malformed expression should not crash");
     }
 }

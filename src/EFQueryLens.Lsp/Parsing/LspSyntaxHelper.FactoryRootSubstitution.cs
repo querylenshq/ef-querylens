@@ -64,17 +64,29 @@ public static partial class LspSyntaxHelper
             var rewriter = new FactoryRootRewriter(factoryReceiver, replacementReceiverName);
             var rewritten = rewriter.Visit(parsed);
 
-            if (ReferenceEquals(rewritten, parsed))
+            if (ReferenceEquals(rewritten, parsed) || rewritten is null)
             {
                 debugLog?.Invoke("factory-root-substitution skipped reason=rewriter-produced-no-change");
                 return (expression, false, null);
             }
 
-            var rewrittenText = rewritten.WithoutTrivia().NormalizeWhitespace().ToString();
-            debugLog?.Invoke(
-                $"factory-root-substitution applied receiverType={tContextType ?? "unknown"} isAsync={isAsync}");
+            if (rewritten is not ExpressionSyntax rewrittenExpr)
+            {
+                debugLog?.Invoke("factory-root-substitution skipped reason=rewriter-result-not-expression");
+                return (expression, false, null);
+            }
 
-            return (rewrittenText, true, tContextType);
+            var rewrittenText = rewrittenExpr.WithoutTrivia().NormalizeWhitespace().ToString();
+            // Infer contextType from the single factory candidate when the syntax parser
+            // couldn't extract it directly (which is always, since we don't use a semantic model).
+            var resolvedContextType = tContextType;
+            if (string.IsNullOrWhiteSpace(resolvedContextType) && factoryCandidateTypeNames?.Count == 1)
+                resolvedContextType = factoryCandidateTypeNames[0];
+
+            debugLog?.Invoke(
+                $"factory-root-substitution applied receiverType={resolvedContextType ?? "unknown"} isAsync={isAsync}");
+
+            return (rewrittenText, true, resolvedContextType);
         }
         catch (Exception ex)
         {
@@ -99,41 +111,53 @@ public static partial class LspSyntaxHelper
             IReadOnlyList<string>? factoryCandidateTypeNames,
             Action<string>? debugLog)
     {
-        // If expression is a member access like: (await X).DbSet<T>()
-        if (expression is MemberAccessExpressionSyntax memberAccess)
+        // Walk down the entire fluent chain to find the root expression.
+        // Real chains alternate: Invocation → MemberAccess → Invocation → MemberAccess...
+        // e.g. (await factory.Xyz(ct)).Set<T>().Where(...).OrderBy(...).ToListAsync(ct)
+        //
+        // A single-type while loop exits as soon as the pattern switches, so we need one
+        // combined loop that keeps walking regardless of which alternating type is next.
+        // IMPORTANT: stop when we find a factory InvocationExpression (sync pattern) rather
+        // than stepping into it and walking right past it.
+        ExpressionSyntax current = expression;
+        
+        while (true)
         {
-            // Check if the receiver (left side) is an await expression over a factory call.
-            if (memberAccess.Expression is AwaitExpressionSyntax awaitExpr)
+            if (current is InvocationExpressionSyntax invocation)
             {
-                if (awaitExpr.Expression is InvocationExpressionSyntax factoryCall
-                    && TryIdentifyFactoryCallPattern(factoryCall, out var contextTypeName))
-                {
-                    debugLog?.Invoke(
-                        $"factory-root-detected pattern=await-factory-invoke contextType={contextTypeName}");
-                    return (factoryCall, true, contextTypeName);
-                }
+                // Stop if this invocation IS the factory call (sync pattern).
+                if (TryIdentifyFactoryCallPattern(invocation, out _))
+                    break;
+                current = invocation.Expression;
             }
-
-            // Check if the receiver is directly a factory call (sync pattern).
-            if (memberAccess.Expression is InvocationExpressionSyntax syncFactoryCall
-                && TryIdentifyFactoryCallPattern(syncFactoryCall, out var syncContextType))
+            else if (current is MemberAccessExpressionSyntax memberAccess)
+                current = memberAccess.Expression;
+            else if (current is ParenthesizedExpressionSyntax paren)
+                current = paren.Expression;
+            else
+                break;
+        }
+        
+        // current is now the root: AwaitExpression or factory InvocationExpression.
+        // Pattern 1: await factory.CreateDbContextAsync(...)
+        if (current is AwaitExpressionSyntax awaitExpr)
+        {
+            if (awaitExpr.Expression is InvocationExpressionSyntax factoryCall
+                && TryIdentifyFactoryCallPattern(factoryCall, out var contextTypeName))
             {
                 debugLog?.Invoke(
-                    $"factory-root-detected pattern=sync-factory-invoke contextType={syncContextType}");
-                return (syncFactoryCall, false, syncContextType);
+                    $"factory-root-detected pattern=await-factory-invoke contextType={contextTypeName}");
+                return (factoryCall, true, contextTypeName);
             }
         }
-
-        // If the entire expression is an await over a factory (no chained member access after await).
-        if (expression is AwaitExpressionSyntax awaitOnly)
+        
+        // Pattern 2: factory.CreateDbContext(...)
+        if (current is InvocationExpressionSyntax syncFactoryCall
+            && TryIdentifyFactoryCallPattern(syncFactoryCall, out var syncContextType))
         {
-            if (awaitOnly.Expression is InvocationExpressionSyntax factoryCallOnly
-                && TryIdentifyFactoryCallPattern(factoryCallOnly, out var contextTypeOnly))
-            {
-                debugLog?.Invoke(
-                    $"factory-root-detected pattern=await-factory-only contextType={contextTypeOnly}");
-                return (factoryCallOnly, true, contextTypeOnly);
-            }
+            debugLog?.Invoke(
+                $"factory-root-detected pattern=sync-factory-invoke contextType={syncContextType}");
+            return (syncFactoryCall, false, syncContextType);
         }
 
         debugLog?.Invoke("factory-root-pattern-not-matched");
@@ -182,62 +206,49 @@ public static partial class LspSyntaxHelper
     }
 
     /// <summary>
-    /// Rewrites a parsed expression by replacing a specific factory invocation receiver
-    /// with a substitution receiver name. This rewriter walks the syntax tree and replaces
-    /// the exact factory receiver node with the new receiver.
+    /// Rewrites a parsed expression by replacing the factory invocation receiver with
+    /// a synthetic variable name. Checks BEFORE visiting children (pre-order) so the
+    /// natural bottom-up Roslyn tree reconstruction receives the substituted receiver at
+    /// every parent node without requiring a short-circuit override.
     /// </summary>
     private sealed class FactoryRootRewriter : CSharpSyntaxRewriter
     {
         private readonly InvocationExpressionSyntax _originalReceiver;
         private readonly string _replacementReceiverName;
-        private bool _substituted;
+        private bool _replaced;
 
         public FactoryRootRewriter(InvocationExpressionSyntax originalReceiver, string replacementReceiverName)
         {
             _originalReceiver = originalReceiver;
             _replacementReceiverName = replacementReceiverName;
-            _substituted = false;
-        }
-
-        public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
-        {
-            // If this invocation is the one we're looking for, don't visit further down.
-            // Instead, replace it with an identifier to the new receiver name.
-            if (ReferenceEquals(node.Expression, _originalReceiver.Expression)
-                && !_substituted)
-            {
-                _substituted = true;
-                // Return the expression unchanged but with the receiver replaced in parent.
-                // This is handled in VisitMemberAccessExpression.
-            }
-
-            return base.VisitInvocationExpression(node);
         }
 
         public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
         {
-            // Check if this member access has our target factory receiver as its Expression.
-            if (node.Expression is AwaitExpressionSyntax awaitExpr)
+            if (!_replaced)
             {
-                if (awaitExpr.Expression is InvocationExpressionSyntax factoryCall
-                    && SyntaxFactory.AreEquivalent(factoryCall, _originalReceiver)
-                    && !_substituted)
-                {
-                    _substituted = true;
-                    // Replace the await-factory with just the context variable name.
-                    var newReceiver = SyntaxFactory.IdentifierName(_replacementReceiverName);
-                    return node.WithExpression(newReceiver);
-                }
-            }
+                // Strip any parentheses wrapping the receiver before checking.
+                // (await factory.Xyz(ct)).Member → receiver after strip = await factory.Xyz(ct)
+                var receiver = node.Expression;
+                while (receiver is ParenthesizedExpressionSyntax paren)
+                    receiver = paren.Expression;
 
-            if (node.Expression is InvocationExpressionSyntax syncFactoryCall
-                && SyntaxFactory.AreEquivalent(syncFactoryCall, _originalReceiver)
-                && !_substituted)
-            {
-                _substituted = true;
-                // Replace the factory invocation with just the context variable name.
-                var newReceiver = SyntaxFactory.IdentifierName(_replacementReceiverName);
-                return node.WithExpression(newReceiver);
+                // Async pattern: (await factory.CreateDbContextAsync(ct)).Member
+                if (receiver is AwaitExpressionSyntax awaitExpr
+                    && awaitExpr.Expression is InvocationExpressionSyntax asyncFactory
+                    && SyntaxFactory.AreEquivalent(asyncFactory, _originalReceiver))
+                {
+                    _replaced = true;
+                    return node.WithExpression(SyntaxFactory.IdentifierName(_replacementReceiverName));
+                }
+
+                // Sync pattern: factory.CreateDbContext().Member
+                if (receiver is InvocationExpressionSyntax syncFactory
+                    && SyntaxFactory.AreEquivalent(syncFactory, _originalReceiver))
+                {
+                    _replaced = true;
+                    return node.WithExpression(SyntaxFactory.IdentifierName(_replacementReceiverName));
+                }
             }
 
             return base.VisitMemberAccessExpression(node);
@@ -245,13 +256,13 @@ public static partial class LspSyntaxHelper
 
         public override SyntaxNode? VisitAwaitExpression(AwaitExpressionSyntax node)
         {
-            // If the await's expression is the factory call we're replacing,
-            // strip the await and replace with the context variable.
-            if (node.Expression is InvocationExpressionSyntax factoryCall
-                && SyntaxFactory.AreEquivalent(factoryCall, _originalReceiver)
-                && !_substituted)
+            // Handles the standalone case: await factory.CreateDbContextAsync(ct)
+            // (not followed by .Member access — e.g. the whole expression is just the await).
+            if (!_replaced
+                && node.Expression is InvocationExpressionSyntax factoryCall
+                && SyntaxFactory.AreEquivalent(factoryCall, _originalReceiver))
             {
-                _substituted = true;
+                _replaced = true;
                 return SyntaxFactory.IdentifierName(_replacementReceiverName);
             }
 
