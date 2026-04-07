@@ -134,7 +134,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "sql-formatter": "^15.7.2",
+    "sql-formatter": "^15.7.3",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
