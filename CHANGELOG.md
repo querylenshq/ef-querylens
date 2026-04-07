@@ -6,6 +6,14 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Fixed
+- Visual Studio: LINQ snippet formatting now resolves the external formatter correctly regardless of packaging layout by probing both `server/formatter` and `server` roots for `EFQueryLens.Formatter`.
+- LSP build output now stages formatter runtime payload under `bin/<Configuration>/net10.0/formatter`, preventing local/dev runs from silently falling back to unformatted LINQ when not running from publish output.
+
+### Changed
+- Visual Studio hover preview is now SQL-focused (SQL block and status/actions only). Full enriched output (LINQ, Executed LINQ, parameters, notes, SQL) remains available via Copy SQL and Open SQL.
+- Removed manual SQL/C# syntax-coloring path in VS hover renderer to rely on backend-preformatted content consistently.
+
 ## [1.0.16] - 2026-04-06
 
 ## [1.0.15] - 2026-04-06
