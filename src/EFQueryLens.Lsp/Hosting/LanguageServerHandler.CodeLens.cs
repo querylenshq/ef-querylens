@@ -13,6 +13,27 @@ internal sealed partial class LanguageServerHandler
     [JsonRpcMethod(Methods.TextDocumentCodeLensName, UseSingleObjectParameterDeserialization = true)]
     public CodeLens[] GetCodeLens(CodeLensParams request)
     {
+        var forceCodeLens = string.Equals(
+            Environment.GetEnvironmentVariable("QUERYLENS_FORCE_CODELENS"),
+            "1",
+            StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                Environment.GetEnvironmentVariable("QUERYLENS_FORCE_CODELENS"),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+
+        var isRiderClient = string.Equals(
+            Environment.GetEnvironmentVariable("QUERYLENS_CLIENT"),
+            "rider",
+            StringComparison.OrdinalIgnoreCase);
+
+        // Rider UX contract: hover is preview-only and actions are exposed via Alt+Enter intentions.
+        // Keep an explicit override for local diagnostics/dev workflows.
+        if (isRiderClient && !forceCodeLens)
+        {
+            return Array.Empty<CodeLens>();
+        }
+
         var sourceText = _textSync.DocumentManager.GetDocumentText(request.TextDocument.Uri.ToString());
         if (sourceText is null)
         {

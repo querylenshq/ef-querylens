@@ -9,8 +9,11 @@ internal sealed partial class HoverHandler
 {
     private readonly DocumentManager _documentManager;
     private readonly HoverPreviewService _hoverPreviewService;
+    private readonly HoverCacheManager _cacheManager = new();
     private readonly ConcurrentDictionary<string, CachedEntry> _hoverCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CachedEntry> _semanticHoverCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<Task<ComputedEntry>>> _inflightBackgroundComputes =
+        new(StringComparer.Ordinal);
     private int _hoverCacheTtlMs;
     private int _inQueueCacheTtlMs;
     private int _hoverQueuedAdaptiveWaitMs;

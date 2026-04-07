@@ -1,5 +1,8 @@
 using EFQueryLens.Lsp.Parsing;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EFQueryLens.Lsp.Handlers;
 
@@ -18,19 +21,34 @@ internal sealed partial class HoverHandler
     /// </summary>
     private string BuildHoverCacheKey(
         string filePath,
+        string sourceText,
         int requestLine,
         int requestCharacter,
         SemanticHoverContext? semanticContext)
     {
         var fingerprint = AssemblyResolver.TryGetAssemblyFingerprint(filePath)
                           ?? $"no-assembly|{Path.GetFullPath(filePath)}";
+        var fileToken = Path.GetFullPath(filePath).ToLowerInvariant();
 
         if (semanticContext is not null)
         {
-            return $"{fingerprint}|semantic|{semanticContext.SemanticKey}|{semanticContext.EffectiveLine}|{semanticContext.EffectiveCharacter}";
+            return $"{fingerprint}|file|{fileToken}|semantic|{semanticContext.SemanticKey}";
         }
 
-        return $"{fingerprint}|cursor|{requestLine}|{requestCharacter}";
+        if (TryGetAnchorRangeAtPosition(
+                sourceText,
+                requestLine,
+                requestCharacter,
+                out var anchorStartLine,
+                out var anchorStartCharacter,
+                out var anchorEndLine,
+                out var anchorEndCharacter))
+        {
+            return
+                $"{fingerprint}|file|{fileToken}|anchor|{anchorStartLine}:{anchorStartCharacter}-{anchorEndLine}:{anchorEndCharacter}";
+        }
+
+        return $"{fingerprint}|file|{fileToken}|cursor|{requestLine}|{requestCharacter}";
     }
 
     private static bool TryResolveSemanticHoverContext(
@@ -48,37 +66,172 @@ internal sealed partial class HoverHandler
                           ?? $"no-assembly|{Path.GetFullPath(filePath)}";
 
         var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
-        var factoryDbContextType = (!string.IsNullOrWhiteSpace(targetAssembly)
-                                    && !targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal))
-            ? AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly)
-            : null;
+        var factoryDbContextCandidates = (!string.IsNullOrWhiteSpace(targetAssembly)
+                                         && !targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal))
+            ? AssemblyResolver.TryExtractDbContextTypeNamesFromFactories(targetAssembly)
+            : [];
 
         if (TryFindContainingChain(sourceText, line, character, out var containingChain))
         {
-            var dbContextType = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, containingChain.ContextVariableName)
-                                ?? factoryDbContextType;
+            var resolution = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
+                sourceText,
+                containingChain.ContextVariableName,
+                factoryDbContextCandidates);
+            var dbContextTypeToken = LspSyntaxHelper.GetDbContextResolutionCacheToken(resolution);
+            var anchorToken = $"{containingChain.StatementStartLine}:{containingChain.StatementStartCharacter}-{containingChain.StatementEndLine}:{containingChain.StatementEndCharacter}";
             semanticContext = new SemanticHoverContext(
-                SemanticKey: $"{fingerprint}|{dbContextType ?? string.Empty}|{NormalizeWhitespace(containingChain.Expression)}",
+                SemanticKey: $"{fingerprint}|{dbContextTypeToken}|{NormalizeWhitespace(containingChain.Expression)}|anchor|{anchorToken}",
+                // Use query anchor for extraction/compute stability; statement span remains in key/range matching.
                 EffectiveLine: containingChain.Line,
                 EffectiveCharacter: containingChain.Character);
             return true;
         }
 
-        var siblingRoots = ProjectSourceHelper.GetSiblingRoots(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, siblingRoots);
+        var extractionLine = line;
+        var extractionCharacter = character;
+        if (TryFindStatementInvocationAnchor(sourceText, line, character, out var invocationLine, out var invocationCharacter))
+        {
+            extractionLine = invocationLine;
+            extractionCharacter = invocationCharacter;
+        }
+
+        var sourceIndex = ProjectSourceHelper.GetProjectIndex(filePath);
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, extractionLine, extractionCharacter, out var contextVariableName, out _, sourceIndex);
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
             return false;
         }
 
-        var dbContextTypeFallback = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName)
-                                    ?? factoryDbContextType;
+        var fallbackResolution = LspSyntaxHelper.BuildDbContextResolutionSnapshot(
+            sourceText,
+            contextVariableName,
+            factoryDbContextCandidates);
+        var fallbackDbContextToken = LspSyntaxHelper.GetDbContextResolutionCacheToken(fallbackResolution);
+        if (!TryGetAnchorRangeAtPosition(sourceText, extractionLine, extractionCharacter, out var anchorStartLine, out var anchorStartChar, out var anchorEndLine, out var anchorEndChar))
+        {
+            anchorStartLine = extractionLine;
+            anchorStartChar = extractionCharacter;
+            anchorEndLine = extractionLine;
+            anchorEndChar = extractionCharacter;
+        }
+
+        var fallbackAnchorToken = $"{anchorStartLine}:{anchorStartChar}-{anchorEndLine}:{anchorEndChar}";
         semanticContext = new SemanticHoverContext(
-            SemanticKey: $"{fingerprint}|{dbContextTypeFallback ?? string.Empty}|{NormalizeWhitespace(expression)}",
-            EffectiveLine: line,
-            EffectiveCharacter: character);
+            SemanticKey: $"{fingerprint}|{fallbackDbContextToken}|{NormalizeWhitespace(expression)}|anchor|{fallbackAnchorToken}",
+            EffectiveLine: anchorStartLine,
+            EffectiveCharacter: anchorStartChar);
         return true;
+    }
+
+    private static bool TryFindStatementInvocationAnchor(
+        string sourceText,
+        int line,
+        int character,
+        out int anchorLine,
+        out int anchorCharacter)
+    {
+        anchorLine = line;
+        anchorCharacter = character;
+
+        try
+        {
+            var tree = CSharpSyntaxTree.ParseText(sourceText);
+            var text = tree.GetText();
+            if (line < 0 || line >= text.Lines.Count)
+                return false;
+
+            var lineText = text.Lines[line];
+            var boundedChar = Math.Min(Math.Max(character, 0), lineText.End - lineText.Start);
+            var position = lineText.Start + boundedChar;
+
+            var node = tree.GetRoot().FindToken(position).Parent;
+            var statement = node?.FirstAncestorOrSelf<StatementSyntax>();
+            if (statement is null)
+                return false;
+
+            var invocation = statement
+                .DescendantNodesAndSelf()
+                .OfType<InvocationExpressionSyntax>()
+                .OrderBy(i => DistanceToPosition(i.Span, position))
+                .FirstOrDefault();
+            if (invocation is null)
+                return false;
+
+            var span = tree.GetLineSpan(invocation.GetFirstToken().Span);
+            anchorLine = span.StartLinePosition.Line;
+            anchorCharacter = span.StartLinePosition.Character;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int DistanceToPosition(TextSpan span, int position)
+    {
+        if (position < span.Start)
+        {
+            return span.Start - position;
+        }
+
+        if (position > span.End)
+        {
+            return position - span.End;
+        }
+
+        return 0;
+    }
+
+    private static bool TryGetAnchorRangeAtPosition(
+        string sourceText,
+        int line,
+        int character,
+        out int startLine,
+        out int startCharacter,
+        out int endLine,
+        out int endCharacter)
+    {
+        startLine = line;
+        startCharacter = character;
+        endLine = line;
+        endCharacter = character;
+
+        try
+        {
+            var tree = CSharpSyntaxTree.ParseText(sourceText);
+            var text = tree.GetText();
+            if (line < 0 || line >= text.Lines.Count)
+                return false;
+
+            var lineText = text.Lines[line];
+            var boundedChar = Math.Min(Math.Max(character, 0), lineText.End - lineText.Start);
+            var position = lineText.Start + boundedChar;
+            var node = tree.GetRoot().FindToken(position).Parent;
+            if (node is null)
+                return false;
+
+            SyntaxNode anchor = node.FirstAncestorOrSelf<InvocationExpressionSyntax>()
+                               ?? node.FirstAncestorOrSelf<StatementSyntax>()
+                               ?? node;
+
+            while (anchor.Parent is MemberAccessExpressionSyntax or InvocationExpressionSyntax)
+            {
+                anchor = anchor.Parent;
+            }
+
+            var span = anchor.GetLocation().GetLineSpan();
+            startLine = span.StartLinePosition.Line;
+            startCharacter = span.StartLinePosition.Character;
+            endLine = span.EndLinePosition.Line;
+            endCharacter = span.EndLinePosition.Character;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryFindContainingChain(string sourceText, int line, int character, out LinqChainInfo containingChain)

@@ -3,6 +3,9 @@ using EFQueryLens.Lsp.Services;
 
 namespace EFQueryLens.Integration.Tests.Lsp.Fixtures;
 
+[CollectionDefinition("EnvironmentVariables", DisableParallelization = true)]
+public sealed class EnvironmentVariablesCollection { }
+
 /// <summary>
 /// Shared fixture for LSP test classes to centralize fake engine/service creation.
 /// </summary>
@@ -13,5 +16,5 @@ public sealed class LspTestFixture
     internal FakeEngineControl CreateControllableEngine() => new();
 
     internal HoverPreviewService CreateHoverService(bool debugEnabled = false) =>
-        new(CreatePlainEngine(), debugEnabled);
+        new(CreatePlainEngine(), debugEnabled: debugEnabled);
 }

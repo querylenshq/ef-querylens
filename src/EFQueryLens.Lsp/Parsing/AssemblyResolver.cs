@@ -14,6 +14,15 @@ namespace EFQueryLens.Lsp.Parsing;
 /// </summary>
 public static partial class AssemblyResolver
 {
+    [GeneratedRegex(@"<ProjectReference\s+Include=""([^""]+\.csproj)""", RegexOptions.IgnoreCase)]
+    private static partial Regex ProjectReferenceIncludeRegex();
+
+    [GeneratedRegex(@"<AssemblyName>(.+?)</AssemblyName>")]
+    private static partial Regex AssemblyNameRegex();
+
+    [GeneratedRegex(@"<OutputType>(\w+)</OutputType>", RegexOptions.IgnoreCase)]
+    private static partial Regex OutputTypeRegex();
+
     private sealed record CachedAssemblySelection(string TargetAssemblyPath, long ExpiresAtUtcTicks);
 
     private static readonly ConcurrentDictionary<string, CachedAssemblySelection> TargetAssemblyCache =
@@ -73,6 +82,45 @@ public static partial class AssemblyResolver
     }
 
     /// <summary>
+    /// Returns the absolute directories of projects directly referenced via
+    /// <c>&lt;ProjectReference Include="…" /&gt;</c> in the .csproj found in
+    /// <paramref name="projectDir"/>. Only one level deep (direct references only).
+    /// </summary>
+    public static IReadOnlyList<string> TryGetProjectReferenceDirs(string projectDir)
+    {
+        var csprojFiles = Directory.GetFiles(projectDir, "*.csproj")
+            .Where(f => !f.Contains("Backup", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (csprojFiles.Length == 0)
+            return [];
+
+        string csprojContent;
+        try
+        {
+            csprojContent = File.ReadAllText(csprojFiles[0]);
+        }
+        catch
+        {
+            return [];
+        }
+
+        var results = new List<string>();
+        var matches = ProjectReferenceIncludeRegex().Matches(csprojContent);
+
+        foreach (Match match in matches)
+        {
+            var relativePath = match.Groups[1].Value.Replace('\\', Path.DirectorySeparatorChar);
+            var absolutePath = Path.GetFullPath(Path.Combine(projectDir, relativePath));
+            var refDir = Path.GetDirectoryName(absolutePath);
+            if (!string.IsNullOrEmpty(refDir) && Directory.Exists(refDir))
+                results.Add(refDir);
+        }
+
+        return results;
+    }
+
+    /// <summary>
     /// Walks up the directory tree from the given source file path to find the nearest
     /// .csproj file, determines if it's executable or a class library, and resolves the
     /// correct assembly path accordingly.
@@ -117,7 +165,7 @@ public static partial class AssemblyResolver
         var assemblyName = Path.GetFileNameWithoutExtension(csprojFile);
         var csprojContent = File.ReadAllText(csprojFile);
 
-        var nameMatch = Regex.Match(csprojContent, @"<AssemblyName>(.+?)</AssemblyName>");
+        var nameMatch = AssemblyNameRegex().Match(csprojContent);
         if (nameMatch.Success)
         {
             assemblyName = nameMatch.Groups[1].Value.Trim();
@@ -154,7 +202,7 @@ public static partial class AssemblyResolver
             return true;
 
         // Check for explicit OutputType
-        var outputTypeMatch = Regex.Match(csprojContent, @"<OutputType>(\w+)</OutputType>", RegexOptions.IgnoreCase);
+        var outputTypeMatch = OutputTypeRegex().Match(csprojContent);
         if (outputTypeMatch.Success)
         {
             var outputType = outputTypeMatch.Groups[1].Value;

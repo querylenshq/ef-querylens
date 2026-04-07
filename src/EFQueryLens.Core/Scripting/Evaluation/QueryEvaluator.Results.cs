@@ -66,7 +66,7 @@ public sealed partial class QueryEvaluator
         if (assemblyList.Count == 0)
             return ("unknown", "unknown");
 
-        var cacheKey = ComputeAssemblySetHash(assemblyList);
+        var cacheKey = CompilationPipeline.ComputeAssemblySetHash(assemblyList);
         return SProviderMetadataCache.GetOrAdd(cacheKey, static (_, assemblies) =>
         {
             var provider = DetectProviderName(assemblies);

@@ -63,6 +63,7 @@ dotnet test EFQueryLens.slnx
 ```bash
 npm ci --prefix src/Plugins/ef-querylens-vscode
 npm run compile --prefix src/Plugins/ef-querylens-vscode
+npm run test --prefix src/Plugins/ef-querylens-vscode
 ```
 
 ## Rider Plugin
@@ -70,6 +71,7 @@ npm run compile --prefix src/Plugins/ef-querylens-vscode
 ```bash
 cd src/Plugins/ef-querylens-rider
 ./gradlew build
+./gradlew test
 ```
 
 Run sandbox IDE for local plugin debugging:
@@ -82,6 +84,8 @@ Run sandbox IDE for local plugin debugging:
 
 ```bash
 dotnet build src/Plugins/ef-querylens-visualstudio/EFQueryLens.VisualStudio/EFQueryLens.VisualStudio.csproj -c Debug
+dotnet test tests/EFQueryLens.VisualStudio.Tests/EFQueryLens.VisualStudio.Tests.csproj -c Debug
+dotnet test tests/EFQueryLens.VisualStudio.IntegrationTests/EFQueryLens.VisualStudio.IntegrationTests.csproj -c Debug
 ```
 
 ## Local Release Packaging
@@ -120,4 +124,16 @@ cd src/Plugins/ef-querylens-rider && ./gradlew ktlintCheck compileKotlin
 - Keep command and config naming under `efquerylens.*`
 - Keep plugin metadata (publisher/version/description) consistent across VS Code, Rider, and Visual Studio manifests
 - Prefer changes in shared backend projects over reimplementing logic in individual plugins
+
+## Src C# Standards (Warning-First)
+
+For C# projects under `src/`, the repository uses a Microsoft .NET OSS-aligned standards baseline.
+
+- Treat analyzer warnings as actionable feedback during development.
+- Keep public async APIs suffixed with `Async`.
+- Use explicit guard clauses for public entry points.
+- Prefer targeted exception types over generic failures.
+- Reduce complexity in long or heavily branched methods through helper extraction.
+
+Current CI behavior is warning-first (non-blocking). Do not ignore recurring warnings in touched code; clean them up in-scope when practical.
 

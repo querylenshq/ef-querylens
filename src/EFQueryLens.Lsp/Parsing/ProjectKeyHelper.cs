@@ -31,9 +31,9 @@ internal static class ProjectKeyHelper
             currentDir = Directory.GetParent(currentDir)?.FullName;
         }
 
-        var fallbackBase = Path.GetDirectoryName(normalizedSourcePath) ?? normalizedSourcePath;
-        var fallbackKey = DaemonWorkspaceIdentity.ComputeWorkspaceHash(fallbackBase);
-        FileProjectKeyCache[normalizedSourcePath] = fallbackKey;
-        return fallbackKey;
+        var defaultBasePath = Path.GetDirectoryName(normalizedSourcePath) ?? normalizedSourcePath;
+        var defaultProjectKey = DaemonWorkspaceIdentity.ComputeWorkspaceHash(defaultBasePath);
+        FileProjectKeyCache[normalizedSourcePath] = defaultProjectKey;
+        return defaultProjectKey;
     }
 }

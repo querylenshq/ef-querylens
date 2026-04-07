@@ -1,10 +1,17 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace EFQueryLens.Lsp.Parsing;
 
 public static partial class AssemblyResolver
 {
+    [GeneratedRegex(@"IQueryLensDbContextFactory\s*<\s*([\w.]+)\s*>", RegexOptions.None, 1000)]
+    private static partial Regex QueryLensFactoryTypeRegex();
+
+    [GeneratedRegex(@"Project\("".+?""\)\s*=\s*"".+?""\s*,\s*""(.+?\.csproj)""", RegexOptions.Multiline)]
+    private static partial Regex SlnProjectRegex();
+
     private sealed record CandidateAssembly(
         string DllPath,
         DateTime TimestampUtc,
@@ -25,6 +32,12 @@ public static partial class AssemblyResolver
     /// </summary>
     internal static string? TryExtractDbContextTypeFromFactory(string assemblyDllPath)
     {
+        var candidates = TryExtractDbContextTypeNamesFromFactories(assemblyDllPath);
+        return candidates.Count == 1 ? candidates[0] : null;
+    }
+
+    internal static IReadOnlyList<string> TryExtractDbContextTypeNamesFromFactories(string assemblyDllPath)
+    {
         // Derive the project source root from the DLL path by walking up until we find a .csproj.
         // Standard layout: {projectDir}/bin/{config}/{tfm}/Assembly.dll
         var dir = Path.GetDirectoryName(assemblyDllPath);
@@ -41,26 +54,27 @@ public static partial class AssemblyResolver
         }
 
         if (string.IsNullOrEmpty(dir))
-            return null;
+            return [];
+
+        var results = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var file in EnumerateProjectSourceFiles(dir))
         {
             try
             {
                 var text = File.ReadAllText(file);
-                var match = Regex.Match(
-                    text,
-                    @"IQueryLensDbContextFactory\s*<\s*([\w.]+)\s*>",
-                    RegexOptions.None,
-                    TimeSpan.FromSeconds(1));
+                var matches = QueryLensFactoryTypeRegex().Matches(text);
 
-                if (match.Success)
-                    return match.Groups[1].Value.Trim();
+                foreach (Match match in matches)
+                {
+                    if (match.Success)
+                        results.Add(match.Groups[1].Value.Trim());
+                }
             }
             catch { /* ignore unreadable files */ }
         }
 
-        return null;
+        return results.Order(StringComparer.Ordinal).ToArray();
     }
 
     /// <summary>
@@ -152,71 +166,25 @@ public static partial class AssemblyResolver
         string libraryAssemblyName,
         ref string debugLog)
     {
-        var libraryCsprojName = Path.GetFileName(libraryCsprojPath);
-
-        // Step 4a: Walk up to find the .sln file
-        var slnDir = Path.GetDirectoryName(libraryCsprojPath);
-        string? slnFile = null;
-
-        while (!string.IsNullOrEmpty(slnDir))
+        if (!TryFindNearestSolution(libraryCsprojPath, ref debugLog, out var slnFile, out var isSlnx)
+            || slnFile is null)
         {
-            var slnFiles = Directory.GetFiles(slnDir, "*.sln");
-            if (slnFiles.Length > 0)
-            {
-                slnFile = slnFiles.First();
-                debugLog += $"  -> Found solution: {Path.GetFileName(slnFile)}\n";
-                break;
-            }
-
-            slnDir = Directory.GetParent(slnDir)?.FullName;
-        }
-
-        if (slnFile is null)
-        {
-            debugLog += "  -> EXCEPTION: No .sln file found.\n";
+            debugLog += "  -> EXCEPTION: No .sln or .slnx file found.\n";
             return null;
         }
 
-        // Step 4b: Parse the .sln to extract project paths
-        var slnContent = File.ReadAllText(slnFile);
-        var projectEntries = Regex.Matches(slnContent,
-                @"Project\("".+?""\)\s*=\s*"".+?""\s*,\s*""(.+?\.csproj)""",
-                RegexOptions.Multiline)
-            .Select(m => Path.GetFullPath(
-                Path.Combine(Path.GetDirectoryName(slnFile)!, m.Groups[1].Value)))
-            .Where(p => File.Exists(p) && !string.Equals(p,
-                Path.GetFullPath(libraryCsprojPath), StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var projectEntries = GetSolutionProjectEntries(
+            slnFile,
+            isSlnx,
+            libraryCsprojPath,
+            ref debugLog);
 
         debugLog += $"  -> Found {projectEntries.Count} other projects in solution\n";
 
         // Step 4c: Find executable projects in the solution. We do not require a direct
         // ProjectReference here because many host apps reference the target library
         // transitively (e.g. UI -> Infrastructure -> Application).
-        var candidates = new List<(string CsprojPath, string AssemblyName)>();
-
-        foreach (var projPath in projectEntries)
-        {
-            try
-            {
-                var content = File.ReadAllText(projPath);
-
-                if (!IsExecutableProject(content))
-                    continue;
-
-                var exeAssemblyName = Path.GetFileNameWithoutExtension(projPath);
-                var exeNameMatch = Regex.Match(content, @"<AssemblyName>(.+?)</AssemblyName>");
-                if (exeNameMatch.Success)
-                    exeAssemblyName = exeNameMatch.Groups[1].Value.Trim();
-
-                candidates.Add((projPath, exeAssemblyName));
-                debugLog += $"  -> Candidate host: {Path.GetFileName(projPath)} (assembly: {exeAssemblyName})\n";
-            }
-            catch
-            {
-                // Skip unreadable projects
-            }
-        }
+        var candidates = FindExecutableHostCandidates(projectEntries, ref debugLog);
 
         if (candidates.Count == 0)
         {
@@ -229,13 +197,118 @@ public static partial class AssemblyResolver
         // (the user set them up as the QueryLens host) over projects that are merely
         // referencing the library for other purposes (e.g. data-migration workers).
         // Within the same tier, the most recently built DLL wins.
+        var scored = ScoreHostCandidates(candidates, libraryAssemblyName, ref debugLog);
+        var bestDll = SelectBestHostAssemblyPath(scored);
+
+        if (bestDll is not null)
+        {
+            debugLog += $"  -> Selected host assembly: {bestDll}\n";
+        }
+        else
+        {
+            debugLog += "  -> EXCEPTION: No candidate host project has a built bin folder containing the library.\n";
+        }
+
+        return bestDll;
+    }
+
+    private static bool TryFindNearestSolution(
+        string libraryCsprojPath,
+        ref string debugLog,
+        out string? solutionPath,
+        out bool isSlnx)
+    {
+        var slnDir = Path.GetDirectoryName(libraryCsprojPath);
+        solutionPath = null;
+        isSlnx = false;
+
+        while (!string.IsNullOrEmpty(slnDir))
+        {
+            var slnFiles = Directory.GetFiles(slnDir, "*.sln");
+            if (slnFiles.Length > 0)
+            {
+                solutionPath = slnFiles.First();
+                debugLog += $"  -> Found solution: {Path.GetFileName(solutionPath)}\n";
+                return true;
+            }
+
+            var slnxFiles = Directory.GetFiles(slnDir, "*.slnx");
+            if (slnxFiles.Length > 0)
+            {
+                solutionPath = slnxFiles.First();
+                isSlnx = true;
+                debugLog += $"  -> Found solution (slnx): {Path.GetFileName(solutionPath)}\n";
+                return true;
+            }
+
+            slnDir = Directory.GetParent(slnDir)?.FullName;
+        }
+
+        return false;
+    }
+
+    private static List<string> GetSolutionProjectEntries(
+        string solutionPath,
+        bool isSlnx,
+        string libraryCsprojPath,
+        ref string debugLog)
+    {
+        if (isSlnx)
+            return ParseSlnxProjectPaths(solutionPath, libraryCsprojPath, ref debugLog);
+
+        var slnContent = File.ReadAllText(solutionPath);
+        return SlnProjectRegex().Matches(slnContent)
+            .Select(m => m.Groups[1].Value.Replace('\\', Path.DirectorySeparatorChar))
+            .Select(relativePath => Path.GetFullPath(
+                Path.Combine(Path.GetDirectoryName(solutionPath)!, relativePath)))
+            .Where(p => File.Exists(p) && !string.Equals(p,
+                Path.GetFullPath(libraryCsprojPath), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private static List<(string CsprojPath, string AssemblyName)> FindExecutableHostCandidates(
+        IReadOnlyList<string> projectEntries,
+        ref string debugLog)
+    {
+        var candidates = new List<(string CsprojPath, string AssemblyName)>();
+
+        foreach (var projPath in projectEntries)
+        {
+            try
+            {
+                var content = File.ReadAllText(projPath);
+                if (!IsExecutableProject(content))
+                    continue;
+
+                var exeAssemblyName = Path.GetFileNameWithoutExtension(projPath);
+                var exeNameMatch = AssemblyNameRegex().Match(content);
+                if (exeNameMatch.Success)
+                    exeAssemblyName = exeNameMatch.Groups[1].Value.Trim();
+
+                candidates.Add((projPath, exeAssemblyName));
+                debugLog += $"  -> Candidate host: {Path.GetFileName(projPath)} (assembly: {exeAssemblyName})\n";
+            }
+            catch
+            {
+                // Skip unreadable projects
+            }
+        }
+
+        return candidates;
+    }
+
+    private static List<CandidateAssembly> ScoreHostCandidates(
+        IReadOnlyList<(string CsprojPath, string AssemblyName)> candidates,
+        string libraryAssemblyName,
+        ref string debugLog)
+    {
         var scored = new List<CandidateAssembly>();
 
         foreach (var (csprojPath, exeAssemblyName) in candidates)
         {
             var projDir = Path.GetDirectoryName(csprojPath)!;
 
-            // Resolve all output paths for this host executable (bin glob + MSBuild fallback)
+            // Resolve all output paths for this host executable (bin glob + MSBuild query path)
             var hostDllPaths = FindProjectOutputDllPaths(csprojPath, exeAssemblyName, ref debugLog);
             if (hostDllPaths.Count == 0)
             {
@@ -273,7 +346,12 @@ public static partial class AssemblyResolver
             }
         }
 
-        var bestDll = scored
+        return scored;
+    }
+
+    private static string? SelectBestHostAssemblyPath(IReadOnlyList<CandidateAssembly> scored)
+    {
+        return scored
             .GroupBy(x => x.DllPath, StringComparer.OrdinalIgnoreCase)
             .Select(g => g
                 .OrderByDescending(x => x.HasFactory ? 1 : 0)
@@ -287,22 +365,11 @@ public static partial class AssemblyResolver
             .ThenByDescending(x => x.TimestampUtc)
             .Select(x => x.DllPath)
             .FirstOrDefault();
-
-        if (bestDll is not null)
-        {
-            debugLog += $"  -> Selected host assembly: {bestDll}\n";
-        }
-        else
-        {
-            debugLog += "  -> EXCEPTION: No candidate host project has a built bin folder containing the library.\n";
-        }
-
-        return bestDll;
     }
 
     /// <summary>
     /// Returns all candidate output DLL paths for a project, trying the bin/ folder first
-    /// and falling back to an MSBuild TargetPath query for non-standard layouts such as
+    /// and then using an MSBuild TargetPath query for non-standard layouts such as
     /// UseArtifactsOutput=true.
     /// </summary>
     private static List<string> FindProjectOutputDllPaths(
@@ -412,5 +479,56 @@ public static partial class AssemblyResolver
         var normalized = path.Replace('\\', '/');
         return normalized.Contains("/ref/", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Parses a <c>.slnx</c> file (XML format introduced in VS 17.10 / .NET 9 SDK) and
+    /// returns the absolute paths of all <c>.csproj</c> files referenced by it, excluding
+    /// the library project itself.
+    /// <para>
+    /// .slnx schema: <c>&lt;Solution&gt; &lt;Project Path="relative/path/to.csproj" /&gt; …</c>
+    /// </para>
+    /// </summary>
+    private static List<string> ParseSlnxProjectPaths(
+        string slnxPath,
+        string excludeCsprojPath,
+        ref string debugLog)
+    {
+        var slnxDir = Path.GetDirectoryName(slnxPath)!;
+        var normalizedExclude = Path.GetFullPath(excludeCsprojPath);
+        var results = new List<string>();
+
+        try
+        {
+            var doc = XDocument.Load(slnxPath);
+            foreach (var element in doc.Descendants())
+            {
+                if (!element.Name.LocalName.Equals("Project", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var pathAttr = element.Attribute("Path")?.Value;
+                if (string.IsNullOrWhiteSpace(pathAttr)
+                    || !pathAttr.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var absolutePath = Path.GetFullPath(
+                    Path.Combine(slnxDir, pathAttr.Replace('\\', Path.DirectorySeparatorChar)));
+
+                if (!File.Exists(absolutePath))
+                    continue;
+
+                if (string.Equals(absolutePath, normalizedExclude, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                results.Add(absolutePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            debugLog += $"  -> Failed to parse .slnx: {ex.Message}\n";
+        }
+
+        debugLog += $"  -> Found {results.Count} other projects in .slnx\n";
+        return results;
     }
 }

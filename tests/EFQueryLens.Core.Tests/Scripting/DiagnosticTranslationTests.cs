@@ -85,10 +85,10 @@ public class DiagnosticTranslationTests
         Assert.Equal(string.Empty, result);
     }
 
-    // ─── FormatSoftDiagnostics — CS0103 ──────────────────────────────────────
+    // ─── FormatSoftDiagnostics — generic compiler output ─────────────────────
 
     [Fact]
-    public void FormatSoftDiagnostics_CS0103_TranslatesToUnknownVariableHint()
+    public void FormatSoftDiagnostics_CS0103_ReturnsCodeAndCompilerMessage()
     {
         var errors = Compile("class C { void M() { var x = unknownVar; } }");
         var cs0103 = errors.Where(e => e.Id == "CS0103").ToList();
@@ -96,12 +96,12 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs0103);
 
-        Assert.Contains("Unknown variable 'unknownVar'", result, StringComparison.Ordinal);
-        Assert.Contains("var unknownVar = default;", result, StringComparison.Ordinal);
+        Assert.Contains("CS0103", result, StringComparison.Ordinal);
+        Assert.Contains("unknownVar", result, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void FormatSoftDiagnostics_CS0103_HintIncludesTheIdentifierName()
+    public void FormatSoftDiagnostics_CS0103_IncludesTheIdentifierName()
     {
         var errors = Compile("class C { void M() { var x = mySpecificName; } }");
         var cs0103 = errors.Where(e => e.Id == "CS0103").ToList();
@@ -122,14 +122,14 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs0103);
 
-        // Hint for 'same' should appear exactly once — duplicates are collapsed.
-        Assert.Equal(1, CountSubstring(result, "Unknown variable 'same'"));
+        // Deduplicated generic diagnostic should appear once.
+        Assert.Equal(1, CountSubstring(result, "CS0103:"));
     }
 
-    // ─── FormatSoftDiagnostics — CS0246 ──────────────────────────────────────
+    // ─── FormatSoftDiagnostics — CS0246/CS0234 ───────────────────────────────
 
     [Fact]
-    public void FormatSoftDiagnostics_CS0246_TranslatesToTypeNotFoundHint()
+    public void FormatSoftDiagnostics_CS0246_ReturnsCodeAndCompilerMessage()
     {
         var errors = Compile("class C { MissingType _field; }");
         var cs0246 = errors.Where(e => e.Id == "CS0246").ToList();
@@ -137,12 +137,12 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs0246);
 
-        Assert.Contains("Type 'MissingType' not found", result, StringComparison.Ordinal);
-        Assert.Contains("using directive", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("CS0246", result, StringComparison.Ordinal);
+        Assert.Contains("MissingType", result, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void FormatSoftDiagnostics_CS0234_TranslatesToTypeNotFoundHint()
+    public void FormatSoftDiagnostics_CS0234_ReturnsCodeAndCompilerMessage()
     {
         // CS0234: type or namespace 'X' does not exist in namespace 'Y'
         var errors = Compile("using My.Missing.Namespace;  class C { }");
@@ -153,17 +153,13 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs0234);
 
-        // Both CS0234 and CS0246 should produce the same "Type not found" message family.
-        Assert.True(
-            result.Contains("not found", StringComparison.OrdinalIgnoreCase)
-            || result.Contains("using directive", StringComparison.OrdinalIgnoreCase),
-            $"Expected a 'not found' hint but got: {result}");
+        Assert.Matches(@"CS\d+:", result);
     }
 
     // ─── FormatSoftDiagnostics — CS1061 ──────────────────────────────────────
 
     [Fact]
-    public void FormatSoftDiagnostics_CS1061_TranslatesToExtensionMethodHint()
+    public void FormatSoftDiagnostics_CS1061_ReturnsCodeAndCompilerMessage()
     {
         var errors = Compile("class C { void M() { int x = 5; var y = x.NonexistentMethod(); } }");
         var cs1061 = errors.Where(e => e.Id == "CS1061").ToList();
@@ -171,14 +167,13 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs1061);
 
-        Assert.Contains("Extension method or member not in scope", result, StringComparison.Ordinal);
-        Assert.Contains("using directives", result, StringComparison.Ordinal);
+        Assert.Contains("CS1061", result, StringComparison.Ordinal);
     }
 
     // ─── FormatSoftDiagnostics — CS7036 ──────────────────────────────────────
 
     [Fact]
-    public void FormatSoftDiagnostics_CS7036_TranslatesToMissingArgumentHint()
+    public void FormatSoftDiagnostics_CS7036_ReturnsCodeAndCompilerMessage()
     {
         var errors = Compile("class C { void Foo(int x) {} void M() { Foo(); } }");
         var cs7036 = errors.Where(e => e.Id == "CS7036").ToList();
@@ -186,13 +181,13 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs7036);
 
-        Assert.Contains("Missing required argument", result, StringComparison.Ordinal);
+        Assert.Contains("CS7036", result, StringComparison.Ordinal);
     }
 
     // ─── FormatSoftDiagnostics — CS0019 ──────────────────────────────────────
 
     [Fact]
-    public void FormatSoftDiagnostics_CS0019_TranslatesToOperatorHint()
+    public void FormatSoftDiagnostics_CS0019_ReturnsCodeAndCompilerMessage()
     {
         // CS0019: Operator '>' cannot be applied to operands of type 'bool' and 'bool'
         var errors = Compile("class C { bool M() { return true > false; } }");
@@ -201,7 +196,7 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs0019);
 
-        Assert.Contains("Operator cannot be applied to the operand types", result, StringComparison.Ordinal);
+        Assert.Contains("CS0019", result, StringComparison.Ordinal);
     }
 
     // ─── FormatSoftDiagnostics — unmapped error code ─────────────────────────
@@ -225,10 +220,10 @@ public class DiagnosticTranslationTests
         Assert.Matches(@"CS\d+:", result);
     }
 
-    // ─── Mixed hard + soft comparison ────────────────────────────────────────
+    // ─── Hard + soft parity ───────────────────────────────────────────────────
 
     [Fact]
-    public void FormatHardDiagnostics_VS_FormatSoftDiagnostics_CS0103_ProduceDifferentOutput()
+    public void FormatHardDiagnostics_VS_FormatSoftDiagnostics_CS0103_ProduceSameOutput()
     {
         var errors = Compile("class C { void M() { var x = myVar; } }");
         var cs0103 = errors.Where(e => e.Id == "CS0103").ToList();
@@ -237,9 +232,6 @@ public class DiagnosticTranslationTests
         var hard = FormatHard(cs0103);
         var soft = FormatSoft(cs0103);
 
-        // Hard includes raw CS0103 prefix; soft translates to actionable hint.
-        Assert.Contains("CS0103", hard, StringComparison.Ordinal);
-        Assert.DoesNotContain("CS0103", soft, StringComparison.Ordinal);
-        Assert.Contains("Unknown variable", soft, StringComparison.Ordinal);
+        Assert.Equal(hard, soft);
     }
 }

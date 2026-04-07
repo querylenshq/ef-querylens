@@ -36,13 +36,13 @@ internal sealed partial class HoverHandler
             && TryGetSemanticCachedEntry(semanticContext.SemanticKey, out var semEntry))
         {
             LogHoverDebug($"hover-semantic-cache-hit line={effectiveLine} char={effectiveCharacter}");
-            _hoverCache.TryAdd(cacheKey, semEntry!);
+            TryPromoteSemanticToPrimaryCache(cacheKey, semEntry!);
             return semEntry!.Hover;
         }
 
         // Cache-disabled mode: compute immediately so users do not get a perpetual
         // "computing" placeholder when hoverCacheTtlMs is configured to 0.
-        if (_hoverCacheTtlMs <= 0)
+        if (!IsCacheEnabled())
         {
             var computed = await ComputeCombinedAsync(
                 filePath,
@@ -61,8 +61,28 @@ internal sealed partial class HoverHandler
         if (TryCacheEntryInQueue(cacheKey, inQueueEntry))
         {
             LogHoverDebug($"hover-cache-miss-queued line={effectiveLine} char={effectiveCharacter}");
-            _ = Task.Run(() => BackgroundComputeAndCacheAsync(
+            var backgroundTask = Task.Run(() => BackgroundComputeAndCacheAsync(
                 cacheKey, filePath, sourceText, effectiveLine, effectiveCharacter, semanticContext));
+
+            // Fast-path: wait briefly on first miss so quick translations can render
+            // in the initial hover instead of requiring a second hover event.
+            var fastPathWaitMs = Math.Max(50, Math.Min(300, _hoverQueuedAdaptiveWaitMs));
+            try
+            {
+                await Task.WhenAny(backgroundTask, Task.Delay(fastPathWaitMs, cancellationToken));
+                if (TryGetCachedEntry(cacheKey, out var refreshed)
+                    && refreshed is not null
+                    && refreshed.Status is not QueryTranslationStatus.InQueue
+                    && refreshed.Hover is not null)
+                {
+                    LogHoverDebug($"hover-cache-miss-fastpath line={effectiveLine} char={effectiveCharacter} waitMs={fastPathWaitMs}");
+                    return refreshed.Hover;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Respect request cancellation; fall back to InQueue payload.
+            }
         }
         else
         {
@@ -126,13 +146,9 @@ internal sealed partial class HoverHandler
             hover = CreateMarkdownHover(markdownText);
         }
 
-        // Normalize "Could not extract" structured result to null — no hover at this position.
+        // Keep structured failure payloads so clients (especially intention-driven Rider)
+        // can surface deterministic "preview unavailable" feedback instead of silent null.
         QueryLensStructuredHoverResult? structured = combined.Structured;
-        if (structured is { Success: false }
-            && structured.ErrorMessage?.StartsWith("Could not extract a LINQ query expression", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            structured = null;
-        }
 
         return new ComputedEntry(hover, structured, combined.Markdown.Status);
     }
@@ -152,18 +168,41 @@ internal sealed partial class HoverHandler
         int character,
         SemanticHoverContext? semanticContext)
     {
+        var created = new Lazy<Task<ComputedEntry>>(
+            () => ComputeCombinedAsync(filePath, sourceText, line, character, CancellationToken.None),
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+        var inflight = _inflightBackgroundComputes.GetOrAdd(cacheKey, created);
+        var isOwner = ReferenceEquals(inflight, created);
+
         try
         {
-            var computed = await ComputeCombinedAsync(filePath, sourceText, line, character, CancellationToken.None);
-            CacheEntry(cacheKey, computed, semanticContext);
-            LogHoverDebug($"bg-compute-finished key={cacheKey} status={computed.Status}");
+            var computed = await inflight.Value;
+            if (isOwner)
+            {
+                CacheEntry(cacheKey, computed, semanticContext);
+                LogHoverDebug($"bg-compute-finished key={cacheKey} status={computed.Status}");
+            }
+            else
+            {
+                LogHoverDebug($"bg-compute-joined key={cacheKey}");
+            }
         }
         catch (Exception ex)
         {
-            // Evict the InQueue placeholder so the next hover re-triggers computation
-            // rather than showing "computing..." indefinitely.
-            _hoverCache.TryRemove(cacheKey, out _);
-            LogHoverDebug($"bg-compute-failed key={cacheKey} type={ex.GetType().Name} message={ex.Message}");
+            if (isOwner)
+            {
+                // Evict the InQueue placeholder so the next hover re-triggers computation
+                // rather than showing "computing..." indefinitely.
+                RemovePrimaryCacheEntry(cacheKey);
+                LogHoverDebug($"bg-compute-failed key={cacheKey} type={ex.GetType().Name} message={ex.Message}");
+            }
+        }
+        finally
+        {
+            if (isOwner)
+            {
+                _inflightBackgroundComputes.TryRemove(cacheKey, out _);
+            }
         }
     }
 

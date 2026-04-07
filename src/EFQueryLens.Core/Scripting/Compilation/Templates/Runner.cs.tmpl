@@ -1,36 +1,40 @@
 public static class __QueryLensRunner__
 {
+    #region Main Entry Point
     public static object? Run(object __ctx__)
     {
 __QL_CONTEXT_DECL__
 __QL_STUBS__
+        #region Setup
         string? __captureSkipReason = null;
         string? __captureError = null;
         var __captureInstalled = __QueryLensOfflineCapture__.TryInstall(__QL_CONTEXT_VAR__, out __captureSkipReason);
         var __captured = Array.Empty<__QueryLensCapturedSqlCommand__>();
         object? __query = null;
-        if (__captureInstalled)
+        #endregion
+
+        #region Execution
+        using var __scope = __captureInstalled ? __QueryLensSqlCaptureScope__.Begin() : null;
+        try
         {
-            using var __scope = __QueryLensSqlCaptureScope__.Begin();
-            try
-            {
-                __query = (object?)(__QL_EXPRESSION__);
-                __query = UnwrapTask(__query);
-                if (__query is System.Collections.IEnumerable __enumerable)
-                    EnumerateQueryable(__enumerable);
-            }
-            catch (Exception ex) { __captureError = ex.GetType().Name + ": " + ex.Message; }
-            __captured = __scope.GetCommands();
+            __query = (object?)(__QL_EXPRESSION__);
+            __query = UnwrapTask(__query);
+            
+            if (__captureInstalled && __query is System.Collections.IEnumerable __enumerable)
+                EnumerateQueryable(__enumerable);
         }
-        else
+        catch (Exception ex) 
+        { 
+            __captureError = ex.GetType().Name + ": " + ex.Message; 
+        }
+        finally
         {
-            try
-            {
-                __query = (object?)(__QL_EXPRESSION__);
-                __query = UnwrapTask(__query);
-            }
-            catch (Exception ex) { __captureError = ex.GetType().Name + ": " + ex.Message; }
+            if (__captureInstalled)
+                __captured = __scope!.GetCommands();
         }
+        #endregion
+
+        #region Result
         return new __QueryLensExecutionResult__
         {
             Queryable = __query,
@@ -38,8 +42,11 @@ __QL_STUBS__
             CaptureError = __captureError,
             Commands = __captured,
         };
+        #endregion
     }
+    #endregion
 
+    #region Helpers
     private static object? UnwrapTask(object? value)
     {
         if (value is not System.Threading.Tasks.Task task)
@@ -62,4 +69,5 @@ __QL_STUBS__
             (enumerator as System.IDisposable)?.Dispose();
         }
     }
+    #endregion
 }

@@ -1,8 +1,12 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text;
 using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Scripting.Contracts;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -34,38 +38,25 @@ namespace EFQueryLens.Core.Scripting.Evaluation;
 /// </summary>
 public sealed partial class QueryEvaluator
 {
-    private const int MaxMetadataRefCacheEntries = 64;
-    private const int MaxEvalRunnerCacheEntries = 256;
     private const int MaxNamespaceTypeIndexCacheEntries = 64;
+    internal delegate object? SyncRunnerInvoker(object dbInstance);
+    internal delegate Task<object?> AsyncRunnerInvoker(object dbInstance, CancellationToken ct);
 
-    // Building MetadataReference objects from disk is expensive (100-500 ms for a
-    // large project). Cache them keyed on shadow path + last-write timestamp +
-    // assembly-set hash — the fingerprint changes on every rebuild, so stale entries
-    // expire naturally via LRU without explicit eviction.
-    private sealed record MetadataRefEntry(MetadataReference[] Refs, long LastAccessTicks);
-
-    private readonly ConcurrentDictionary<string, MetadataRefEntry> _refCache = new();
-
-    // Compiled + loaded eval runner cache: skip the entire Roslyn pipeline on warm hits.
-    // Keys follow the pattern: "shadowAssemblyPath|timestampTicks|assemblySetHash|dbContextTypeName|requestHash"
-    // Evicted whenever the ALC for a shadow assembly is released (InvalidateMetadataRefCache).
-    private sealed record EvalRunnerEntry(Assembly EvalAssembly, MethodInfo RunMethod, long LastAccessTicks, string? ExecutedExpression = null);
-    private readonly ConcurrentDictionary<string, EvalRunnerEntry> _evalRunnerCache = new(StringComparer.Ordinal);
-
-    // Known namespace/type index cache keyed by assemblySetHash — the scan is expensive
-    // on large projects but the result only changes when the assembly set changes.
-    // The assemblySetHash is computed from shadow bundle paths, which change on every
-    // rebuild, so stale entries expire naturally via LRU without explicit eviction.
-    private sealed record NamespaceTypeIndexEntry(
-        HashSet<string> Namespaces,
-        HashSet<string> Types,
-        long LastAccessTicks);
-
-    private readonly ConcurrentDictionary<string, NamespaceTypeIndexEntry>
-        _namespaceTypeIndexCache = new(StringComparer.Ordinal);
+    private readonly EvalRunnerCache _evalRunnerCache = new();
+    private readonly INamespaceTypeIndexCache _namespaceTypeIndexCache;
+    private readonly CompilationPipeline _compilationPipeline;
 
     private readonly bool _debugEnabled = 
         EFQueryLens.Core.Common.EnvironmentVariableParser.ReadBool("QUERYLENS_DEBUG", fallback: false);
+
+    private readonly bool _dumpSourceEnabled =
+        EFQueryLens.Core.Common.EnvironmentVariableParser.ReadBool("QUERYLENS_DUMP_SOURCE", fallback: false);
+
+    public QueryEvaluator(INamespaceTypeIndexCache? namespaceTypeIndexCache = null)
+    {
+        _namespaceTypeIndexCache = namespaceTypeIndexCache ?? new NamespaceTypeIndexCache(MaxNamespaceTypeIndexCacheEntries);
+        _compilationPipeline = new CompilationPipeline(_namespaceTypeIndexCache, _debugEnabled, _dumpSourceEnabled);
+    }
 
     internal sealed record EvaluationStageTimings(
         TimeSpan? ContextResolution,
@@ -76,40 +67,115 @@ public sealed partial class QueryEvaluator
         TimeSpan? EvalAssemblyLoad,
         TimeSpan? RunnerExecution);
 
-    internal void InvalidateMetadataRefCache(string assemblyPath)
-    {
-        if (string.IsNullOrWhiteSpace(assemblyPath))
-            return;
-
-        // Only the eval runner cache needs explicit eviction — its entries hold Assembly
-        // references that would prevent the collectible ALC from being GC'd.
-        // MetadataRef and NamespaceTypeIndex caches are fingerprint-keyed (path + timestamp +
-        // assemblySetHash) so stale entries expire naturally via LRU on the next rebuild.
-        var normalized = Path.GetFullPath(assemblyPath);
-        var prefix = normalized + "|";
-        foreach (var key in _evalRunnerCache.Keys
-                     .Where(k => k.StartsWith(prefix, StringComparison.Ordinal))
-                     .ToList())
-        {
-            _evalRunnerCache.TryRemove(key, out _);
-        }
-    }
+    internal void InvalidateMetadataRefCache(string assemblyPath) =>
+        _evalRunnerCache.Invalidate(assemblyPath);
 
     private static string ComputeRequestHash(TranslationRequest request)
     {
         var sb = new System.Text.StringBuilder();
-        sb.Append(request.Expression).Append('\0');
-        sb.Append(request.ContextVariableName).Append('\0');
-        foreach (var imp in request.AdditionalImports)
-            sb.Append(imp).Append('\0');
-        foreach (var kv in request.UsingAliases.OrderBy(x => x.Key, StringComparer.Ordinal))
-            sb.Append(kv.Key).Append('=').Append(kv.Value).Append('\0');
-        foreach (var s in request.UsingStaticTypes)
-            sb.Append(s).Append('\0');
-        foreach (var kv in request.LocalVariableTypes.OrderBy(x => x.Key, StringComparer.Ordinal))
-            sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
+        AppendRequestShape(sb, request);
+        AppendDbContextResolutionFingerprint(sb, request.DbContextResolution);
+        AppendUsingContextSnapshotFingerprint(sb, request);
+        AppendExpressionMetadataFingerprint(sb, request);
+        
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(sb.ToString())))[..16];
+    }
+
+    private static void AppendRequestShape(StringBuilder sb, TranslationRequest request)
+    {
+        sb.Append(request.Expression).Append('\0');
+        sb.Append(request.OriginalExpression ?? string.Empty).Append('\0');
+        sb.Append(request.RewrittenExpression ?? string.Empty).Append('\0');
+        sb.Append(request.ContextVariableName).Append('\0');
+        foreach (var import in request.AdditionalImports)
+            sb.Append(import).Append('\0');
+        foreach (var kv in request.UsingAliases.OrderBy(x => x.Key, StringComparer.Ordinal))
+            sb.Append(kv.Key).Append('=').Append(kv.Value).Append('\0');
+        foreach (var staticType in request.UsingStaticTypes)
+            sb.Append(staticType).Append('\0');
+        sb.Append("requestContractVersion=").Append(request.RequestContractVersion).Append('\0');
+        foreach (var symbol in request.LocalSymbolGraph
+                     .OrderBy(s => s.DeclarationOrder)
+                     .ThenBy(s => s.Name, StringComparer.Ordinal))
+        {
+            sb.Append("sym:")
+                .Append(symbol.DeclarationOrder).Append(':')
+                .Append(symbol.Name).Append(':')
+                .Append(symbol.TypeName).Append(':')
+                .Append(symbol.Kind).Append(':')
+                .Append(symbol.Scope ?? string.Empty).Append(':')
+                .Append(symbol.ReplayPolicy).Append(':')
+                .Append(symbol.InitializerExpression ?? string.Empty)
+                .Append('\0');
+
+            foreach (var dep in symbol.Dependencies.OrderBy(x => x, StringComparer.Ordinal))
+                sb.Append("dep:").Append(symbol.Name).Append("->").Append(dep).Append('\0');
+        }
+        sb.Append("useAsyncRunner=").Append(request.UseAsyncRunner ? '1' : '0').Append('\0');
+        foreach (var flag in request.RewriteFlags.OrderBy(x => x, StringComparer.Ordinal))
+            sb.Append("rw:").Append(flag).Append('\0');
+        sb.Append("payloadContractVersion=").Append(QueryLensGeneratedPayloadContract.Version).Append('\0');
+    }
+
+    private static void AppendDbContextResolutionFingerprint(StringBuilder sb, DbContextResolutionSnapshot? resolution)
+    {
+        if (resolution is null)
+            return;
+
+        sb.Append("dbContextResolution=")
+          .Append(resolution.DeclaredTypeName ?? string.Empty).Append('|')
+          .Append(resolution.FactoryTypeName ?? string.Empty).Append('|')
+          .Append(resolution.ResolutionSource ?? string.Empty).Append('|')
+          .Append(resolution.Confidence.ToString(CultureInfo.InvariantCulture))
+          .Append('|');
+
+        foreach (var candidate in resolution.FactoryCandidateTypeNames.OrderBy(x => x, StringComparer.Ordinal))
+            sb.Append(candidate).Append(';');
+
+        sb.Append('\0');
+    }
+
+    private static void AppendUsingContextSnapshotFingerprint(StringBuilder sb, TranslationRequest request)
+    {
+        // Include UsingContextSnapshot to ensure same expression with different using contexts
+        // results in separate cache entries (reduces cache collisions).
+        if (request.UsingContextSnapshot is null)
+            return;
+
+        var snapshot = request.UsingContextSnapshot;
+        sb.Append("usingSnapshot={");
+        foreach (var import in snapshot.Imports.OrderBy(x => x, StringComparer.Ordinal))
+            sb.Append(import).Append(';');
+        sb.Append('|');
+        foreach (var kv in snapshot.Aliases.OrderBy(x => x.Key, StringComparer.Ordinal))
+            sb.Append(kv.Key).Append('=').Append(kv.Value).Append(';');
+        sb.Append('|');
+        foreach (var staticType in snapshot.StaticTypes.OrderBy(x => x, StringComparer.Ordinal))
+            sb.Append(staticType).Append(';');
+        sb.Append("}\\0");
+    }
+
+    private static void AppendExpressionMetadataFingerprint(StringBuilder sb, TranslationRequest request)
+    {
+        if (request.ExpressionMetadata is null)
+            return;
+
+        var metadata = request.ExpressionMetadata;
+        sb.Append("exprMeta=").Append(metadata.SourceLine).Append(':')
+          .Append(metadata.SourceCharacter).Append('\0');
+
+        if (request.ExtractionOrigin is null)
+            return;
+
+        sb.Append("origin=")
+          .Append(request.ExtractionOrigin.FilePath ?? string.Empty).Append('|')
+          .Append(request.ExtractionOrigin.Line).Append(':')
+          .Append(request.ExtractionOrigin.Character).Append('|')
+          .Append(request.ExtractionOrigin.EndLine).Append(':')
+          .Append(request.ExtractionOrigin.EndCharacter).Append('|')
+          .Append(request.ExtractionOrigin.Scope ?? string.Empty)
+          .Append('\0');
     }
 
     private void LogDebug(string message)
@@ -122,44 +188,65 @@ public sealed partial class QueryEvaluator
         Console.Error.WriteLine($"[QL-Eval] {message}");
     }
 
-    private (HashSet<string> Namespaces, HashSet<string> Types) GetOrBuildNamespaceTypeIndex(
-        string assemblySetHash,
-        IReadOnlyList<Assembly> compilationAssemblies)
+    internal static string DumpGeneratedSourceToTemp(string source)
     {
-        if (_namespaceTypeIndexCache.TryGetValue(assemblySetHash, out var cached))
+        try
         {
-            TouchNamespaceTypeIndexCacheEntry(assemblySetHash, cached);
-            return (cached.Namespaces, cached.Types);
-        }
+            var tempDir = Path.GetTempPath();
+            Directory.CreateDirectory(tempDir);
 
-        // Filter the same assemblies excluded from metadata refs so knownTypes/knownNamespaces
-        // stay consistent with what the Roslyn compiler actually sees. Without this, Roslyn
-        // assemblies (loaded by the LSP process) appear in knownNamespaces but not in metadata
-        // refs, causing the compile-retry loop to synthesize 'using Microsoft.CodeAnalysis.*'
-        // directives that then fail with CS0234.
-        var filteredAssemblies = compilationAssemblies
-            .Where(a =>
+            for (var attempt = 0; attempt < 8; attempt++)
             {
-                var loc = a.Location;
-                if (string.IsNullOrEmpty(loc)) return false;
-                var normalizedLoc = loc.Replace('\\', '/');
-                if (normalizedLoc.Contains("/runtimes/", StringComparison.OrdinalIgnoreCase)) return false;
-                var name = a.GetName().Name;
-                return !ShouldSkipMetadataReferenceAssembly(name);
-            })
-            .ToList();
-        var result = BuildKnownNamespaceAndTypeIndex(filteredAssemblies);
-        _namespaceTypeIndexCache[assemblySetHash] = new NamespaceTypeIndexEntry(
-            result.Namespaces,
-            result.Types,
-            GetUtcNowTicks());
-        TrimCacheByLastAccess(_namespaceTypeIndexCache, MaxNamespaceTypeIndexCacheEntries, static e => e.LastAccessTicks);
-        return result;
+                var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+                var suffix = attempt == 0 ? string.Empty : $"_{attempt}";
+                var path = Path.Combine(tempDir, $"ql_eval_{timestamp}{suffix}.cs");
+
+                try
+                {
+                    File.WriteAllText(path, source, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                    return path;
+                }
+                catch (IOException) when (File.Exists(path))
+                {
+                    // Rare same-millisecond filename collision; retry with suffix.
+                }
+            }
+
+            return "(could not write temp file)";
+        }
+        catch
+        {
+            return "(could not write temp file)";
+        }
     }
 
-    private static long GetUtcNowTicks() => DateTime.UtcNow.Ticks;
+    private static string ComputeAssemblyFingerprint(IReadOnlyList<Assembly> assemblies)
+    {
+        var sb = new StringBuilder();
+        foreach (var asm in assemblies
+                     .OrderBy(a => a.GetName().Name, StringComparer.Ordinal))
+        {
+            var name = asm.GetName().Name ?? string.Empty;
+            string mvid;
+            try
+            {
+                mvid = asm.ManifestModule.ModuleVersionId.ToString("N");
+            }
+            catch
+            {
+                mvid = asm.FullName ?? string.Empty;
+            }
 
-    private static void TrimCacheByLastAccess<TKey, TValue>(
+            sb.Append(name).Append('|').Append(mvid).Append(';');
+        }
+
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(bytes)[..16];
+    }
+
+    internal static long GetUtcNowTicks() => DateTime.UtcNow.Ticks;
+
+    internal static void TrimCacheByLastAccess<TKey, TValue>(
         ConcurrentDictionary<TKey, TValue> cache,
         int maxEntries,
         Func<TValue, long> getLastAccess)
@@ -178,40 +265,6 @@ public sealed partial class QueryEvaluator
             cache.TryRemove(key, out _);
         }
     }
-
-    private void TouchMetadataRefCacheEntry(string key, MetadataRefEntry entry)
-    {
-        _refCache.TryUpdate(
-            key,
-            entry with { LastAccessTicks = GetUtcNowTicks() },
-            entry);
-    }
-
-    private void TouchEvalRunnerCacheEntry(string key, EvalRunnerEntry entry)
-    {
-        _evalRunnerCache.TryUpdate(
-            key,
-            entry with { LastAccessTicks = GetUtcNowTicks() },
-            entry);
-    }
-
-    private void TouchNamespaceTypeIndexCacheEntry(string key, NamespaceTypeIndexEntry entry)
-    {
-        _namespaceTypeIndexCache.TryUpdate(
-            key,
-            entry with { LastAccessTicks = GetUtcNowTicks() },
-            entry);
-    }
-
-    // Roslyn compilation options are reused across all eval compilations.
-    private static readonly CSharpCompilationOptions SCompilationOptions =
-        new(OutputKind.DynamicallyLinkedLibrary,
-            optimizationLevel: OptimizationLevel.Debug,
-            allowUnsafe: false,
-            nullableContextOptions: NullableContextOptions.Annotations);
-
-    private static readonly CSharpParseOptions SParseOptions =
-        CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest);
 
     /// <summary>
     /// Translates a LINQ expression to SQL via execution-based SQL capture.

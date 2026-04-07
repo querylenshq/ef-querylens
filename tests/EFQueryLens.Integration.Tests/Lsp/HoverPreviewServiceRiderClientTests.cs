@@ -7,6 +7,7 @@ namespace EFQueryLens.Integration.Tests.Lsp;
 /// Tests for Rider client detection in <see cref="HoverPreviewService"/> hover initialization.
 /// Verifies that Rider clients (via QUERYLENS_CLIENT env var) are detected correctly.
 /// </summary>
+[Collection("EnvironmentVariables")]
 public class HoverPreviewServiceRiderClientTests : IDisposable
 {
     private readonly string _originalClient;

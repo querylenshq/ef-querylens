@@ -67,6 +67,24 @@ public sealed class CustomerReportService
                 c.Email,
                 c.CreatedUtc));
     }
+
+    /// <summary>
+    /// QueryLens sample: projects into a private nested DTO first, then reshapes.
+    /// Useful to validate hover translation resilience when projection types are
+    /// inaccessible outside this declaring type.
+    /// </summary>
+    public async Task<IReadOnlyList<object>> GetPrivateProjectionSampleAsync(CancellationToken ct)
+    {
+        var rows = await _db.CustomerDirectory
+            .Where(c => !c.IsDeleted && c.IsActive)
+            .Where(c => c.Orders.Any())
+            .Select(c => new PrivateCustomerProjection(c.CustomerId, c.Name))
+            .ToListAsync(ct);
+
+        return rows.Cast<object>().ToList();
+    }
+
+    private sealed record PrivateCustomerProjection(Guid CustomerId, string CustomerName);
 }
 
 public sealed record CustomerCountByMonthDto(int Month, int Count);

@@ -6,15 +6,54 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
-## [1.0.11] - 2026-03-30
+## [1.0.17] - 2026-04-07
 
+### Fixed
+- Visual Studio: LINQ snippet formatting now resolves the external formatter correctly regardless of packaging layout by probing both `server/formatter` and `server` roots for `EFQueryLens.Formatter`.
+- LSP build output now stages formatter runtime payload under `bin/<Configuration>/net10.0/formatter`, preventing local/dev runs from silently falling back to unformatted LINQ when not running from publish output.
+
+### Changed
+- Visual Studio hover preview is now SQL-focused (SQL block and status/actions only). Full enriched output (LINQ, Executed LINQ, parameters, notes, SQL) remains available via Copy SQL and Open SQL.
+- Removed manual SQL/C# syntax-coloring path in VS hover renderer to rely on backend-preformatted content consistently.
+
+## [1.0.16] - 2026-04-06
+
+## [1.0.15] - 2026-04-06
+
+## [1.0.14] - 2026-04-06
+
+### Fixed
+- Release CI on macOS ARM no longer fails at `npm ci` due to an accidental root-level `package-lock.json` without a matching root `package.json`. The unintended lockfile was removed so npm resolution uses plugin-local manifests as intended.
+
+## [1.0.13] - 2026-04-06
+
+### Fixed
+- `IDbContextFactory<TContext>` query chains (`(await _contextFactory.CreateDbContextAsync(ct)).DbSet...`) now generate SQL correctly. Fixed pipeline issues in factory-root pattern detection, synthetic receiver unresolved-symbol gating, and v2 stub synthesis for `__qlFactoryContext` alias emission.
+
+## [1.0.12] - 2026-04-05
+
+### Added
+- **V2 Query Extraction Foundation**: Complete multi-slice refactor of LINQ extraction, capture planning, and runtime codegen. Improved determinism, type inference, and placeholder synthesis across v2 capture paths.
+- **Rider Parity Stabilization**: Rider now has consistent preview behavior with VS Code/VS, split UX (hover preview-only, Alt+Enter for all actions), and improved intention action availability for statement-level queries.
+- **Cross-File Query Synthesis**: Queries that span helper methods now resolve their symbol graph deterministically, enabling accurate capture of locals that depend on extracted method parameters.
+- **Multi-DbContext Factory Support**: Queries with multiple DbContext factories are now resolved intelligently using typed payload contracts and async runner mode, reducing false-positive errors during evaluation.
+
+### Fixed
+- V2 capture plan no longer rejects collection placeholder types (List<T>, IReadOnlyCollection<T>, etc.) when locals have unsafe initializers—now downgrades to placeholder synthesis instead of blocking preview.
+- Sample SQL Server DbContexts now respect host-provided `AddDbContext` options before falling back to offline configuration, fixing double-configuration issues in hosted environments.
+- Hover on wrapper statements that project SQL via `ToQueryString()` now emits explicit guidance ("hover the underlying LINQ query") instead of ambiguous preview unavailability.
+- Helper method extraction now succeeds when cursor is positioned on the method name or receiver, not just parameter positions.
+
+### Changed
+- Large test suites (QueryEvaluator, LspSyntaxHelper) split into focused file-per-feature organization for easier maintenance and CI parallelization.
+
+## [1.0.11] - 2026-03-30
 ### Fixed
 - SQL Server paging queries no longer fail when a local variable is declared with a ternary initializer (e.g. `var pageSize = request.PageSize > 0 ? request.PageSize : DefaultPageSize`). The LSP type extractor now recursively inspects both branches of a `ConditionalExpressionSyntax` to infer the correct type, so `pageSize` is correctly resolved as `int` instead of falling back to runtime reflection.
 - Runtime type inference no longer picks up provider-internal types (e.g. `Microsoft.Data.SqlClient.SNIHandle`) when reflecting over method signatures. A new `IsInternalProviderType()` filter blocks non-public types from provider assemblies across all six type-inference paths in stub synthesis.
 - DbContext instances that resolve their connection string via `UseSqlServer("Name=ConnectionName")` or `UseMySql("Name=ConnectionName")` no longer throw "named connection string not found" during offline evaluation. A fake `IServiceProvider` and `IConfiguration` are now provided during factory execution so `OnConfiguring` can resolve named connection strings without requiring a real host environment.
 
 ## [1.0.10] - 2026-03-29
-
 ### Fixed
 - Hovering `await` on a query materialisation (e.g. `(await queryA.Concat(queryB).ToListAsync(ct)).ToList()`) no longer produces CS4032 ("The 'await' operator can only be used within an async method"). The extractor now strips any in-memory operations chained after an `await` result and forwards only the EF LINQ chain to the eval engine.
 - VS extension: added Professional and Enterprise edition installation targets (was Community-only, blocking install on VS Professional/Enterprise)

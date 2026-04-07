@@ -10,6 +10,7 @@
     <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Protocol" Version="17.2.8" />
     <PackageReference Include="Microsoft.VisualStudio.LanguageServer.Protocol.Extensions" Version="17.2.8" />
     <PackageReference Include="StreamJsonRpc" Version="2.24.84" />
+    <PackageReference Include="System.Reflection.MetadataLoadContext" Version="10.0.5" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -21,6 +22,27 @@
          Without this a user on .NET 9 gets a hard startup failure even though
          the runtime APIs we use are stable across major versions. -->
     <RollForward>LatestMajor</RollForward>
+    <FormatterProjectPath>$(MSBuildProjectDirectory)\..\EFQueryLens.Formatter\EFQueryLens.Formatter.csproj</FormatterProjectPath>
   </PropertyGroup>
+
+  <Target Name="PublishBundledFormatterForLsp" AfterTargets="Publish">
+    <PropertyGroup>
+      <_FormatterPublishDir>$(PublishDir)formatter\</_FormatterPublishDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_FormatterPublishDir)" />
+    <Exec Condition="'$(RuntimeIdentifier)' != ''"
+          Command="dotnet publish &quot;$(FormatterProjectPath)&quot; -c $(Configuration) -f $(TargetFramework) --self-contained false -r $(RuntimeIdentifier) /p:UseAppHost=true -o &quot;$(_FormatterPublishDir)&quot;" />
+    <Exec Condition="'$(RuntimeIdentifier)' == ''"
+          Command="dotnet publish &quot;$(FormatterProjectPath)&quot; -c $(Configuration) -f $(TargetFramework) --self-contained false /p:UseAppHost=false -o &quot;$(_FormatterPublishDir)&quot;" />
+  </Target>
+
+  <!-- Keep formatter available for non-publish runs (e.g., QUERYLENS_LSP_DLL overrides to bin output). -->
+  <Target Name="PublishBundledFormatterForLspBuildOutput" AfterTargets="Build">
+    <PropertyGroup>
+      <_FormatterBuildDir>$(TargetDir)formatter\</_FormatterBuildDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(_FormatterBuildDir)" />
+    <Exec Command="dotnet publish &quot;$(FormatterProjectPath)&quot; -c $(Configuration) -f $(TargetFramework) --self-contained false /p:UseAppHost=false -o &quot;$(_FormatterBuildDir)&quot;" />
+  </Target>
 
 </Project>

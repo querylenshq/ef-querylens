@@ -9,6 +9,7 @@ namespace EFQueryLens.Integration.Tests.Lsp.Fakes;
 internal sealed class FakeQueryLensEngine : IQueryLensEngine
 {
     public Func<TranslationRequest, QueryTranslationResult>? TranslateHandler { get; set; }
+    public Func<ModelInspectionRequest, CancellationToken, Task<ModelSnapshot>>? InspectModelAsyncHandler { get; set; }
 
     public Task<QueryTranslationResult> TranslateAsync(
         TranslationRequest request,
@@ -21,7 +22,11 @@ internal sealed class FakeQueryLensEngine : IQueryLensEngine
     public Task<ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request,
         CancellationToken ct = default) =>
-        Task.FromResult(new ModelSnapshot { DbContextType = "FakeContext" });
+        InspectModelAsyncHandler?.Invoke(request, ct)
+        ?? Task.FromResult(new ModelSnapshot { DbContextType = "FakeContext" });
+
+    public Task<FactoryGenerationResult> GenerateFactoryAsync(FactoryGenerationRequest request, CancellationToken ct = default)
+        => Task.FromException<FactoryGenerationResult>(new NotSupportedException());
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
@@ -44,6 +49,9 @@ internal sealed class FakeEngineControl : IQueryLensEngine, IEngineControl
         ModelInspectionRequest request,
         CancellationToken ct = default) =>
         Task.FromResult(new ModelSnapshot { DbContextType = "FakeContext" });
+
+    public Task<FactoryGenerationResult> GenerateFactoryAsync(FactoryGenerationRequest request, CancellationToken ct = default)
+        => Task.FromException<FactoryGenerationResult>(new NotSupportedException());
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

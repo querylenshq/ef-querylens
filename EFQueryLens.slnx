@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/samples/">
+    <Project Path="samples/SampleDbContextFactoryApp/SampleDbContextFactoryApp.csproj" />
     <Project Path="samples/SampleMySqlApp/SampleMySqlApp.csproj" />
     <Project Path="samples/SamplePostgresApp/SamplePostgresApp.csproj" />
     <Project Path="samples/SampleSqliteApp/SampleSqliteApp.csproj" />
@@ -10,6 +11,7 @@
     <Project Path="src/EFQueryLens.Cli/EFQueryLens.Cli.csproj" />
     <Project Path="src/EFQueryLens.Core/EFQueryLens.Core.csproj" />
     <Project Path="src/EFQueryLens.Daemon/EFQueryLens.Daemon.csproj" />
+    <Project Path="src/EFQueryLens.Formatter/EFQueryLens.Formatter.csproj" />
     <Project Path="src/EFQueryLens.Lsp/EFQueryLens.Lsp.csproj" />
     <Project Path="src/EFQueryLens.Mcp/EFQueryLens.Mcp.csproj" />
   </Folder>

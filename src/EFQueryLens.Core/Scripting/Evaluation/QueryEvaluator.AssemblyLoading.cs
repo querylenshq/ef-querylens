@@ -1,11 +1,35 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using EFQueryLens.Core.AssemblyContext;
+using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
 
 public sealed partial class QueryEvaluator
 {
+    private static Type ResolveDbContextTypeWithSiblingRetry(
+        ProjectAssemblyContext alcCtx,
+        TranslationRequest request)
+    {
+        try
+        {
+            return alcCtx.FindDbContextType(
+                request.DbContextTypeName,
+                request.Expression,
+                request.DbContextResolution,
+                request.ContextVariableName);
+        }
+        catch (InvalidOperationException ex) when (IsNoDbContextFoundError(ex))
+        {
+            TryLoadSiblingAssemblies(alcCtx);
+            return alcCtx.FindDbContextType(
+                request.DbContextTypeName,
+                request.Expression,
+                request.DbContextResolution,
+                request.ContextVariableName);
+        }
+    }
+
     internal static bool IsNoDbContextFoundError(InvalidOperationException ex) =>
         ex is DbContextDiscoveryException { FailureKind: DbContextDiscoveryFailureKind.NoDbContextFound };
 

@@ -2,10 +2,16 @@ plugins {
     kotlin("jvm") version "2.3.20"
     id("org.jetbrains.intellij.platform") version "2.13.1"
     id("org.jlleitschuh.gradle.ktlint") version "14.2.0"
+    jacoco
 }
 
 group = providers.gradleProperty("pluginGroup").get()
 version = providers.gradleProperty("pluginVersion").get()
+
+jacoco {
+    // Keep JaCoCo current for JDK 21 and IntelliJ-platform test runtimes.
+    toolVersion = "0.8.13"
+}
 
 kotlin {
     jvmToolchain(21)
@@ -27,6 +33,8 @@ dependencies {
     }
     // CommonMark spec-compliant Markdown to HTML (replaces custom regex conversion)
     implementation("org.commonmark:commonmark:0.27.1")
+    testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
 }
 
 val bundledRuntimeOutputDir = layout.buildDirectory.dir("generated/querylens-runtime")
@@ -56,6 +64,7 @@ val bundleQueryLensRuntime by tasks.registering {
     val lspSourceDir = projectDir.resolve("../../../src/EFQueryLens.Lsp")
     val daemonSourceDir = projectDir.resolve("../../../src/EFQueryLens.Daemon")
     val coreSourceDir = projectDir.resolve("../../../src/EFQueryLens.Core")
+    val formatterSourceDir = projectDir.resolve("../../../src/EFQueryLens.Formatter")
 
     // Ensure runtime rebundles whenever backend source/config changes.
     inputs.files(
@@ -66,6 +75,9 @@ val bundleQueryLensRuntime by tasks.registering {
             include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
         },
         fileTree(coreSourceDir) {
+            include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
+        },
+        fileTree(formatterSourceDir) {
             include("**/*.cs", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.json")
         },
         projectDir.resolve("../../../Directory.Build.props"),
@@ -183,6 +195,27 @@ intellijPlatform {
 }
 
 tasks {
+    test {
+        useJUnitPlatform()
+
+        // Rider/IntelliJ tests use custom classloaders; include no-location classes so
+        // JaCoCo can attribute execution to plugin classes instead of reporting 0%.
+        extensions.configure<org.gradle.testing.jacoco.plugins.JacocoTaskExtension> {
+            isIncludeNoLocationClasses = true
+            excludes = listOf("jdk.internal.*")
+        }
+    }
+
+    jacocoTestReport {
+        dependsOn(test)
+
+        reports {
+            xml.required = true
+            csv.required = true
+            html.required = true
+        }
+    }
+
     publishPlugin {
         channels = listOf(providers.gradleProperty("pluginChannel").get())
         // Token is supplied via JETBRAINS_PUBLISH_TOKEN env var in CI.
@@ -204,7 +237,6 @@ tasks {
         environment("QUERYLENS_CLIENT", "rider")
         environment("QUERYLENS_STARTUP_BROWSER", "true")
         environment("QUERYLENS_DEBUG", "true")
-        environment("QUERYLENS_FORCE_CODELENS", "true")
 
         val runtimeDir = bundledRuntimeOutputDir.get().asFile
 

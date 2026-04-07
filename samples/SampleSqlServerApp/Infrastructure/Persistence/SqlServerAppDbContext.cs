@@ -1,3 +1,4 @@
+using EntityFrameworkCore.Projectables;
 using Microsoft.EntityFrameworkCore;
 using SampleSqlServerApp.Application.Abstractions;
 using SampleSqlServerApp.Domain.Entities;
@@ -15,6 +16,20 @@ public class SqlServerAppDbContext : DbContext, ISqlServerAppDbContext
     public SqlServerAppDbContext(DbContextOptions<SqlServerAppDbContext> options)
         : base(options)
     {
+    }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        if (optionsBuilder.IsConfigured)
+        {
+            return;
+        }
+
+        optionsBuilder
+            .UseSqlServer(
+                "Name=MainConnection",
+                sqlServer => sqlServer.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
+            .UseProjectables();
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

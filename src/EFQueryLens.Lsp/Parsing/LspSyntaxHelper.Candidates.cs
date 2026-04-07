@@ -1,7 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.CodeAnalysis.CSharp;
+using EFQueryLens.Core.Contracts;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -14,53 +15,89 @@ public static partial class LspSyntaxHelper
             return false;
         }
 
-        ExpressionSyntax parsed;
         try
         {
-            parsed = SyntaxFactory.ParseExpression(expression);
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (parsed is InvocationExpressionSyntax invocation)
-        {
-            var hasKnownQueryMethods = GetInvocationChainMethodNames(invocation)
-                .Any(name => TerminalMethods.Contains(name) || QueryChainMethods.Contains(name));
-            if (hasKnownQueryMethods)
+            var wrapped = $$"""
+            class __QlCandidateProbe
             {
-                var rootName = TryExtractRootContextVariable(invocation);
-                if (!LooksLikeDbContextRoot(rootName) && LooksLikeStaticTypeRoot(rootName))
+                object __Run()
+                {
+                    var __candidate = {{expression}};
+                    return __candidate!;
+                }
+            }
+            """;
+
+            var root = CSharpSyntaxTree.ParseText(wrapped).GetRoot();
+            var parsed = root
+                .DescendantNodes()
+                .OfType<LocalDeclarationStatementSyntax>()
+                .FirstOrDefault()?
+                .Declaration
+                .Variables
+                .FirstOrDefault()?
+                .Initializer?
+                .Value;
+
+            if (parsed is null)
+            {
+                return false;
+            }
+            if (parsed is QueryExpressionSyntax queryExpression)
+            {
+                return IsLikelyQueryableExpression(queryExpression);
+            }
+
+            if (parsed is InvocationExpressionSyntax invocation)
+            {
+                var outermost = GetOutermostInvocationChain(invocation);
+                if (IsLikelyStaticTypeInvocation(outermost))
                 {
                     return false;
+                }
+
+                if (!IsLikelyQueryChain(outermost))
+                {
+                    return false;
+                }
+
+                var methods = GetInvocationChainMethodNames(outermost).ToArray();
+                if (methods.Any(m => EfSpecificMethods.Contains(m)))
+                {
+                    return true;
                 }
 
                 return true;
             }
 
-            var invocationRootName = TryExtractRootContextVariable(invocation);
-            return LooksLikeDbContextRoot(invocationRootName);
+            return IsLikelyQueryableExpression(parsed);
         }
-
-        if (parsed is MemberAccessExpressionSyntax memberAccess)
+        catch
         {
-            var rootName = TryExtractRootContextVariable(memberAccess);
-            return LooksLikeDbContextRoot(rootName);
+            return false;
         }
-
-        if (parsed is QueryExpressionSyntax queryExpression)
-        {
-            var rootName = TryExtractRootContextVariable(queryExpression);
-            return LooksLikeDbContextRoot(rootName);
-        }
-
-        return false;
     }
 
-    public static bool IsLikelyDbContextRootIdentifier(string? rootName)
+    private static bool IsLikelyStaticTypeInvocation(InvocationExpressionSyntax invocation)
     {
-        return LooksLikeDbContextRoot(rootName);
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+        {
+            return false;
+        }
+
+        ExpressionSyntax receiver = memberAccess.Expression;
+        while (receiver is MemberAccessExpressionSyntax member)
+        {
+            receiver = member.Expression;
+        }
+
+        if (receiver is not IdentifierNameSyntax identifier)
+        {
+            return false;
+        }
+
+        var name = identifier.Identifier.ValueText;
+        return name.Length > 0 && char.IsUpper(name[0]);
     }
 
     public static IReadOnlyList<LinqChainInfo> FindAllLinqChains(string sourceText)
@@ -142,16 +179,6 @@ public static partial class LspSyntaxHelper
             }
 
             if (string.IsNullOrWhiteSpace(contextVariableName))
-            {
-                continue;
-            }
-
-            // Reject in-memory LINQ on plain objects (e.g. someDto.Items.Select(...).ToList()).
-            // Keep only chains that are clearly EF: rooted at a recognisable DbContext variable
-            // OR that use at least one EF-Core-specific method (Include, AsNoTracking, etc.).
-            var hasEfSpecificMethod = GetInvocationChainMethodNames(outermostInvocation)
-                .Any(m => EfSpecificMethods.Contains(m));
-            if (!LooksLikeDbContextRoot(contextVariableName) && !hasEfSpecificMethod)
             {
                 continue;
             }
@@ -240,8 +267,7 @@ public static partial class LspSyntaxHelper
                     .Select(i => i.Identifier.Text)
                     .FirstOrDefault();
 
-            if (string.IsNullOrWhiteSpace(contextVariableName)
-                || !LooksLikeDbContextRoot(contextVariableName))
+            if (string.IsNullOrWhiteSpace(contextVariableName))
             {
                 continue;
             }
@@ -286,5 +312,304 @@ public static partial class LspSyntaxHelper
             .OrderBy(r => r.Line)
             .ThenBy(r => r.Character)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Scans <paramref name="sourceText"/> for a field, local variable, or parameter declaration
+    /// whose name matches <paramref name="contextVariableName"/> and returns the declared type
+    /// name string - suitable for populating <c>TranslationRequest.DbContextTypeName</c> to
+    /// disambiguate when multiple DbContext types exist in the host assembly.
+    ///
+    /// Returns <c>null</c> when the variable cannot be found or its type cannot be determined
+    /// syntactically (e.g. <c>var</c> with a complex initializer).
+    /// </summary>
+    internal static string? TryResolveDbContextTypeName(string sourceText, string contextVariableName)
+    {
+        if (string.IsNullOrWhiteSpace(sourceText) || string.IsNullOrWhiteSpace(contextVariableName))
+            return null;
+
+        try
+        {
+            var root = CSharpSyntaxTree.ParseText(sourceText).GetRoot();
+
+            string? resolved = null;
+
+            // Fields: private readonly SlaPlusDbContext _db;
+            foreach (var field in root.DescendantNodes().OfType<FieldDeclarationSyntax>())
+            {
+                if (field.Declaration.Variables.Any(v =>
+                        v.Identifier.ValueText.Equals(contextVariableName, StringComparison.Ordinal)))
+                {
+                    resolved = field.Declaration.Type.ToString();
+                    break;
+                }
+            }
+
+            // Locals: var db = ...; SlaPlusDbContext db = ...;
+            if (resolved is null)
+            {
+                foreach (var local in root.DescendantNodes().OfType<LocalDeclarationStatementSyntax>())
+                {
+                    if (local.Declaration.Variables.Any(v =>
+                            v.Identifier.ValueText.Equals(contextVariableName, StringComparison.Ordinal)))
+                    {
+                        resolved = local.Declaration.Type.ToString();
+                        break;
+                    }
+                }
+            }
+
+            // Parameters: (SlaPlusDbContext db) or injected via ctor
+            if (resolved is null)
+            {
+                foreach (var parameter in root.DescendantNodes().OfType<ParameterSyntax>())
+                {
+                    if (parameter.Identifier.ValueText.Equals(contextVariableName, StringComparison.Ordinal)
+                        && parameter.Type is not null)
+                    {
+                        resolved = parameter.Type.ToString();
+                        break;
+                    }
+                }
+            }
+
+            return resolved is not null ? NormalizeDbContextTypeName(resolved) : null;
+        }
+        catch
+        {
+            // Best-effort - never propagate to caller.
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Normalises a syntactically-resolved type name for use as a DbContext disambiguator.
+    /// Strips nullable-reference-type annotations (<c>?</c>) - they have no CLR distinction.
+    /// Unwraps common factory wrappers so declared <c>IDbContextFactory&lt;TContext&gt;</c> resolves to <c>TContext</c>.
+    /// </summary>
+    private static string NormalizeDbContextTypeName(string typeName)
+    {
+        var normalized = typeName.TrimEnd('?').Trim();
+        var unwrapped = TryUnwrapDbContextFactoryTypeName(normalized);
+        return string.IsNullOrWhiteSpace(unwrapped) ? normalized : unwrapped;
+    }
+
+    private static string? TryUnwrapDbContextFactoryTypeName(string typeName)
+    {
+        var start = typeName.IndexOf('<');
+        var end = typeName.LastIndexOf('>');
+        if (start <= 0 || end <= start)
+            return null;
+
+        var wrapper = typeName[..start].Trim();
+        if (wrapper.StartsWith("global::", StringComparison.Ordinal))
+            wrapper = wrapper["global::".Length..];
+
+        if (!string.Equals(wrapper, "IDbContextFactory", StringComparison.Ordinal)
+            && !string.Equals(wrapper, "Microsoft.EntityFrameworkCore.IDbContextFactory", StringComparison.Ordinal)
+            && !string.Equals(wrapper, "PooledDbContextFactory", StringComparison.Ordinal)
+            && !string.Equals(wrapper, "Microsoft.EntityFrameworkCore.Infrastructure.PooledDbContextFactory", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return typeName[(start + 1)..end].Trim().TrimEnd('?');
+    }
+
+    internal static DbContextResolutionSnapshot? BuildDbContextResolutionSnapshot(
+        string sourceText,
+        string contextVariableName,
+        IReadOnlyList<string>? factoryCandidateTypeNames)
+    {
+        var declaredTypeName = TryResolveDbContextTypeName(sourceText, contextVariableName);
+        var normalizedFactoryCandidates = (factoryCandidateTypeNames ?? [])
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(NormalizeDbContextTypeName)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var factoryTypeName = normalizedFactoryCandidates.Length == 1
+            ? normalizedFactoryCandidates[0]
+            : null;
+
+        if (declaredTypeName is null && factoryTypeName is null && normalizedFactoryCandidates.Length == 0)
+            return null;
+
+        return new DbContextResolutionSnapshot
+        {
+            DeclaredTypeName = declaredTypeName,
+            FactoryTypeName = factoryTypeName,
+            FactoryCandidateTypeNames = normalizedFactoryCandidates,
+            ResolutionSource = BuildResolutionSource(declaredTypeName, factoryTypeName, normalizedFactoryCandidates),
+            Confidence = ComputeResolutionConfidence(declaredTypeName, factoryTypeName, normalizedFactoryCandidates),
+        };
+    }
+
+    internal static string? GetPreferredDbContextTypeName(DbContextResolutionSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return null;
+
+        if (ShouldIgnoreDeclaredTypeName(snapshot))
+        {
+            if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+                return snapshot.FactoryTypeName;
+
+            return snapshot.FactoryCandidateTypeNames.Count == 1
+                ? snapshot.FactoryCandidateTypeNames[0]
+                : null;
+        }
+
+        if (ShouldPreferFactoryTypeName(snapshot))
+            return snapshot.FactoryTypeName;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName))
+            return snapshot.DeclaredTypeName;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+            return snapshot.FactoryTypeName;
+
+        return snapshot.FactoryCandidateTypeNames.Count == 1
+            ? snapshot.FactoryCandidateTypeNames[0]
+            : null;
+    }
+
+    internal static string GetDbContextResolutionCacheToken(DbContextResolutionSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return string.Empty;
+
+        if (ShouldIgnoreDeclaredTypeName(snapshot))
+        {
+            if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+                return snapshot.FactoryTypeName;
+
+            if (snapshot.FactoryCandidateTypeNames.Count > 0)
+                return string.Join(";", snapshot.FactoryCandidateTypeNames.Order(StringComparer.Ordinal));
+
+            return string.Empty;
+        }
+
+        if (ShouldPreferFactoryTypeName(snapshot) && !string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+            return snapshot.FactoryTypeName;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName))
+            return snapshot.DeclaredTypeName;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName))
+            return snapshot.FactoryTypeName;
+
+        if (snapshot.FactoryCandidateTypeNames.Count == 0)
+            return string.Empty;
+
+        return string.Join(";", snapshot.FactoryCandidateTypeNames.Order(StringComparer.Ordinal));
+    }
+
+    private static bool ShouldPreferFactoryTypeName(DbContextResolutionSnapshot snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName)
+            || string.IsNullOrWhiteSpace(snapshot.FactoryTypeName)
+            || string.Equals(snapshot.DeclaredTypeName, snapshot.FactoryTypeName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return IsLikelyInterfaceTypeName(snapshot.DeclaredTypeName);
+    }
+
+    private static bool ShouldIgnoreDeclaredTypeName(DbContextResolutionSnapshot snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(snapshot.DeclaredTypeName)
+            || !IsLikelyInterfaceTypeName(snapshot.DeclaredTypeName)
+            || snapshot.FactoryCandidateTypeNames.Count == 0)
+        {
+            return false;
+        }
+
+        if (ContainsTypeName(snapshot.FactoryCandidateTypeNames, snapshot.DeclaredTypeName))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(snapshot.FactoryTypeName)
+            && string.Equals(snapshot.DeclaredTypeName, snapshot.FactoryTypeName, StringComparison.Ordinal))
+            return false;
+
+        return true;
+    }
+
+    private static bool ContainsTypeName(IReadOnlyList<string> candidates, string typeName)
+    {
+        if (candidates.Contains(typeName, StringComparer.Ordinal))
+            return true;
+
+        var shortName = ShortTypeName(typeName);
+        return candidates.Any(candidate =>
+            string.Equals(ShortTypeName(candidate), shortName, StringComparison.Ordinal));
+    }
+
+    private static string ShortTypeName(string typeName)
+    {
+        var normalized = typeName.StartsWith("global::", StringComparison.Ordinal)
+            ? typeName.Substring("global::".Length)
+            : typeName;
+        return normalized.Split('.').LastOrDefault() ?? normalized;
+    }
+
+    private static bool IsLikelyInterfaceTypeName(string typeName)
+    {
+        var shortName = ShortTypeName(typeName);
+
+        return shortName.Length > 1
+            && shortName[0] == 'I'
+            && char.IsUpper(shortName[1]);
+    }
+
+    private static string BuildResolutionSource(
+        string? declaredTypeName,
+        string? factoryTypeName,
+        IReadOnlyList<string> factoryCandidateTypeNames)
+    {
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && !string.IsNullOrWhiteSpace(factoryTypeName))
+        {
+            return string.Equals(declaredTypeName, factoryTypeName, StringComparison.Ordinal)
+                ? "declared+factory"
+                : "declared+factory-mismatch";
+        }
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && factoryCandidateTypeNames.Count > 1)
+            return "declared+factory-candidates";
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName))
+            return "declared";
+
+        if (!string.IsNullOrWhiteSpace(factoryTypeName))
+            return "factory";
+
+        return factoryCandidateTypeNames.Count > 1 ? "factory-candidates" : "unknown";
+    }
+
+    private static double ComputeResolutionConfidence(
+        string? declaredTypeName,
+        string? factoryTypeName,
+        IReadOnlyList<string> factoryCandidateTypeNames)
+    {
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && !string.IsNullOrWhiteSpace(factoryTypeName))
+        {
+            return string.Equals(declaredTypeName, factoryTypeName, StringComparison.Ordinal)
+                ? 1.0
+                : 0.4;
+        }
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName) && factoryCandidateTypeNames.Count > 1)
+            return factoryCandidateTypeNames.Contains(declaredTypeName, StringComparer.Ordinal) ? 0.9 : 0.6;
+
+        if (!string.IsNullOrWhiteSpace(declaredTypeName))
+            return 0.9;
+
+        if (!string.IsNullOrWhiteSpace(factoryTypeName))
+            return 0.85;
+
+        return factoryCandidateTypeNames.Count > 1 ? 0.5 : 0.0;
     }
 }
