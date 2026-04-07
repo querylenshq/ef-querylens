@@ -19,7 +19,7 @@ public partial class QueryEvaluatorTests
     {
         // This is the form LSP emits after normalizing 'o.Customer is null'.
         // Verifies the evaluator handles it without needing any compile-retry rewrite.
-        var result = await TranslateAsync(
+        var result = await TranslateV2Async(
             "db.Orders.Where(o => o.Customer == null).Select(o => o.Id)",
             ct: TestContext.Current.CancellationToken);
 
@@ -31,7 +31,7 @@ public partial class QueryEvaluatorTests
     public async Task Evaluate_BoolEqualityComparison_TranslatesToSql()
     {
         // This is the form LSP emits after normalizing 'o.IsNotDeleted is true'.
-        var result = await TranslateAsync(
+        var result = await TranslateV2Async(
             "db.Orders.Where(o => o.IsNotDeleted == true).Select(o => o.Id)",
             ct: TestContext.Current.CancellationToken);
 
@@ -53,6 +53,13 @@ public partial class QueryEvaluatorTests
                 OriginalExpression = rawExpression,
                 RewrittenExpression = rawExpression,
                 DbContextTypeName = DefaultMySqlDbContextType,
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(rawExpression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = rawExpression,
+                    IsComplete = true,
+                },
             },
             TestContext.Current.CancellationToken);
 
@@ -75,6 +82,13 @@ public partial class QueryEvaluatorTests
                 OriginalExpression = rawExpression,
                 RewrittenExpression = rawExpression,
                 DbContextTypeName = DefaultMySqlDbContextType,
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(rawExpression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = rawExpression,
+                    IsComplete = true,
+                },
             },
             TestContext.Current.CancellationToken);
 
@@ -105,16 +119,24 @@ public partial class QueryEvaluatorTests
                     "SampleMySqlApp.Application.Orders",
                     "SampleMySqlApp.Domain.Enums",
                 ],
-                LocalSymbolGraph =
-                [
-                    new LocalSymbolGraphEntry
-                    {
-                        Name = "customerId",
-                        TypeName = "System.Guid",
-                        Kind = "local",
-                        DeclarationOrder = 0,
-                    },
-                ],
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(expression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = expression,
+                    IsComplete = true,
+                    Entries =
+                    [
+                        new V2CapturePlanEntry
+                        {
+                            Name = "customerId",
+                            TypeName = "System.Guid",
+                            Kind = "local",
+                            DeclarationOrder = 0,
+                            CapturePolicy = LocalSymbolReplayPolicies.UsePlaceholder,
+                        },
+                    ],
+                },
             },
             TestContext.Current.CancellationToken);
 

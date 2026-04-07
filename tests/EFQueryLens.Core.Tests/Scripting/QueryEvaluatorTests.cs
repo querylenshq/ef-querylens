@@ -99,20 +99,17 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         bool useAsyncRunner = false,
         CancellationToken ct = default) =>
         _evaluator.EvaluateAsync(_alcCtx,
-            new TranslationRequest
-            {
-                AssemblyPath      = _alcCtx.AssemblyPath,
-                Expression        = expression,
-                DbContextTypeName = dbContextTypeName ?? DefaultMySqlDbContextType,
-                AdditionalImports = additionalImports ?? [],
-                UsingAliases = usingAliases
-                    ?? new Dictionary<string, string>(StringComparer.Ordinal),
-                UsingStaticTypes = usingStaticTypes ?? [],
-                LocalSymbolGraph = BuildSymbolGraph(
-                    localVariableTypes ?? new Dictionary<string, string>(StringComparer.Ordinal),
-                    localSymbolHints ?? []),
-                UseAsyncRunner = useAsyncRunner,
-            }, ct);
+            BuildV2Request(
+                expression,
+                dbContextTypeName,
+                additionalImports,
+                usingAliases,
+                usingStaticTypes,
+                localVariableTypes,
+                localSymbolHints,
+                memberTypeHints,
+                useAsyncRunner),
+            ct);
 
     private Task<QueryTranslationResult> TranslateStrictAsync(
         string expression,
@@ -136,6 +133,141 @@ public partial class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
             memberTypeHints,
             useAsyncRunner,
             ct);
+
+    // ─── V2 helpers ───────────────────────────────────────────────────────────
+
+    private Task<QueryTranslationResult> TranslateV2Async(
+        string expression,
+        string? dbContextTypeName = null,
+        IReadOnlyList<string>? additionalImports = null,
+        IReadOnlyDictionary<string, string>? usingAliases = null,
+        IReadOnlyList<string>? usingStaticTypes = null,
+        IReadOnlyDictionary<string, string>? localVariableTypes = null,
+        IReadOnlyList<LocalSymbolHint>? localSymbolHints = null,
+        IReadOnlyList<MemberTypeHint>? memberTypeHints = null,
+        bool useAsyncRunner = false,
+        CancellationToken ct = default) =>
+        _evaluator.EvaluateAsync(_alcCtx,
+            BuildV2Request(expression, dbContextTypeName, additionalImports, usingAliases,
+                usingStaticTypes, localVariableTypes, localSymbolHints, memberTypeHints, useAsyncRunner), ct);
+
+    private Task<QueryTranslationResult> TranslateStrictV2Async(
+        string expression,
+        IReadOnlyDictionary<string, string>? localVariableTypes = null,
+        IReadOnlyList<LocalSymbolHint>? localSymbolHints = null,
+        IReadOnlyList<MemberTypeHint>? memberTypeHints = null,
+        string? dbContextTypeName = null,
+        IReadOnlyList<string>? additionalImports = null,
+        IReadOnlyDictionary<string, string>? usingAliases = null,
+        IReadOnlyList<string>? usingStaticTypes = null,
+        bool useAsyncRunner = false,
+        CancellationToken ct = default) =>
+        TranslateV2Async(expression, dbContextTypeName, additionalImports, usingAliases,
+            usingStaticTypes, localVariableTypes, localSymbolHints, memberTypeHints, useAsyncRunner, ct);
+
+    private TranslationRequest BuildV2Request(
+        string expression,
+        string? dbContextTypeName = null,
+        IReadOnlyList<string>? additionalImports = null,
+        IReadOnlyDictionary<string, string>? usingAliases = null,
+        IReadOnlyList<string>? usingStaticTypes = null,
+        IReadOnlyDictionary<string, string>? localVariableTypes = null,
+        IReadOnlyList<LocalSymbolHint>? localSymbolHints = null,
+        IReadOnlyList<MemberTypeHint>? memberTypeHints = null,
+        bool useAsyncRunner = false) =>
+        new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            Expression = expression,
+            DbContextTypeName = dbContextTypeName ?? DefaultMySqlDbContextType,
+            AdditionalImports = additionalImports ?? [],
+            UsingAliases = usingAliases ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            UsingStaticTypes = usingStaticTypes ?? [],
+            LocalSymbolGraph = [],
+            UseAsyncRunner = useAsyncRunner,
+            V2ExtractionPlan = BuildMinimalExtractionPlan(expression),
+            V2CapturePlan = BuildCapturePlan(expression, localVariableTypes, localSymbolHints),
+        };
+
+    private static V2QueryExtractionPlanSnapshot BuildMinimalExtractionPlan(string expression) =>
+        new V2QueryExtractionPlanSnapshot
+        {
+            Expression = expression,
+            ContextVariableName = "db",
+            RootContextVariableName = "db",
+            BoundaryKind = "Queryable",
+            NeedsMaterialization = false,
+        };
+
+    private static V2CapturePlanSnapshot BuildCapturePlan(
+        string executableExpression,
+        IReadOnlyDictionary<string, string>? localVariableTypes,
+        IReadOnlyList<LocalSymbolHint>? localSymbolHints)
+    {
+        var entries = new List<V2CapturePlanEntry>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var order = 0;
+
+        foreach (var hint in localSymbolHints ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(hint.Name) || string.IsNullOrWhiteSpace(hint.TypeName))
+                continue;
+
+            entries.Add(new V2CapturePlanEntry
+            {
+                Name = hint.Name,
+                TypeName = hint.TypeName,
+                Kind = hint.Kind,
+                InitializerExpression = hint.InitializerExpression,
+                DeclarationOrder = hint.DeclarationOrder > 0 ? hint.DeclarationOrder : order++,
+                Dependencies = hint.Dependencies,
+                Scope = hint.Scope,
+                CapturePolicy = hint.ReplayPolicy,
+            });
+            seenNames.Add(hint.Name);
+        }
+
+        foreach (var kv in (localVariableTypes ?? new Dictionary<string, string>(StringComparer.Ordinal))
+            .OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(kv.Key) || string.IsNullOrWhiteSpace(kv.Value))
+                continue;
+            if (seenNames.Contains(kv.Key))
+                continue;
+
+            entries.Add(new V2CapturePlanEntry
+            {
+                Name = kv.Key,
+                TypeName = kv.Value,
+                Kind = "local",
+                DeclarationOrder = order++,
+                CapturePolicy = IsNullableLikeType(kv.Value)
+                    ? LocalSymbolReplayPolicies.ReplayInitializer
+                    : LocalSymbolReplayPolicies.UsePlaceholder,
+                InitializerExpression = IsNullableLikeType(kv.Value)
+                    ? $"default({kv.Value})"
+                    : null,
+            });
+        }
+
+        entries = entries
+            .OrderBy(e => e.DeclarationOrder)
+            .ThenBy(e => e.Name, StringComparer.Ordinal)
+            .ToList();
+
+        return new V2CapturePlanSnapshot
+        {
+            ExecutableExpression = executableExpression,
+            Entries = entries,
+            IsComplete = true,
+        };
+    }
+
+    private static bool IsNullableLikeType(string typeName)
+    {
+        return typeName.EndsWith("?", StringComparison.Ordinal)
+            || typeName.StartsWith("System.Nullable<", StringComparison.Ordinal);
+    }
 
     // ─── Basic translation ────────────────────────────────────────────────────
 

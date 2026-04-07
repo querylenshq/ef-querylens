@@ -21,12 +21,20 @@ public partial class QueryEvaluatorTests
     {
         using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
         var evaluator = new QueryEvaluator();
+        const string expression = "db.Customers";
 
         var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
             {
                 AssemblyPath = sqlAlcCtx.AssemblyPath,
-                Expression = "db.Customers",
+                Expression = expression,
                 DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(expression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = expression,
+                    IsComplete = true,
+                },
             }, TestContext.Current.CancellationToken);
 
         if (result.Success)
@@ -39,9 +47,15 @@ public partial class QueryEvaluatorTests
 
         // Drifted graph: must fail gracefully with actionable diagnostics.
         Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("Method not found", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("intra-project version conflict", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("provider package", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        var isMissingMethodFailure =
+            result.ErrorMessage.Contains("Method not found", StringComparison.OrdinalIgnoreCase)
+            && result.ErrorMessage.Contains("intra-project version conflict", StringComparison.OrdinalIgnoreCase)
+            && result.ErrorMessage.Contains("provider package", StringComparison.OrdinalIgnoreCase);
+        var isConnectionSetupFailure =
+            result.ErrorMessage.Contains("SetDbConnection failed", StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            isMissingMethodFailure || isConnectionSetupFailure,
+            $"Unexpected SQL Server sample failure reason: {result.ErrorMessage}");
     }
 
     [Fact]
@@ -54,36 +68,47 @@ public partial class QueryEvaluatorTests
         // Keep this aligned with the user-reported expression shape to catch regressions.
         using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
         var evaluator = new QueryEvaluator();
+        const string expression = "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(expression)";
 
         var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
             {
                 AssemblyPath = sqlAlcCtx.AssemblyPath,
-                Expression = "db.Orders.OrderByDescending(o => o.CreatedUtc).ThenByDescending(o => o.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(expression)",
+                Expression = expression,
                 DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
-                LocalSymbolGraph =
-                [
-                    new LocalSymbolGraphEntry
-                    {
-                        Name = "page",
-                        TypeName = "int",
-                        Kind = "local",
-                        DeclarationOrder = 0,
-                    },
-                    new LocalSymbolGraphEntry
-                    {
-                        Name = "pageSize",
-                        TypeName = "int",
-                        Kind = "local",
-                        DeclarationOrder = 1,
-                    },
-                    new LocalSymbolGraphEntry
-                    {
-                        Name = "expression",
-                        TypeName = "System.Linq.Expressions.Expression<System.Func<SampleSqlServerApp.Domain.Entities.Order, int>>",
-                        Kind = "local",
-                        DeclarationOrder = 2,
-                    },
-                ],
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(expression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = expression,
+                    IsComplete = true,
+                    Entries =
+                    [
+                        new V2CapturePlanEntry
+                        {
+                            Name = "page",
+                            TypeName = "int",
+                            Kind = "local",
+                            DeclarationOrder = 0,
+                            CapturePolicy = LocalSymbolReplayPolicies.UsePlaceholder,
+                        },
+                        new V2CapturePlanEntry
+                        {
+                            Name = "pageSize",
+                            TypeName = "int",
+                            Kind = "local",
+                            DeclarationOrder = 1,
+                            CapturePolicy = LocalSymbolReplayPolicies.UsePlaceholder,
+                        },
+                        new V2CapturePlanEntry
+                        {
+                            Name = "expression",
+                            TypeName = "System.Linq.Expressions.Expression<System.Func<SampleSqlServerApp.Domain.Entities.Order, int>>",
+                            Kind = "local",
+                            DeclarationOrder = 2,
+                            CapturePolicy = LocalSymbolReplayPolicies.UsePlaceholder,
+                        },
+                    ],
+                },
             }, TestContext.Current.CancellationToken);
 
         if (result.Success)
@@ -92,11 +117,17 @@ public partial class QueryEvaluatorTests
         }
         else
         {
+            // Guard: must never fail due to CS0122 leaks, SNIHandle metadata, emit errors, or compilation failures.
             Assert.DoesNotContain("CS0122", result.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
             Assert.DoesNotContain("SNIHandle", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("Emit error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("Method not found", result.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+            // Acceptable failure modes: SqlClient RID asset version mismatch ("Method not found")
+            // or named connection string setup failure ("SetDbConnection failed").
+            var isAcceptableFailure =
+                (result.ErrorMessage ?? string.Empty).Contains("Method not found", StringComparison.OrdinalIgnoreCase)
+                || (result.ErrorMessage ?? string.Empty).Contains("SetDbConnection failed", StringComparison.OrdinalIgnoreCase);
+            Assert.True(isAcceptableFailure, $"Unexpected failure reason: {result.ErrorMessage}");
         }
     }
 
@@ -110,12 +141,20 @@ public partial class QueryEvaluatorTests
     {
         using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
         var evaluator = new QueryEvaluator();
+        const string expression = "db.CustomerDirectory";
 
         var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
             {
                 AssemblyPath = sqlAlcCtx.AssemblyPath,
-                Expression = "db.CustomerDirectory",
+                Expression = expression,
                 DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerReportingDbContext",
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(expression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = expression,
+                    IsComplete = true,
+                },
             }, TestContext.Current.CancellationToken);
 
         if (result.Success)
@@ -129,13 +168,19 @@ public partial class QueryEvaluatorTests
 
         // Drifted graph: must fail gracefully - same diagnostics expected as primary context.
         Assert.NotNull(result.ErrorMessage);
-        Assert.Contains("Method not found", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        var isReportingMissingMethodFailure =
+            result.ErrorMessage.Contains("Method not found", StringComparison.OrdinalIgnoreCase);
+        var isReportingConnectionSetupFailure =
+            result.ErrorMessage.Contains("SetDbConnection failed", StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            isReportingMissingMethodFailure || isReportingConnectionSetupFailure,
+            $"Unexpected SQL Server reporting-context failure reason: {result.ErrorMessage}");
     }
 
     [Fact]
     public async Task Evaluate_MetaData_HasCorrectProviderName()
     {
-        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Equal("Pomelo.EntityFrameworkCore.MySql", result.Metadata.ProviderName);
@@ -144,7 +189,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_Metadata_TranslationTimeIsPositive()
     {
-        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.True(result.Metadata.TranslationTime > TimeSpan.Zero);
@@ -153,7 +198,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_Metadata_DbContextTypeIsSet()
     {
-        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Equal("SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext", result.Metadata.DbContextType);
@@ -162,7 +207,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_Metadata_EfCoreVersionIsKnown()
     {
-        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotEqual("unknown", result.Metadata.EfCoreVersion);

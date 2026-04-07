@@ -65,6 +65,20 @@ public sealed class EngineDiscoveryAndHttpClientTests : IAsyncDisposable
             Expression = "db.Orders",
             AssemblyPath = "C:/app/Fake.dll",
             ContextVariableName = "db",
+            LocalSymbolGraph = [],
+            V2ExtractionPlan = new V2QueryExtractionPlanSnapshot
+            {
+                Expression = "db.Orders",
+                ContextVariableName = "db",
+                RootContextVariableName = "db",
+                BoundaryKind = "Queryable",
+                NeedsMaterialization = false,
+            },
+            V2CapturePlan = new V2CapturePlanSnapshot
+            {
+                ExecutableExpression = "db.Orders",
+                IsComplete = true,
+            },
         });
 
         await client.RestartAsync();

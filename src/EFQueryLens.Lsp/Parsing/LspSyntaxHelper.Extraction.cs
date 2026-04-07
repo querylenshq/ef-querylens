@@ -1392,6 +1392,20 @@ public static partial class LspSyntaxHelper
     {
         expression = null!;
 
+        var variableDeclaration = node?.FirstAncestorOrSelf<VariableDeclarationSyntax>();
+        if (variableDeclaration is not null)
+        {
+            var initializer = variableDeclaration.Variables
+                .Select(v => v.Initializer?.Value)
+                .OfType<ExpressionSyntax>()
+                .FirstOrDefault();
+            if (initializer is not null)
+            {
+                expression = initializer;
+                return true;
+            }
+        }
+
         var variableDeclarator = node?.FirstAncestorOrSelf<VariableDeclaratorSyntax>();
         if (variableDeclarator?.Initializer?.Value is ExpressionSyntax initializerExpression)
         {

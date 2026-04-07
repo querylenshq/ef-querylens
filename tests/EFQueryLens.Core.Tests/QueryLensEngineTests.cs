@@ -171,17 +171,39 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
         return maxCreated;
     }
 
+    private TranslationRequest BuildV2Request(
+        string expression,
+        string? assemblyPath = null,
+        string? dbContextTypeName = null) =>
+        new()
+        {
+            AssemblyPath = assemblyPath ?? _dll,
+            Expression = expression,
+            DbContextTypeName = dbContextTypeName ?? DefaultMySqlDbContextType,
+            LocalSymbolGraph = [],
+            V2ExtractionPlan = new V2QueryExtractionPlanSnapshot
+            {
+                Expression = expression,
+                ContextVariableName = "db",
+                RootContextVariableName = "db",
+                BoundaryKind = "Queryable",
+                NeedsMaterialization = false,
+            },
+            V2CapturePlan = new V2CapturePlanSnapshot
+            {
+                ExecutableExpression = expression,
+                IsComplete = true,
+            },
+        };
+
     // ── TranslateAsync ────────────────────────────────────────────────────────
 
     [Fact]
     public async Task TranslateAsync_SimpleTable_ReturnsSuccessWithSql()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "db.Orders",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("db.Orders"),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -191,12 +213,9 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
     [Fact]
     public async Task TranslateAsync_WhereClause_ContainsFilterColumn()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "db.Orders.Where(o => o.UserId == 5)",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("db.Orders.Where(o => o.UserId == 5)"),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Contains("UserId", result.Sql, StringComparison.OrdinalIgnoreCase);
@@ -205,12 +224,9 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
     [Fact]
     public async Task TranslateAsync_WithInclude_ContainsJoin()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "db.Orders.Where(o => o.UserId == 5).Include(o => o.Items)",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("db.Orders.Where(o => o.UserId == 5).Include(o => o.Items)"),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -225,12 +241,9 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
     [Fact]
     public async Task TranslateAsync_MultiLevelInclude_GeneratesValidSql()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "db.Orders.Include(o => o.Items).ThenInclude(i => i.Product)",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("db.Orders.Include(o => o.Items).ThenInclude(i => i.Product)"),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -239,12 +252,9 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
     [Fact]
     public async Task TranslateAsync_SelectProjection_ReturnsSuccess()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "db.Users.Select(u => new { u.Id, u.Email })",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("db.Users.Select(u => new { u.Id, u.Email })"),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -253,12 +263,9 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
     [Fact]
     public async Task TranslateAsync_InvalidExpression_ReturnsFalseSuccess()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "db.NonExistentTable.Where(x => x.Foo == 1)",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("db.NonExistentTable.Where(x => x.Foo == 1)"),
+            TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         Assert.NotNull(result.ErrorMessage);
@@ -267,12 +274,9 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
     [Fact]
     public async Task TranslateAsync_ExpressionReturningNonQueryable_ReturnsFalseSuccess()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "42",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("42"),
+            TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
     }
@@ -280,12 +284,9 @@ public partial class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture
     [Fact]
     public async Task TranslateAsync_Metadata_PopulatedCorrectly()
     {
-        var result = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression   = "db.Categories",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var result = await _engine.TranslateAsync(
+            BuildV2Request("db.Categories"),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.Equal("SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext", result.Metadata.DbContextType);

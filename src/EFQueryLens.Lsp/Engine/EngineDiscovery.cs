@@ -355,7 +355,7 @@ internal static partial class EngineDiscovery
 
         try
         {
-            while (!process.HasExited)
+            while (true)
             {
                 var line = await process.StandardError.ReadLineAsync();
                 if (line is null)

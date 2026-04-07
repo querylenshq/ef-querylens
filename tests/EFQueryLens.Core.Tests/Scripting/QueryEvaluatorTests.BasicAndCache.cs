@@ -5,7 +5,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_SimpleDbSet_ReturnsSql()
     {
-        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -15,7 +15,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_SimpleDbSet_PopulatesCommandsList()
     {
-        var result = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotEmpty(result.Commands);
@@ -25,7 +25,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_WhereClause_ContainsWhere()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId == 5)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders.Where(o => o.UserId == 5)", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -39,7 +39,7 @@ public partial class QueryEvaluatorTests
 
         foreach (var expr in expressions)
         {
-            var result = await TranslateAsync(expr, ct: TestContext.Current.CancellationToken);
+            var result = await TranslateV2Async(expr, ct: TestContext.Current.CancellationToken);
             Assert.True(result.Success, $"Failed for '{expr}': {result.ErrorMessage}");
             Assert.NotNull(result.Sql);
         }
@@ -49,11 +49,11 @@ public partial class QueryEvaluatorTests
     public async Task Evaluate_SecondCall_IsNotSlowerByOrderOfMagnitude()
     {
         // Cold call - compiles the script.
-        var r1 = await TranslateAsync("db.Orders", ct: TestContext.Current.CancellationToken);
+        var r1 = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);
         Assert.True(r1.Success, r1.ErrorMessage);
 
         // Warm call - should hit cached ScriptState.
-        var r2 = await TranslateAsync("db.Users", ct: TestContext.Current.CancellationToken);
+        var r2 = await TranslateV2Async("db.Users", ct: TestContext.Current.CancellationToken);
         Assert.True(r2.Success, r2.ErrorMessage);
 
         // We only assert the warm call stays in a reasonable time band.
@@ -68,7 +68,7 @@ public partial class QueryEvaluatorTests
 
         foreach (var expr in expressions)
         {
-            var result = await TranslateAsync(expr, ct: TestContext.Current.CancellationToken);
+            var result = await TranslateV2Async(expr, ct: TestContext.Current.CancellationToken);
             Assert.True(result.Success, $"Failed for '{expr}': {result.ErrorMessage}");
             Assert.NotNull(result.Sql);
         }

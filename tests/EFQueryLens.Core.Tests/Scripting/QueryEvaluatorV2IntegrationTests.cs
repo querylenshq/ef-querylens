@@ -125,20 +125,18 @@ public class QueryEvaluatorV2IntegrationTests
     }
 
     [Fact]
-    public void DirectPayload_NoV2Extension_UsesLegacyPath()
+    public void DirectPayload_NoV2Extension_ReturnsBlockedDiagnostic()
     {
-        // Test backward compatibility: requests without v2 payloads use legacy path
+        // Hard-cut behavior: requests without v2 payloads are blocked.
         var request = new TranslationRequest
         {
             Expression = "db.Users.ToListAsync()",
             AssemblyPath = "/test.dll",
-            // No V2ExtractionPlan, no V2CapturePlan
         };
 
         var decision = V2RuntimeAnalyzer.Analyze(request);
 
-        // Should succeed (not block)
-        Assert.False(decision.ShouldUseV2Path); // No v2 payloads = not a v2 decision
-        // This is expected - legacy requests don't fail, they just don't use v2 path
+        Assert.False(decision.ShouldUseV2Path);
+        Assert.Equal("missing-v2-payload", decision.BlockReason);
     }
 }

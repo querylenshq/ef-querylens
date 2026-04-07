@@ -157,26 +157,15 @@ public sealed partial class QueryEvaluator
             compilationAssemblyList);
 
         // Compile -> emit -> load into user ALC -> invoke Run.
-        // Stubs are sourced from the v2 capture plan when available, otherwise from the legacy symbol graph.
+        // Stubs are sourced from the v2 capture plan.
         var workingExpression = request.Expression;
-        List<string> stubs;
-        if (v2Decision.ShouldUseV2Path && v2Decision.CapturePlan is not null)
-        {
-            stubs = StubSynthesizer.BuildV2Stubs(
-                v2Decision.CapturePlan,
-                request.Expression,
-                request.ContextVariableName);
-            LogDebug(
-                $"v2-stubs count={stubs.Count} " +
-                $"entries={string.Join(",", stubs.Select(s => s.Trim()))}");
-        }
-        else
-        {
-            LogDebug(
-                $"symbol-graph count={request.LocalSymbolGraph.Count} " +
-                $"entries={string.Join(",", request.LocalSymbolGraph.Select(s => $"{s.Name}:{s.TypeName}:{s.Kind}:{s.ReplayPolicy}"))}");
-            stubs = StubSynthesizer.BuildInitialStubs(request, dbContextType);
-        }
+        var stubs = StubSynthesizer.BuildV2Stubs(
+            v2Decision.CapturePlan!,
+            request.Expression,
+            request.ContextVariableName);
+        LogDebug(
+            $"v2-stubs count={stubs.Count} " +
+            $"entries={string.Join(",", stubs.Select(s => s.Trim()))}");
         LogDebug(
             $"stub-list count={stubs.Count} entries={string.Join(" || ", stubs)}");
         var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);

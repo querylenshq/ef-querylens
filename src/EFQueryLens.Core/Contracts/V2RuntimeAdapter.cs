@@ -49,10 +49,15 @@ public static class V2RuntimeAnalyzer
     /// </summary>
     public static V2RuntimeDecision Analyze(TranslationRequest request)
     {
-        // No v2 payloads - proceed with legacy path
+        // Hard cutover: requests must provide both extraction and capture plans.
         if (request.V2ExtractionPlan is null && request.V2CapturePlan is null)
         {
-            return new V2RuntimeDecision { ShouldUseV2Path = false };
+            return new V2RuntimeDecision
+            {
+                ShouldUseV2Path = false,
+                BlockReason = "missing-v2-payload",
+                BlockMessage = "V2 extraction and capture plans are required. Legacy symbol-graph fallback has been removed.",
+            };
         }
 
         // Partial v2 state - extraction without capture
@@ -103,9 +108,12 @@ public static class V2RuntimeAnalyzer
             };
         }
 
-        // No v2 payloads at all — fall through to legacy path (covered by null-null check above).
-        // This return is a defensive fallback; control flow should not reach here.
-        return new V2RuntimeDecision { ShouldUseV2Path = false };
+        return new V2RuntimeDecision
+        {
+            ShouldUseV2Path = false,
+            BlockReason = "invalid-v2-state",
+            BlockMessage = "V2 payload state is invalid for deterministic runtime execution.",
+        };
     }
 
     /// <summary>

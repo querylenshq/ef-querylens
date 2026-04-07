@@ -68,7 +68,7 @@ internal sealed class TranslationPrewarmService
             {
                 await Task.Delay(_debounceMs, token);
                 _debounceTokens.TryRemove(filePath, out _);
-                await WarmDocumentAsync(filePath, sourceText, CancellationToken.None);
+                await WarmDocumentAsync(filePath, sourceText, token);
             }
             catch (OperationCanceledException)
             {

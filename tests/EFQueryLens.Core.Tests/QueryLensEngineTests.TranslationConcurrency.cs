@@ -10,19 +10,9 @@ public partial class QueryLensEngineTests
         await using var engine = CreateEngine();
         var dll = GetSampleMySqlAppDll();
 
-        var r1 = await engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = dll,
-            Expression = "db.Orders",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var r1 = await engine.TranslateAsync(BuildV2Request("db.Orders", dll));
 
-        var r2 = await engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = dll,
-            Expression = "db.Products",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var r2 = await engine.TranslateAsync(BuildV2Request("db.Products", dll));
 
         Assert.True(r1.Success, r1.ErrorMessage);
         Assert.True(r2.Success, r2.ErrorMessage);
@@ -35,22 +25,12 @@ public partial class QueryLensEngineTests
     [Fact]
     public async Task TranslateAsync_CreateGate_IsPrunedAfterPoolWarmup()
     {
-        var first = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression = "db.Orders",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var first = await _engine.TranslateAsync(BuildV2Request("db.Orders"));
 
         Assert.True(first.Success, first.ErrorMessage);
         Assert.Equal(0, GetPrivateCollectionCount(_engine, "_createGates"));
 
-        var second = await _engine.TranslateAsync(new TranslationRequest
-        {
-            AssemblyPath = _dll,
-            Expression = "db.Products",
-            DbContextTypeName = DefaultMySqlDbContextType,
-        });
+        var second = await _engine.TranslateAsync(BuildV2Request("db.Products"));
 
         Assert.True(second.Success, second.ErrorMessage);
         Assert.Equal(0, GetPrivateCollectionCount(_engine, "_createGates"));
@@ -74,12 +54,8 @@ public partial class QueryLensEngineTests
                 .Select(async i =>
                 {
                     await startGate.Task;
-                    return await engine.TranslateAsync(new TranslationRequest
-                    {
-                        AssemblyPath = dll,
-                        Expression = $"db.Orders.Where(o => o.UserId == {i % 5 + 1})",
-                        DbContextTypeName = DefaultMySqlDbContextType,
-                    });
+                    return await engine.TranslateAsync(
+                        BuildV2Request($"db.Orders.Where(o => o.UserId == {i % 5 + 1})", dll));
                 })
                 .ToArray();
 
@@ -120,14 +96,10 @@ public partial class QueryLensEngineTests
                 .Select(async i =>
                 {
                     await startGate.Task.WaitAsync(timeoutCts.Token);
-                    return await engine.TranslateAsync(new TranslationRequest
-                    {
-                        AssemblyPath = dll,
-                        Expression = i % 2 == 0
-                            ? "db.Orders.Where(o => o.Total > 0)"
-                            : "db.Products.Where(p => p.Price > 0)",
-                        DbContextTypeName = DefaultMySqlDbContextType,
-                    }, timeoutCts.Token);
+                    var expression = i % 2 == 0
+                        ? "db.Orders.Where(o => o.Total > 0)"
+                        : "db.Products.Where(p => p.Price > 0)";
+                    return await engine.TranslateAsync(BuildV2Request(expression, dll), timeoutCts.Token);
                 })
                 .ToArray();
 
@@ -172,12 +144,8 @@ public partial class QueryLensEngineTests
                 .Select(async i =>
                 {
                     await startGate.Task;
-                    return await engine.TranslateAsync(new TranslationRequest
-                    {
-                        AssemblyPath = assemblyPath,
-                        Expression = expressions[i % expressions.Length],
-                        DbContextTypeName = DefaultMySqlDbContextType,
-                    });
+                    return await engine.TranslateAsync(
+                        BuildV2Request(expressions[i % expressions.Length], assemblyPath));
                 })
                 .ToArray();
 

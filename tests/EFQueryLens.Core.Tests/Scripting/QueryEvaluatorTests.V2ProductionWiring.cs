@@ -5,8 +5,10 @@ namespace EFQueryLens.Core.Tests.Scripting;
 public partial class QueryEvaluatorTests
 {
     [Fact]
-    public async Task EvaluateAsync_LegacyRequest_UnaffectedByV2Gate()
+    public async Task EvaluateAsync_MinimalV2Request_ReturnsSql()
     {
+        // Validates that a request with a minimal v2 capture plan (no captured symbols)
+        // executes correctly end-to-end via the v2 path.
         var result = await _evaluator.EvaluateAsync(
             _alcCtx,
             new TranslationRequest
@@ -19,9 +21,20 @@ public partial class QueryEvaluatorTests
                 UsingStaticTypes = [],
                 LocalSymbolGraph = [],
                 UseAsyncRunner = false,
-                // No v2 payloads: should transparently use legacy path.
-                V2ExtractionPlan = null,
-                V2CapturePlan = null,
+                V2ExtractionPlan = new V2QueryExtractionPlanSnapshot
+                {
+                    Expression = "db.Orders",
+                    ContextVariableName = "db",
+                    RootContextVariableName = "db",
+                    RootMemberName = "Orders",
+                    BoundaryKind = "Queryable",
+                    NeedsMaterialization = false,
+                },
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = "db.Orders",
+                    IsComplete = true,
+                },
             },
             TestContext.Current.CancellationToken);
 

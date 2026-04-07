@@ -23,6 +23,20 @@ public class DaemonEndpointsTests
         {
             Expression = "db.Orders",
             AssemblyPath = "C:/app/MyApp.dll",
+            LocalSymbolGraph = [],
+            V2ExtractionPlan = new V2QueryExtractionPlanSnapshot
+            {
+                Expression = "db.Orders",
+                ContextVariableName = "db",
+                RootContextVariableName = "db",
+                BoundaryKind = "Queryable",
+                NeedsMaterialization = false,
+            },
+            V2CapturePlan = new V2CapturePlanSnapshot
+            {
+                ExecutableExpression = "db.Orders",
+                IsComplete = true,
+            },
             ExtractionOrigin = new ExtractionOriginSnapshot
             {
                 FilePath = @"c:\repo\source.cs",
@@ -79,6 +93,20 @@ public class DaemonEndpointsTests
         {
             Expression = "db.Orders",
             AssemblyPath = "C:/app/MyApp.dll",
+            LocalSymbolGraph = [],
+            V2ExtractionPlan = new V2QueryExtractionPlanSnapshot
+            {
+                Expression = "db.Orders",
+                ContextVariableName = "db",
+                RootContextVariableName = "db",
+                BoundaryKind = "Queryable",
+                NeedsMaterialization = false,
+            },
+            V2CapturePlan = new V2CapturePlanSnapshot
+            {
+                ExecutableExpression = "db.Orders",
+                IsComplete = true,
+            },
             ExtractionOrigin = new ExtractionOriginSnapshot
             {
                 FilePath = @"c:\repo\source.cs",

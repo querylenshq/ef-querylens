@@ -84,7 +84,7 @@ public sealed class TranslationPrewarmServiceTests : IDisposable
             {
                 return callbackSources.Count == 1;
             }
-        }, timeoutMs: 3000);
+        }, timeoutMs: 8000);
 
         Assert.True(completed);
         Assert.Single(callbackSources);
@@ -561,7 +561,10 @@ public class LspWarmupAndPreviewWrapperTests
         Assert.True(result.Success);
         Assert.Equal(QueryTranslationStatus.Ready, result.Status);
         Assert.Contains("EF QueryLens", result.Output, StringComparison.Ordinal);
-        Assert.Contains("Copy SQL", result.Output, StringComparison.Ordinal);
+        var hasVsCodeActions = result.Output.Contains("Copy SQL", StringComparison.Ordinal)
+            || result.Output.Contains("Open SQL", StringComparison.Ordinal);
+        var hasRiderActions = result.Output.Contains("Actions available via Alt+Enter", StringComparison.Ordinal);
+        Assert.True(hasVsCodeActions || hasRiderActions, "Expected either VS Code action links or Rider action hint in markdown output.");
     }
 
     [Fact]

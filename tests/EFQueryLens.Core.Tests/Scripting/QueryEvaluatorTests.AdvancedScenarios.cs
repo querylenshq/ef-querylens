@@ -21,7 +21,7 @@ public partial class QueryEvaluatorTests
             "        g.Sum(o => o.Total)," +
             "        g.Average(o => o.Total)))";
 
-        var result = await TranslateAsync(expression, ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async(expression, ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -31,7 +31,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_RootWrapperContextHop_WithoutLspRewrite_FailsInStrictMode()
     {
-        var result = await TranslateAsync("services.Context.Orders.Select(o => o.Id)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("services.Context.Orders.Select(o => o.Id)", ct: TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         Assert.Contains("CS0103", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -41,7 +41,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_ChecklistSelectManyVariant_ReturnsSql()
     {
-        var result = await TranslateStrictAsync("db.ApplicationChecklists.AsNoTracking()" +
+        var result = await TranslateStrictV2Async("db.ApplicationChecklists.AsNoTracking()" +
             ".Where(w => !w.IsDeleted && w.IsLatest)" +
             ".Where(w => w.ApplicationId == applicationId)" +
             ".SelectMany(x => x.ChecklistChangeTypes)" +
@@ -62,7 +62,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_ChecklistSelectManyVariant_DoesNotSurfaceBufferedReaderFieldCountFailure()
     {
-        var result = await TranslateStrictAsync("db.ApplicationChecklists.AsNoTracking()" +
+        var result = await TranslateStrictV2Async("db.ApplicationChecklists.AsNoTracking()" +
             ".Where(w => !w.IsDeleted && w.IsLatest)" +
             ".Where(w => w.ApplicationId == applicationId)" +
             ".SelectMany(x => x.ChecklistChangeTypes)" +
@@ -81,7 +81,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_ExpressionSelectorNestedToList_NoPartialRiskWarning()
     {
-        var result = await TranslateStrictAsync("db.ApplicationChecklists.AsNoTracking()" +
+        var result = await TranslateStrictV2Async("db.ApplicationChecklists.AsNoTracking()" +
             ".Where(w => !w.IsDeleted && w.IsLatest)" +
             ".Where(w => w.ApplicationId == applicationId)" +
             ".Select(app => new {" +
@@ -104,7 +104,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_AsyncRunnerMode_SimpleDbSet_ReturnsSql()
     {
-        var result = await TranslateAsync("db.Orders", useAsyncRunner: true, ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders", useAsyncRunner: true, ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -114,7 +114,14 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_AsyncRunnerMode_AsyncTerminal_ReturnsSql()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId == 5).ToListAsync(ct)", useAsyncRunner: true, ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async(
+            "db.Orders.Where(o => o.UserId == 5).ToListAsync(ct)",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ct"] = "System.Threading.CancellationToken",
+            },
+            useAsyncRunner: true,
+            ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -124,7 +131,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_FindCall_RewritesPkTypeAndReturnsSql()
     {
-        var result = await TranslateAsync("db.Orders.Find(someId)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders.Find(someId)", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -133,7 +140,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_FindAsyncCall_RewritesPkTypeAndReturnsSql()
     {
-        var result = await TranslateAsync("db.Orders.FindAsync(someId)", ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders.FindAsync(someId)", ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -142,7 +149,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_WithAliasUsingContext_CanResolveAliasedTypeMember()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId < IntAlias.MaxValue)", usingAliases: new Dictionary<string, string>(StringComparer.Ordinal)
+        var result = await TranslateV2Async("db.Orders.Where(o => o.UserId < IntAlias.MaxValue)", usingAliases: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["IntAlias"] = "System.Int32"
             }, ct: TestContext.Current.CancellationToken);
@@ -155,7 +162,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_WithStaticUsingContext_CanResolveStaticMethodCall()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId < Abs(-5))", usingStaticTypes: ["System.Math"], ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders.Where(o => o.UserId < Abs(-5))", usingStaticTypes: ["System.Math"], ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -203,7 +210,7 @@ public sealed class C
     [Fact]
     public async Task Evaluate_WithUnresolvableAdditionalImport_DoesNotFailCompilation()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId > 0)", additionalImports: ["Microsoft.AspNetCore.Http"], ct: TestContext.Current.CancellationToken);
+        var result = await TranslateV2Async("db.Orders.Where(o => o.UserId > 0)", additionalImports: ["Microsoft.AspNetCore.Http"], ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -213,7 +220,7 @@ public sealed class C
     [Fact]
     public async Task Evaluate_MissingAliasIdentifier_IsNotSynthesizedAsObjectVariable()
     {
-        var result = await TranslateAsync("db.Orders.Where(o => o.UserId == Enums.Approved)", usingAliases: new Dictionary<string, string>(StringComparer.Ordinal)
+        var result = await TranslateV2Async("db.Orders.Where(o => o.UserId == Enums.Approved)", usingAliases: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["Enums"] = "SampleApp.Does.Not.Exist"
             }, ct: TestContext.Current.CancellationToken);

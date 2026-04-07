@@ -8,7 +8,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_InvalidExpression_ReturnsFailure()
     {
-        var result = await TranslateAsync("this is not valid C#");
+        var result = await TranslateV2Async("this is not valid C#");
 
         Assert.False(result.Success);
         Assert.NotNull(result.ErrorMessage);
@@ -24,7 +24,7 @@ public partial class QueryEvaluatorTests
         // A literal integer produces no SQL - capture records zero commands, so the
         // engine returns a hard failure. The old "did not return an IQueryable" guard
         // was removed; the new message reflects that no SQL was captured at all.
-        var result = await TranslateAsync("42");
+        var result = await TranslateV2Async("42");
 
         Assert.False(result.Success);
         Assert.NotNull(result.ErrorMessage);
@@ -34,7 +34,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_UnknownDbContextName_ReturnsFailure()
     {
-        var result = await TranslateAsync("db.Orders", dbContextTypeName: "NoSuchContext");
+        var result = await TranslateV2Async("db.Orders", dbContextTypeName: "NoSuchContext");
 
         Assert.False(result.Success);
         Assert.NotNull(result.ErrorMessage);
@@ -44,7 +44,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_TopLevelServiceMethodInvocation_ReturnsClearUnsupportedMessage()
     {
-        var result = await TranslateAsync("service.GetWorkflowByTypeAsync(workflowType, expression, ct)");
+        var result = await TranslateV2Async("service.GetWorkflowByTypeAsync(workflowType, expression, ct)");
 
         Assert.False(result.Success);
         Assert.NotNull(result.ErrorMessage);
@@ -76,7 +76,7 @@ public partial class QueryEvaluatorTests
             "    )" +
             "    .ToListAsync(ct)";
 
-        var result = await TranslateStrictAsync(
+        var result = await TranslateStrictV2Async(
             expression,
             localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -116,7 +116,7 @@ public partial class QueryEvaluatorTests
             ")" +
             ".ToListAsync(ct)";
 
-        var result = await TranslateStrictAsync(
+        var result = await TranslateStrictV2Async(
             expression,
             localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -150,7 +150,7 @@ public partial class QueryEvaluatorTests
             ".ToListAsync(ct)";
 
         var normalized = LspSyntaxHelper.PreNormalizeExtractedExpression(expression);
-        var result = await TranslateStrictAsync(
+        var result = await TranslateStrictV2Async(
             normalized,
             localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
             {

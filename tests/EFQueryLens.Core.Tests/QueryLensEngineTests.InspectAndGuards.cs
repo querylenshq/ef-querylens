@@ -86,11 +86,7 @@ public partial class QueryLensEngineTests
         await engine.DisposeAsync();
 
         await Assert.ThrowsAsync<ObjectDisposedException>(() =>
-            engine.TranslateAsync(new TranslationRequest
-            {
-                AssemblyPath = _dll,
-                Expression = "db.Orders",
-            }));
+            engine.TranslateAsync(BuildV2Request("db.Orders")));
     }
 
     [Fact]
@@ -146,12 +142,7 @@ public partial class QueryLensEngineTests
         try
         {
             await using var engine = CreateEngine();
-            var result = await engine.TranslateAsync(new TranslationRequest
-            {
-                AssemblyPath = _dll,
-                Expression = "db.Users",
-                DbContextTypeName = DefaultMySqlDbContextType,
-            });
+            var result = await engine.TranslateAsync(BuildV2Request("db.Users"));
 
             Assert.True(result.Success, result.ErrorMessage);
         }

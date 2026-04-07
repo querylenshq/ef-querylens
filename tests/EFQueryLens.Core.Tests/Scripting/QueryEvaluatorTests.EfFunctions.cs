@@ -14,7 +14,7 @@ public partial class QueryEvaluatorTests
             "    .Where(c => c.IsNotDeleted)" +
             "    .Where(c => EF.Functions.Like(c.Name, pattern))";
 
-        var result = await TranslateStrictAsync(
+        var result = await TranslateStrictV2Async(
             expression,
             localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -37,7 +37,7 @@ public partial class QueryEvaluatorTests
             "    .Where(c => c.IsNotDeleted)" +
             "    .Where(c => EF.Functions.Like(c.Name, pattern, escape))";
 
-        var result = await TranslateStrictAsync(
+        var result = await TranslateStrictV2Async(
             expression,
             localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
             {

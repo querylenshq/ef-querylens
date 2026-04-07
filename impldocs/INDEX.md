@@ -21,4 +21,6 @@
 | v2-parity-extraction-k4 | in-progress | Accuracy-first extraction/runtime implementation in progress: core placeholder catalog and two-item deterministic collection seeding are now wired with focused tests. |
 | rider-parity-stability-h7 | in-progress | Stabilizes Rider query preview parity with VS/VS Code via query-triggered extraction semantics plus Rider preview-only hover and full Alt+Enter action menu. |
 | factory-root-substitution-j4 | completed | Adds safe root-receiver substitution for factory-created DbContext query chains so QueryLens runtime context executes supported factory patterns without placeholder-null failures. |
-| query-extraction-v2-cutover-r4 | planned | Slice 4 performs final v2 cutover, removes legacy extraction/runtime paths, and validates end-to-end behavior. |
+| query-extraction-v2-cutover-r4 | superseded → v2-cutover-inventory-k8 | Original broad Slice 4 cutover plan was split into smaller cleanup slices starting with inventory and guardrails. |
+| v2-cutover-inventory-k8 | completed | Inventories remaining v1/legacy extraction and runtime paths, adds explicit unsupported-shape guardrails, and defines deletion slices for v2 cutover cleanup. |
+| v2-cutover-core-runtime-s5 | in-progress | Removes legacy BuildInitialStubs dual-path dispatch from QueryEvaluator; migrates all QueryEvaluatorTests to v2 payloads; deletes StubSynthesizer.cs legacy file; removes LocalSymbolGraph from TranslationRequest. Blocking dependency for LSP cutover Slice 2. |

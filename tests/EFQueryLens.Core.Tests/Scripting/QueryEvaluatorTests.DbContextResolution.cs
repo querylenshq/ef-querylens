@@ -5,7 +5,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_ExplicitDbContextName_Resolves()
     {
-        var result = await TranslateAsync("db.Users", dbContextTypeName: "MySqlAppDbContext");
+        var result = await TranslateV2Async("db.Users", dbContextTypeName: "MySqlAppDbContext");
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -15,7 +15,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_FullyQualifiedDbContextName_Resolves()
     {
-        var result = await TranslateAsync("db.Users", dbContextTypeName: "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext");
+        var result = await TranslateV2Async("db.Users", dbContextTypeName: "SampleMySqlApp.Infrastructure.Persistence.MySqlAppDbContext");
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
@@ -24,7 +24,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_InterfaceDbContextName_Resolves()
     {
-        var result = await TranslateAsync(
+        var result = await TranslateV2Async(
             "db.Users",
             dbContextTypeName: "SampleMySqlApp.Application.Abstractions.IMySqlAppDbContext");
 
@@ -36,7 +36,7 @@ public partial class QueryEvaluatorTests
     [Fact]
     public async Task Evaluate_SecondarySampleDbContext_Resolves()
     {
-        var result = await TranslateAsync("db.CustomerDirectory", dbContextTypeName: "MySqlReportingDbContext");
+        var result = await TranslateV2Async("db.CustomerDirectory", dbContextTypeName: "MySqlReportingDbContext");
 
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);

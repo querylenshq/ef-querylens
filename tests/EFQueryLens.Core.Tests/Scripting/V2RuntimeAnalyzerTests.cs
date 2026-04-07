@@ -10,7 +10,7 @@ namespace EFQueryLens.Core.Tests.Scripting;
 public class V2RuntimeAnalyzerTests
 {
     [Fact]
-    public void Analyze_NoV2Payloads_ReturnsLegacyPath()
+    public void Analyze_NoV2Payloads_ReturnsBlockedWithReason()
     {
         var request = new TranslationRequest
         {
@@ -21,7 +21,8 @@ public class V2RuntimeAnalyzerTests
         var decision = V2RuntimeAnalyzer.Analyze(request);
 
         Assert.False(decision.ShouldUseV2Path);
-        Assert.Null(decision.BlockReason);
+        Assert.Equal("missing-v2-payload", decision.BlockReason);
+        Assert.NotNull(decision.BlockMessage);
     }
 
     [Fact]
