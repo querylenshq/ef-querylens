@@ -137,6 +137,6 @@ public class QueryEvaluatorV2IntegrationTests
         var decision = V2RuntimeAnalyzer.Analyze(request);
 
         Assert.False(decision.ShouldUseV2Path);
-        Assert.Equal("missing-v2-payload", decision.BlockReason);
+        Assert.Equal("no-v2-payloads", decision.BlockReason);
     }
 }

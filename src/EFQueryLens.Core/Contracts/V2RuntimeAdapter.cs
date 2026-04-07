@@ -55,7 +55,7 @@ public static class V2RuntimeAnalyzer
             return new V2RuntimeDecision
             {
                 ShouldUseV2Path = false,
-                BlockReason = "missing-v2-payload",
+                BlockReason = "no-v2-payloads",
                 BlockMessage = "V2 extraction and capture plans are required. Legacy symbol-graph fallback has been removed.",
             };
         }

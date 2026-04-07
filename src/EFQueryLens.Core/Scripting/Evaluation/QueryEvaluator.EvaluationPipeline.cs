@@ -159,6 +159,9 @@ public sealed partial class QueryEvaluator
         // Compile -> emit -> load into user ALC -> invoke Run.
         // Stubs are sourced from the v2 capture plan.
         var workingExpression = request.Expression;
+        Debug.Assert(
+            v2Decision.ShouldUseV2Path && v2Decision.CapturePlan is not null,
+            "V2 runtime decision must provide a capture plan before stub synthesis.");
         var stubs = StubSynthesizer.BuildV2Stubs(
             v2Decision.CapturePlan!,
             request.Expression,
