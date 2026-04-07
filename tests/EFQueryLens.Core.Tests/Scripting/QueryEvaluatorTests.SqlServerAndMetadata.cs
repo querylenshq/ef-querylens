@@ -178,6 +178,80 @@ public partial class QueryEvaluatorTests
     }
 
     [Fact]
+    public async Task Evaluate_SqlServerSample_EntityNamedType_DoesNotEmitCs0104Ambiguity()
+    {
+        using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+        var evaluator = new QueryEvaluator();
+        const string expression = "db.Types.Select(t => t.Name)";
+
+        var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
+            {
+                AssemblyPath = sqlAlcCtx.AssemblyPath,
+                Expression = expression,
+                DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(expression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = expression,
+                    IsComplete = true,
+                },
+            }, TestContext.Current.CancellationToken);
+
+        if (result.Success)
+        {
+            Assert.NotNull(result.Sql);
+            return;
+        }
+
+        Assert.NotNull(result.ErrorMessage);
+        Assert.DoesNotContain("CS0104", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ambiguous reference", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+        var isExpectedFailureMode =
+            result.ErrorMessage.Contains("Method not found", StringComparison.OrdinalIgnoreCase)
+            || result.ErrorMessage.Contains("SetDbConnection failed", StringComparison.OrdinalIgnoreCase);
+        Assert.True(isExpectedFailureMode, $"Unexpected SQL Server sample failure reason: {result.ErrorMessage}");
+    }
+
+    [Fact]
+    public async Task Evaluate_SqlServerSample_NamedConnectionString_DoesNotReportNameNotFound()
+    {
+        using var sqlAlcCtx = new ProjectAssemblyContext(GetSampleSqlServerAppDll());
+        var evaluator = new QueryEvaluator();
+        const string expression = "db.Customers.Select(c => c.Id)";
+
+        var result = await evaluator.EvaluateAsync(sqlAlcCtx, new TranslationRequest
+            {
+                AssemblyPath = sqlAlcCtx.AssemblyPath,
+                Expression = expression,
+                DbContextTypeName = "SampleSqlServerApp.Infrastructure.Persistence.SqlServerAppDbContext",
+                LocalSymbolGraph = [],
+                V2ExtractionPlan = BuildMinimalExtractionPlan(expression),
+                V2CapturePlan = new V2CapturePlanSnapshot
+                {
+                    ExecutableExpression = expression,
+                    IsComplete = true,
+                },
+            }, TestContext.Current.CancellationToken);
+
+        if (result.Success)
+        {
+            Assert.NotNull(result.Sql);
+            return;
+        }
+
+        Assert.NotNull(result.ErrorMessage);
+        Assert.DoesNotContain("named connection string was used", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("name 'MainConnection' was not found", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+        var isExpectedFailureMode =
+            result.ErrorMessage.Contains("Method not found", StringComparison.OrdinalIgnoreCase)
+            || result.ErrorMessage.Contains("SetDbConnection failed", StringComparison.OrdinalIgnoreCase);
+        Assert.True(isExpectedFailureMode, $"Unexpected SQL Server sample failure reason: {result.ErrorMessage}");
+    }
+
+    [Fact]
     public async Task Evaluate_MetaData_HasCorrectProviderName()
     {
         var result = await TranslateV2Async("db.Orders", ct: TestContext.Current.CancellationToken);

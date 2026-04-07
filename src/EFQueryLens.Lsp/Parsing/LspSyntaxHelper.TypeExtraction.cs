@@ -493,7 +493,7 @@ public static partial class LspSyntaxHelper
         if (type is null || type.TypeKind == TypeKind.Error)
             return null;
 
-        return type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        return ToDeterministicTypeName(type);
     }
 
     private static string ReplaceOpenGenericTypeParameters(string typeName, IReadOnlyCollection<string> openTypeParams)

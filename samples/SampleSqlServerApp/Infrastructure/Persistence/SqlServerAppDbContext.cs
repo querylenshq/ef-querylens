@@ -1,6 +1,5 @@
 using EntityFrameworkCore.Projectables;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using SampleSqlServerApp.Application.Abstractions;
 using SampleSqlServerApp.Domain.Entities;
 using SampleSqlServerApp.Domain.Enums;
@@ -28,38 +27,9 @@ public class SqlServerAppDbContext : DbContext, ISqlServerAppDbContext
 
         optionsBuilder
             .UseSqlServer(
-                ResolveMainConnectionString(),
+                "Name=MainConnection",
                 sqlServer => sqlServer.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
             .UseProjectables();
-    }
-
-    private static string ResolveMainConnectionString()
-    {
-        var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";
-
-        try
-        {
-            var configuration = new ConfigurationBuilder()
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile("appsettings.json", optional: true)
-                .AddJsonFile($"appsettings.{environment}.json", optional: true)
-                .AddEnvironmentVariables()
-                .Build();
-
-            var resolved = configuration.GetConnectionString("MainConnection")
-                ?? configuration["ConnectionStrings:MainConnection"];
-
-            if (!string.IsNullOrWhiteSpace(resolved))
-            {
-                return resolved;
-            }
-        }
-        catch
-        {
-            // Fall through to deterministic offline-safe connection.
-        }
-
-        return "Server=ef_querylens_offline;Database=ef_querylens_offline;User Id=ef_querylens_offline;Password=ef_querylens_offline;TrustServerCertificate=True";
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
