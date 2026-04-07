@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.17] - 2026-04-07
+
 ### Fixed
 - Visual Studio: LINQ snippet formatting now resolves the external formatter correctly regardless of packaging layout by probing both `server/formatter` and `server` roots for `EFQueryLens.Formatter`.
 - LSP build output now stages formatter runtime payload under `bin/<Configuration>/net10.0/formatter`, preventing local/dev runs from silently falling back to unformatted LINQ when not running from publish output.
