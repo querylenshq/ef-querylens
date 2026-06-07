@@ -5,7 +5,8 @@ using SampleMySqlApp.Domain.Enums;
 
 namespace SampleMySqlApp.Infrastructure.Persistence;
 
-public sealed class MySqlAppDbContext : DbContext, IMySqlAppDbContext
+public sealed class MySqlAppDbContext(DbContextOptions<MySqlAppDbContext> options)
+    : DbContext(options), IMySqlAppDbContext
 {
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Order> Orders => Set<Order>();
@@ -24,11 +25,6 @@ public sealed class MySqlAppDbContext : DbContext, IMySqlAppDbContext
     IQueryable<Category> IMySqlAppDbContext.Categories => Categories.AsNoTracking();
     IQueryable<ApplicationChecklist> IMySqlAppDbContext.ApplicationChecklists => ApplicationChecklists.AsNoTracking();
     IQueryable<ApplicationChecklistChangeType> IMySqlAppDbContext.ApplicationChecklistChangeTypes => ApplicationChecklistChangeTypes.AsNoTracking();
-
-    public MySqlAppDbContext(DbContextOptions<MySqlAppDbContext> options)
-        : base(options)
-    {
-    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

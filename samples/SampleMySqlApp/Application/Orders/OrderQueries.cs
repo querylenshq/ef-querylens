@@ -2,21 +2,14 @@ using SampleMySqlApp.Application.Abstractions;
 
 namespace SampleMySqlApp.Application.Orders;
 
-public sealed class OrderQueries
+public sealed class OrderQueries(IMySqlAppDbContext db)
 {
-    private readonly IMySqlAppDbContext _db;
-
-    public OrderQueries(IMySqlAppDbContext db)
-    {
-        _db = db;
-    }
-
     public IQueryable<OrderSummaryDto> BuildRecentOrdersQuery(DateTime utcNow, int lookbackDays = 30)
     {
         var safeLookbackDays = Math.Clamp(lookbackDays, 1, 365);
         var fromUtc = utcNow.Date.AddDays(-safeLookbackDays);
 
-        return _db.Orders
+        return db.Orders
             .Where(o => o.IsNotDeleted)
             .Where(o => o.CreatedUtc >= fromUtc)
             .OrderByDescending(o => o.CreatedUtc)

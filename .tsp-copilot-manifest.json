@@ -1,0 +1,46 @@
+{
+  "version": "1.0.4",
+  "presets": [
+    "base",
+    "csharp"
+  ],
+  "implicitPresets": [
+    "_backend"
+  ],
+  "managedFiles": [
+    ".github/agents/tsp-code-reviewer.agent.md",
+    ".github/agents/tsp-doc-updater.agent.md",
+    ".github/agents/tsp-implementer.agent.md",
+    ".github/agents/tsp-linter.agent.md",
+    ".github/agents/tsp-planner.agent.md",
+    ".github/agents/tsp-red-team.agent.md",
+    ".github/agents/tsp-reviewer.agent.md",
+    ".github/agents/tsp-unit-tester.agent.md",
+    ".github/copilot-instructions.md",
+    ".github/flows/backend.flow.md",
+    ".github/hooks/tsp-insights-sync.cjs",
+    ".github/hooks/tsp-insights-sync.json",
+    ".github/hooks/tsp-log-event.cjs",
+    ".github/hooks/tsp-telemetry.json",
+    ".github/instructions/csharp-testing.instructions.md",
+    ".github/instructions/csharp.instructions.md",
+    ".github/instructions/markdown-docs.instructions.md",
+    ".github/prompts/tsp-implement.prompt.md",
+    ".github/prompts/tsp-insights.prompt.md",
+    ".github/prompts/tsp-new-feature.prompt.md",
+    ".github/prompts/tsp-review.prompt.md",
+    ".github/scripts/tsp-code-index.cjs",
+    ".github/scripts/tsp-repo-helpers.cjs",
+    ".github/scripts/tsp-review-packet.cjs",
+    ".github/scripts/tsp-trivy-summary.cjs",
+    ".github/skills/tsp-csharp-xunit/SKILL.md",
+    ".github/skills/tsp-csharp/references/_contract.md",
+    ".github/skills/tsp-csharp/references/async.md",
+    ".github/skills/tsp-csharp/references/ef-core.md",
+    ".github/skills/tsp-csharp/references/logging.md",
+    ".github/skills/tsp-csharp/references/perf.md",
+    ".github/skills/tsp-csharp/references/security.md",
+    ".github/skills/tsp-csharp/SKILL.md",
+    ".sonarsteps"
+  ]
+}

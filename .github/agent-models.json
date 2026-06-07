@@ -1,0 +1,11 @@
+{
+  "agents": {
+    "tsp-code-reviewer": "Claude Sonnet 4.5 (copilot)",
+    "tsp-red-team": "Claude Sonnet 4.5 (copilot)",
+    "tsp-doc-updater": "Claude Sonnet 4.5 (copilot)",
+    "tsp-linter": "Claude Sonnet 4.5 (copilot)",
+    "tsp-unit-tester": "Claude Sonnet 4.5 (copilot)",
+    "tsp-frontend-designer": "Claude Sonnet 4.5 (copilot)",
+    "tsp-design-reviewer": "Claude Sonnet 4.5 (copilot)"
+  }
+}

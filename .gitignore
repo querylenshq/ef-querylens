@@ -100,3 +100,6 @@ test.cs
 QueryLens.csproj
 
 src/Plugins/ef-querylens-rider/server/
+.tsp-copilot/
+.tsp-worktrees/
+.env.copilot

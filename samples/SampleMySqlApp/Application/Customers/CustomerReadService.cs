@@ -12,21 +12,14 @@ using SampleMySqlApp.Domain.Enums;
 
 namespace SampleMySqlApp.Application.Customers;
 
-public sealed class CustomerReadService
+public sealed class CustomerReadService(IMySqlAppDbContext dbContext)
 {
-    private readonly IMySqlAppDbContext _dbContext;
-
-    public CustomerReadService(IMySqlAppDbContext dbContext)
-    {
-        _dbContext = dbContext;
-    }
-
     public async Task<TResult?> GetCustomerByIdAsync<TResult>(
         Guid customerId,
         Expression<Func<Customer, TResult>> expression,
         CancellationToken ct)
     {
-        return await _dbContext
+        return await dbContext
             .Customers.Include(c => c.Orders) // Include orders for potential use in the expression
             .Where(c => c.IsNotDeleted)
             .Where(c => c.CustomerId == customerId)
@@ -38,7 +31,7 @@ public sealed class CustomerReadService
         Guid customerId,
         Expression<Func<Customer, TResult>> expression)
     {
-        return _dbContext
+        return dbContext
             .Customers
             .Where(c => c.IsNotDeleted)
             .Where(c => c.CustomerId == customerId)
@@ -55,11 +48,11 @@ public sealed class CustomerReadService
 
 
         _ = page > 1 ?
-            (await _dbContext.Customers.FirstAsync())
-            : (await  _dbContext.Customers.Where(w => w.IsActive).FirstAsync());
+            (await dbContext.Customers.FirstAsync())
+            : (await  dbContext.Customers.Where(w => w.IsActive).FirstAsync());
 
 
-    var query = _dbContext.Customers
+    var query = dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .AsQueryable();
 
@@ -106,7 +99,7 @@ public sealed class CustomerReadService
         var page = Math.Max(request.Page, 1);
         var pageSize = Math.Clamp(request.PageSize, 1, 200);
 
-        var query = _dbContext.Customers
+        var query = dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .AsQueryable();
 
@@ -151,7 +144,7 @@ public sealed class CustomerReadService
         Expression<Func<Order, TResult>> selectExpression,
         CancellationToken ct)
     {
-        return await _dbContext
+        return await dbContext
             .Orders
             .Where(o => o.Customer.CustomerId == customerId)
             .Where(o => o.IsNotDeleted)
@@ -165,7 +158,7 @@ public sealed class CustomerReadService
         Expression<Func<Order, bool>> whereExpression,
         Expression<Func<Order, TResult>> selectExpression)
     {
-        return _dbContext
+        return dbContext
             .Orders
             .Where(o => o.Customer.CustomerId == customerId)
             .Where(o => o.IsNotDeleted)
@@ -179,7 +172,7 @@ public sealed class CustomerReadService
         CancellationToken ct)
     {
 
-        var customers = await _dbContext.Customers
+        var customers = await dbContext.Customers
         .Where(c => c.IsNotDeleted)
         .Include(c => c.Orders.Where(o => o.IsNotDeleted && o.Total >= 100))
         .ToListAsync(ct);
@@ -189,7 +182,7 @@ public sealed class CustomerReadService
         var page = Math.Max(request.Page, 1);
         var pageSize = Math.Clamp(request.PageSize, 1, 200);
 
-        var baseQuery = _dbContext.Orders.Where(o => o.IsNotDeleted);
+        var baseQuery = dbContext.Orders.Where(o => o.IsNotDeleted);
 
         if (request.CustomerId is not null)
         {
@@ -240,7 +233,7 @@ public sealed class CustomerReadService
         var page = Math.Max(request.Page, 1);
         var pageSize = Math.Clamp(request.PageSize, 1, 200);
 
-        var query = _dbContext.Orders.Where(o => o.IsNotDeleted);
+        var query = dbContext.Orders.Where(o => o.IsNotDeleted);
 
         if (request.CustomerId is not null)
         {
@@ -294,13 +287,13 @@ public sealed class CustomerReadService
         CancellationToken ct)
     {
         // Recent orders from the last 7 days
-        var recentOrders = _dbContext.Orders
+        var recentOrders = dbContext.Orders
             .Where(o => o.IsNotDeleted && o.Customer.CustomerId == customerId)
             .Where(o => o.CreatedUtc >= utcNow.AddDays(-7))
             .Select(o => new OrderSummaryDto(o.Id, o.Customer.Name, o.Total, o.CreatedUtc));
 
         // High-value orders regardless of age
-        var highValueOrders = _dbContext.Orders
+        var highValueOrders = dbContext.Orders
             .Where(o => o.IsNotDeleted && o.Customer.CustomerId == customerId)
             .Where(o => o.Total >= 200)
             .Select(o => new OrderSummaryDto(o.Id, o.Customer.Name, o.Total, o.CreatedUtc));
@@ -351,11 +344,11 @@ public sealed class CustomerReadService
 
         var likeSearch = SearchCustomersByNamePattern("john");
 
-        var recentOrders = _dbContext.Orders
+        var recentOrders = dbContext.Orders
             .Where(o => o.IsNotDeleted && o.Customer.CustomerId == customerId)
             .Where(o => o.CreatedUtc >= utcNow.Date.AddDays(-7))
             .Select(o => new OrderSummaryDto(o.Id, o.Customer.Name, o.Total, o.CreatedUtc));
-        var highValueOrders = _dbContext.Orders
+        var highValueOrders = dbContext.Orders
             .Where(o => o.IsNotDeleted && o.Customer.CustomerId == customerId)
             .Where(o => o.Total >= 200)
             .Select(o => new OrderSummaryDto(o.Id, o.Customer.Name, o.Total, o.CreatedUtc));
@@ -363,13 +356,13 @@ public sealed class CustomerReadService
 
         var revenue = GetRevenueByCustomerQuery(utcNow.Date.AddDays(-30));
         var activeHighValueCustomers = GetCustomersWithRecentOrderQuery(utcNow.Date.AddDays(-14), 200);
-        var customersWithRecentOrdersSplit = _dbContext.Customers
+        var customersWithRecentOrdersSplit = dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .Include(c => c.Orders.Where(o => o.IsNotDeleted && o.CreatedUtc >= utcNow.Date.AddDays(-30)))
             .OrderByDescending(c => c.CreatedUtc)
             .Take(10);
 
-        var customersWithHighValueOrdersSplit = _dbContext.Customers
+        var customersWithHighValueOrdersSplit = dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .Include(c => c.Orders.Where(o => o.IsNotDeleted && o.Total >= 150))
             .OrderBy(c => c.Id)
@@ -398,14 +391,14 @@ public sealed class CustomerReadService
     public IQueryable<Customer> SearchCustomersByNamePattern(string searchTerm)
     {
         var pattern = $"%{searchTerm}%";
-        return _dbContext.Customers
+        return dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .Where(c => EF.Functions.Like(c.Name, pattern));
     }
 
     public IQueryable<CustomerRevenueDto> GetRevenueByCustomerQuery(DateTime fromUtc)
     {
-        return _dbContext.Orders
+        return dbContext.Orders
             .Where(o => o.IsNotDeleted && o.CreatedUtc >= fromUtc)
             .GroupBy(o => new { o.Customer.CustomerId, o.Customer.Name })
             .Select(g => new CustomerRevenueDto(
@@ -418,7 +411,7 @@ public sealed class CustomerReadService
 
     public IQueryable<CustomerHealthDto> GetCustomersWithRecentOrderQuery(DateTime fromUtc, decimal minTotal)
     {
-        return _dbContext.Customers
+        return dbContext.Customers
             .Where(c => c.IsNotDeleted)
             .Where(c => c.Orders.Any(o => o.IsNotDeleted && o.CreatedUtc >= fromUtc && o.Total >= minTotal))
             .Select(c => new CustomerHealthDto(

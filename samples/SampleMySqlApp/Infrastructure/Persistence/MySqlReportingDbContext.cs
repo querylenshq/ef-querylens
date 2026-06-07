@@ -3,14 +3,9 @@ using SampleMySqlApp.Domain.Entities;
 
 namespace SampleMySqlApp.Infrastructure.Persistence;
 
-public sealed class MySqlReportingDbContext : DbContext
+public sealed class MySqlReportingDbContext(DbContextOptions<MySqlReportingDbContext> options) : DbContext(options)
 {
     public DbSet<Customer> CustomerDirectory => Set<Customer>();
-
-    public MySqlReportingDbContext(DbContextOptions<MySqlReportingDbContext> options)
-        : base(options)
-    {
-    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
