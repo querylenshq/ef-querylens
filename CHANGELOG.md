@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-06-08
+
+### Fixed
+- Rider: replaced internal `PluginManagerCore.getPlugin` API with class-loader based plugin root resolution, eliminating the JetBrains Marketplace internal API usage warning.
+
 ## [1.0.20] - 2026-06-08
 
 ### Changed
