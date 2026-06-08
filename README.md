@@ -3,157 +3,168 @@
   <h1>EF QueryLens</h1>
   <p><strong>See the SQL behind every LINQ expression — right in your editor.</strong></p>
   <p>
-    <a href="https://marketplace.visualstudio.com/items?itemName=EFQueryLens.ef-querylens-vscode"><img src="https://img.shields.io/visual-studio-marketplace/v/EFQueryLens.ef-querylens-vscode?label=VS%20Code&color=0098FF" alt="VS Code Marketplace Version" /></a>
-    <a href="https://marketplace.visualstudio.com/items?itemName=EFQueryLens.EFQueryLensVS"><img src="https://img.shields.io/visual-studio-marketplace/v/EFQueryLens.EFQueryLensVS?label=Visual%20Studio&color=5C2D91" alt="Visual Studio Marketplace Version" /></a>
-    <a href="https://plugins.jetbrains.com/plugin/30753-ef-querylens"><img src="https://img.shields.io/jetbrains/plugin/v/30753?label=Rider&color=FF318C" alt="Rider Plugin Version" /></a>
+    <a href="https://marketplace.visualstudio.com/items?itemName=EFQueryLens.EFQueryLensVS"><img src="https://vsmarketplacebadges.dev/version/EFQueryLens.EFQueryLensVS.svg" alt="Visual Studio" /></a>
+    <a href="https://marketplace.visualstudio.com/items?itemName=EFQueryLens.ef-querylens-vscode"><img src="https://vsmarketplacebadges.dev/version-short/EFQueryLens.ef-querylens-vscode.svg" alt="VS Code" /></a>
+    <a href="https://plugins.jetbrains.com/plugin/30753-ef-querylens"><img src="https://img.shields.io/jetbrains/plugin/v/dev.efquerylens?label=Rider" alt="Rider" /></a>
     <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License" />
   </p>
 </div>
 
----
+<br/>
 
-EF QueryLens translates EF Core LINQ to SQL at hover time. A shared daemon does the work; lightweight plugins for **VS Code**, **Rider**, and **Visual Studio** show the result. No database connection needed.
+<div align="center">
+  <img src="docs/assets/query_lens.gif" alt="EF QueryLens in action" width="800" />
+</div>
 
 <br/>
 
-## See it in action
+EF QueryLens translates EF Core LINQ to SQL at hover time. A shared daemon does the work — no database connection needed.
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <strong>Hover SQL preview</strong><br/><br/>
-      <img src="docs/assets/onhover_sql.gif" alt="Hover SQL preview" />
-    </td>
-    </tr>
-    <tr>
-    <td align="center" width="50%">
-      <strong>Edit &amp; re-preview</strong><br/><br/>
-      <img src="docs/assets/onhover_edit_sql.gif" alt="Edit and re-preview" />
-    </td>
-  </tr>
-</table>
+<div align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=EFQueryLens.ef-querylens-vscode"><img src="https://img.shields.io/badge/VS%20Code-007ACC?style=flat-square&logo=visualstudiocode&logoColor=white" alt="VS Code" /></a>
+  &nbsp;
+  <a href="https://plugins.jetbrains.com/plugin/30753-ef-querylens"><img src="https://img.shields.io/badge/Rider-FF318C?style=flat-square&logo=rider&logoColor=white" alt="Rider" /></a>
+  &nbsp;
+  <a href="https://marketplace.visualstudio.com/items?itemName=EFQueryLens.EFQueryLensVS"><img src="https://img.shields.io/badge/Visual%20Studio-5C2D91?style=flat-square&logo=visualstudio&logoColor=white" alt="Visual Studio" /></a>
+</div>
 
 <br/>
 
-## Works everywhere
+## Get started in four steps
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <strong>Visual Studio</strong><br/><br/>
-      <img src="docs/assets/vs_extension_single_query.png" alt="Visual Studio"  />
-    </td>
-    </tr>
-    <tr>
-    <td  align="center" width="50%">
-      <strong>VS Code</strong><br/><br/>
-      <img src="docs/assets/vs_code_plugin_single_query.png" alt="VS Code" />
-    </td>
-    </tr>
-    <tr>
-    <td  align="center" width="50%">
-      <strong>JetBrains Rider</strong><br/><br/>
-      <img src="docs/assets/rider_plugin_single_query.png" alt="Rider" />
-    </td>
-  </tr>
-</table>
-
-<br/>
-
-## What you get
-
-| Feature | Detail |
-|---|---|
-| Hover SQL preview | Generated SQL on any LINQ expression |
-| Copy & Open actions | One-click copy or open in a dedicated SQL panel |
-| Split-query rendering | Multi-statement queries shown with per-split labels |
-| Shared backend | One daemon process, consistent results across all IDEs |
-| Provider-aware | MySQL, PostgreSQL, SQL Server formatted correctly |
-| Offline | No database connection — works from your compiled assembly |
-| MCP server | Expose translations to AI agents and automation |
-
-<br/>
-
-## Quick Start
-
-> [!IMPORTANT]
-> **Prerequisite:** Install **.NET 10** before using EF QueryLens.
-> - **Extension usage:** .NET 10 Runtime + ASP.NET Core Runtime
-> - **Building from source:** .NET 10 SDK
->
-> EF QueryLens launches bundled backend processes via `dotnet`, so SQL preview features will not start if .NET 10 is missing.
-
-**1. Add a factory to your executable project**
-
-QueryLens needs a factory class to create an offline `DbContext` for SQL generation. Add it to your **executable startup project** (ASP.NET API, Worker Service, Console app) — not a class library.
-
-First, define the interface
-Then implement it. This is where you configure your provider, extensions like `UseProjectables()` or Gridify, query splitting behaviour, custom conventions — anything that affects the generated SQL:
-
-```csharp
-namespace EFQueryLens.Core;
-
-public interface IQueryLensDbContextFactory<out TContext>
-    where TContext : DbContext
-{
-    TContext CreateOfflineContext();
-}
-
-
-public sealed class AppQueryLensFactory : IQueryLensDbContextFactory<AppDbContext>
-{
-    public AppDbContext CreateOfflineContext()
-    {
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlServer("Server=offline;Database=offline")
-            .UseProjectables()                              // Projectable properties
-            .UseQuerySplittingBehavior(SplitQuery)          // Split-query rendering
-            .Options;
-
-        return new AppDbContext(options);
-    }
-}
+```
+1. Install the extension for your IDE
+2. Run "EF QueryLens: Setup" to generate your offline DbContext factory
+3. Build your solution
+4. Hover any LINQ query → SQL appears
 ```
 
-The connection string is never opened — it only tells EF Core which provider dialect to use.
+That's it. Setup scans your `AddDbContext` registrations and auto-generates everything it needs.
 
-> See the full sample: [`samples/SampleMySqlApp/QueryLensDbContextFactory.cs`](samples/SampleMySqlApp/QueryLensDbContextFactory.cs)
+<br/>
 
-**2. Build the solution**
+## Features
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🔍 View SQL on Hover</h3>
+      Hover any EF Core LINQ expression to see the generated SQL inline. No context switching, no logging, no guessing.
+    </td>
+    <td width="50%" valign="top">
+      <h3>📄 Open SQL Panel</h3>
+      Open the full SQL in a dedicated editor panel. Copy to clipboard or inspect split-query statements with per-split labels.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>⚡ Auto Setup</h3>
+      Run <strong>EF QueryLens: Setup</strong> once. QueryLens scans your <code>AddDbContext</code> registrations, generates a gitignored factory, and is ready to go — no manual wiring.
+    </td>
+    <td width="50%" valign="top">
+      <h3>✈️ Works Offline</h3>
+      SQL is generated from your compiled assembly, not a live database. Works anywhere your code builds — no connection string required at runtime.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🖥️ Every Major .NET IDE</h3>
+      One daemon, consistent results across <strong>VS Code</strong>, <strong>JetBrains Rider</strong>, and <strong>Visual Studio</strong>.
+    </td>
+    <td width="50%" valign="top">
+      <h3>🗄️ Provider-Aware</h3>
+      SQL Server, PostgreSQL, and MySQL are each formatted with their correct dialect — what you see is what EF Core actually sends.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🤖 MCP Server</h3>
+      Expose LINQ-to-SQL translation to AI agents and automation via a built-in MCP server. Query your data model programmatically.
+    </td>
+    <td width="50%" valign="top">
+      <h3>🔀 Split-Query Support</h3>
+      Multi-statement split queries are rendered with per-statement labels so you see exactly how EF Core breaks up the load.
+    </td>
+  </tr>
+</table>
+
+<br/>
+
+## Setup
+
+**1. Install the extension**
+
+| IDE | Link |
+|---|---|
+| VS Code | [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=EFQueryLens.ef-querylens-vscode) |
+| JetBrains Rider | [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/30753-ef-querylens) |
+| Visual Studio | [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=EFQueryLens.EFQueryLensVS) |
+
+**2. Set up your offline DbContext factory**
+
+EF QueryLens needs a lightweight offline DbContext to generate SQL without a live database. Run **EF QueryLens: Setup** from the command palette — QueryLens inspects your `AddDbContext` registrations and generates the factory for you, gitignored and ready to go.
+
+You can also trigger setup by hovering any LINQ query and clicking **Set up QueryLens for this project**.
+
+> For multiple DbContexts, custom options, or manual factory authoring, see [Factory Setup](docs/factory-setup.md).
+
+**3. Build your solution**
 
 ```bash
 dotnet build
 ```
 
-**3. Install the extension**
-
-| IDE | Install |
-|---|---|
-| VS Code | [Marketplace](https://marketplace.visualstudio.com/items?itemName=EFQueryLens.ef-querylens-vscode) |
-| JetBrains Rider | [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/30753-ef-querylens) |
-| Visual Studio | [VS Marketplace](https://marketplace.visualstudio.com/items?itemName=EFQueryLens.EFQueryLensVS) |
+This compiles the generated factory so QueryLens can load it.
 
 **4. Hover any LINQ expression**
 
-Point at a LINQ query. SQL appears. Use the hover actions to copy, open the full panel, or refresh.
+SQL appears in the hover popup. Use the inline actions to **copy**, **open** the full SQL panel, or **refresh**.
+
+<br/>
+
+## Works everywhere
+
+<details>
+<summary>IDE screenshots</summary>
+
+<br/>
+
+**VS Code**
+
+<img src="docs/assets/vs_code_plugin_single_query.png" alt="VS Code" />
+
+<br/>
+
+**JetBrains Rider**
+
+<img src="docs/assets/rider_plugin_single_query.png" alt="Rider" />
+
+<br/>
+
+**Visual Studio**
+
+<img src="docs/assets/vs_extension_single_query.png" alt="Visual Studio" />
+
+</details>
 
 <br/>
 
 ## Documentation
 
 - [Getting Started](docs/getting-started.md)
+- [Factory Setup](docs/factory-setup.md)
 - [IDE Support](docs/ide-support.md)
-- [Architecture](docs/architecture.md)
 - [Providers](docs/providers.md)
-- [CLI Reference](docs/cli-reference.md)
 - [MCP Server](docs/mcp-server.md)
+- [CLI Reference](docs/cli-reference.md)
+- [Architecture](docs/architecture.md)
 
 <br/>
 
 ## Build & Test
 
 <details>
-<summary>Full build commands</summary>
+<summary>Build commands</summary>
 
 ```bash
 # .NET solution
