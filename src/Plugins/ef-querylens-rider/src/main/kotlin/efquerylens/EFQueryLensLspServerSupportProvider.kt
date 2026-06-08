@@ -1,12 +1,10 @@
 package efquerylens
 
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -69,7 +67,6 @@ private class EFQueryLensServerDescriptor(
     private val hostProject: Project,
 ) : ProjectWideLspServerDescriptor(hostProject, "EF QueryLens") {
     private companion object {
-        private const val PLUGIN_ID_VALUE = "dev.efquerylens"
         private const val LSP_DLL_OVERRIDE_ENV_VAR = "QUERYLENS_LSP_DLL"
     }
 
@@ -144,30 +141,27 @@ private class EFQueryLensServerDescriptor(
         return candidates.firstOrNull { it.exists() && it.isRegularFile() }
     }
 
-    private fun resolvePluginRoot(): Path? {
-        val pluginPathFromManager = PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID_VALUE))?.pluginPath
-        if (pluginPathFromManager != null) return pluginPathFromManager.toAbsolutePath().normalize()
-
-        return try {
+    private fun resolvePluginRoot(): Path? =
+        try {
             val location =
                 EFQueryLensLspServerSupportProvider::class.java.protectionDomain.codeSource
                     ?.location ?: return null
             val codeSourcePath = Path.of(location.toURI()).toAbsolutePath().normalize()
             if (codeSourcePath.isRegularFile()) {
                 val parent = codeSourcePath.parent ?: return null
-                return if (parent.name.equals("lib", ignoreCase = true)) parent.parent else parent
+                if (parent.name.equals("lib", ignoreCase = true)) parent.parent else parent
+            } else {
+                var current: Path? = codeSourcePath
+                while (current != null) {
+                    if (current.resolve("server").isDirectory()) return current
+                    if (current.name.equals("lib", ignoreCase = true)) return current.parent
+                    current = current.parent
+                }
+                null
             }
-            var current: Path? = codeSourcePath
-            while (current != null) {
-                if (current.resolve("server").isDirectory()) return current
-                if (current.name.equals("lib", ignoreCase = true)) return current.parent
-                current = current.parent
-            }
-            null
         } catch (e: Exception) {
             null
         }
-    }
 
     private fun GeneralCommandLine.applyQueryLensEnvironment(
         workspaceRoot: Path,
