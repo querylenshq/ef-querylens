@@ -6,6 +6,14 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-06-08
+
+### Changed
+- Bumped plugin metadata versions to 1.0.18 across VS Code, Rider, and Visual Studio manifests.
+
+### Added
+- Added animated preview asset at `docs/assets/query_lens.gif`.
+
 ## [1.0.10] - 2026-03-29
 
 ### Fixed
