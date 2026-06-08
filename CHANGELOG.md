@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-06-08
+
+### Fixed
+- Configured marketplace publishing secrets (`VSCE_PAT`, `VS_MARKETPLACE_PAT`) so the GitHub Actions release pipeline now successfully distributes plugins to VS Code Marketplace, JetBrains Marketplace, and Visual Studio Marketplace.
+
 ## [1.0.18] - 2026-06-08
 
 ### Changed
