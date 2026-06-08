@@ -68,6 +68,7 @@ internal object EFQueryLensLspRequests {
         return parseSetupApplyResponse(response)
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun sendCustomRequest(
         project: Project,
         method: String,

@@ -186,7 +186,7 @@ internal sealed partial class QueryLensLanguageClient
                 }
 
                 hosts.Add(new SetupHostCandidate(
-                    projectPath,
+                    projectPath!,
                     ReadStringField(host, "displayName") ?? "Host project",
                     ReadStringField(host, "assemblyPath")));
             }

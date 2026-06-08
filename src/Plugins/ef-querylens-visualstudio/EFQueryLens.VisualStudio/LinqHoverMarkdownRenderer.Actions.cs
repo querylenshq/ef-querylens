@@ -164,6 +164,7 @@ internal static partial class LinqHoverMarkdownRenderer
             if (host == "recalculate"
                 && TryExtractHoverCommandArgs(uri, out var documentUri, out var line, out var character))
             {
+#pragma warning disable VSSDK007
                 JoinableTask recalculateTask = ThreadHelper.JoinableTaskFactory.RunAsync(async delegate
                 {
                     var result = await QueryLensLanguageClient.RequestPreviewRecalculateAsync(
@@ -174,6 +175,7 @@ internal static partial class LinqHoverMarkdownRenderer
 
                     Log($"hover-recalculate-link success={result.Success} message={TruncateForLog(result.Message, 180)}");
                 });
+#pragma warning restore VSSDK007
                 recalculateTask.FileAndForget("efquerylens/LinqHoverMarkdownRenderer/Recalculate");
 
                 return;

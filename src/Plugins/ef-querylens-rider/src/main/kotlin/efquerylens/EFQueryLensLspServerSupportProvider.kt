@@ -285,6 +285,7 @@ private class EFQueryLensClient(
     private val project: Project,
 ) : Lsp4jClient(handler) {
     @JsonNotification("efquerylens/showSqlPreview")
+    @Suppress("UNCHECKED_CAST")
     fun showSqlPreview(payload: Any?) {
         val root = payload as? Map<String, Any?> ?: return
         val fallbackFileUri = root["fallbackFileUri"] as? String ?: ""
@@ -298,6 +299,7 @@ private class EFQueryLensClient(
     }
 
     @JsonNotification("efquerylens/showSqlPopup")
+    @Suppress("UNCHECKED_CAST")
     fun showSqlPopup(payload: Any?) {
         val root = payload as? Map<String, Any?> ?: return
         val fallbackFileUri = root["fallbackFileUri"] as? String ?: ""
@@ -308,6 +310,7 @@ private class EFQueryLensClient(
     }
 
     @JsonNotification("efquerylens/copySqlToClipboard")
+    @Suppress("UNCHECKED_CAST")
     fun copySqlToClipboard(payload: Any?) {
         val root = payload as? Map<String, Any?> ?: return
         val sql = root["sql"] as? String ?: return
