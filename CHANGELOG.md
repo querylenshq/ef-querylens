@@ -6,6 +6,11 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-06-08
+
+### Changed
+- Extended Rider plugin compatibility range to build `262.*` (Rider 2026.2).
+
 ## [1.0.19] - 2026-06-08
 
 ### Fixed
