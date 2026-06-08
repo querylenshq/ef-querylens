@@ -28,9 +28,52 @@ public sealed partial class QueryEvaluator
 
     private static Type? InferContainsElementType(string v, string expr, Type ctx)
     {
-        var m = Regex.Match(expr, $@"(?<!\w){Regex.Escape(v)}\s*\.\s*Contains\s*\(\s*\w+\s*\.\s*(\w+)");
-        return m.Success ? FindEntityPropertyType(ctx, m.Groups[1].Value) : null;
+        var m = Regex.Match(
+            expr,
+            $@"(?<!\w){Regex.Escape(v)}\s*\.\s*Contains\s*\(\s*[^,)]+?\.\s*(\w+)");
+        if (m.Success)
+            return FindEntityPropertyType(ctx, m.Groups[1].Value);
+
+        // Contains(literalOrParam) — fall back to Guid for common id-collection names.
+        if (Regex.IsMatch(expr, $@"(?<!\w){Regex.Escape(v)}\s*\.\s*Contains\s*\(")
+            && v.EndsWith("Ids", StringComparison.OrdinalIgnoreCase))
+        {
+            return typeof(Guid);
+        }
+
+        return null;
     }
+
+    /// <summary>
+    /// Builds a stub for <c>models.Select(y => y.Prop).Contains(x.Prop)</c> sync patterns.
+    /// Uses an anonymous projection array so <c>Select</c> never runs on null elements.
+    /// </summary>
+    private static string? TryBuildSelectContainsCollectionStub(
+        string variableName,
+        string expression,
+        Type dbContextType)
+    {
+        var pattern =
+            $@"(?<!\w){Regex.Escape(variableName)}\s*\.\s*Select\s*\(\s*(\w+)\s*=>\s*\1\.(\w+)\s*\)\s*\.\s*Contains\s*\(\s*\w+\.(\w+)";
+        var match = Regex.Match(expression, pattern);
+        if (!match.Success)
+            return null;
+
+        var projectedProperty = match.Groups[2].Value;
+        var comparedProperty = match.Groups[3].Value;
+        if (!string.Equals(projectedProperty, comparedProperty, StringComparison.Ordinal))
+            return null;
+
+        var propertyType = FindEntityPropertyType(dbContextType, comparedProperty);
+        if (propertyType is null)
+            return null;
+
+        var placeholder = BuildScalarPlaceholderExpression(propertyType);
+        return $"var {variableName} = new[] {{ new {{ {comparedProperty} = {placeholder} }} }};";
+    }
+
+    private static bool LooksLikeSelectReceiver(string variableName, string expression) =>
+        Regex.IsMatch(expression, $@"(?<!\w){Regex.Escape(variableName)}\s*\.\s*Select\s*\(");
 
     private static Type? InferSelectEntityType(string v, string expr, Type ctx)
     {

@@ -286,6 +286,66 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         Assert.Contains("Orders", result.Sql, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ─── Static-type local (CS0716/CS0723 regression) ────────────────────────
+
+    [Fact]
+    public async Task Evaluate_LocalMisTypedAsStaticClass_FallsBackToUsageInference_ReturnsSql()
+    {
+        // Regression: a local mis-inferred as a static class — e.g. `var page = Math.Max(...)`
+        // and `var pageSize = Math.Clamp(...)` propagating the receiver "Math" — must not emit
+        // `Math page = ...` / `(Math)...`, which fail with CS0723 ("variable of static type")
+        // and CS0716 ("convert to static type"). The engine now discards the non-instantiable
+        // type and recovers `int` from the arithmetic usage, so translation still succeeds.
+        var result = await _evaluator.EvaluateAsync(_alcCtx, new TranslationRequest
+        {
+            AssemblyPath      = _alcCtx.AssemblyPath,
+            DbContextTypeName = DefaultMySqlDbContextType,
+            Expression        = "db.Orders.Skip((page - 1) * pageSize).Take(pageSize)",
+            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["page"]     = "Math",
+                ["pageSize"] = "Math",
+            },
+        });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("static type", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_PaginationLocals_NoSuppliedTypes_RecoveredFromUsage_ReturnsSql()
+    {
+        // The LSP no longer guesses a type for `page`/`pageSize` (their `var = Math.Max(...)`
+        // initializers can't be bound without a semantic model). With no supplied types, the
+        // engine recovers both as int from their arithmetic usage — no hardcoded types anywhere.
+        var result = await _evaluator.EvaluateAsync(_alcCtx, new TranslationRequest
+        {
+            AssemblyPath      = _alcCtx.AssemblyPath,
+            DbContextTypeName = DefaultMySqlDbContextType,
+            Expression        = "db.Orders.Skip((page - 1) * pageSize).Take(pageSize)",
+            // LocalVariableTypes intentionally empty — this is what the LSP now sends.
+        });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+    }
+
+    [Theory]
+    [InlineData("Math", null)]                         // static class (unqualified, resolved via System.*)
+    [InlineData("System.Math", null)]                  // static class (qualified)
+    [InlineData("System.IDisposable", null)]           // interface
+    [InlineData("int", "int page = 0;")]               // primitive — unchanged
+    public void BuildStubFromTypeName_NonInstantiableTypes_ReturnNull(string typeName, string? expected)
+    {
+        var method = typeof(EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator)
+            .GetMethod("BuildStubFromTypeName", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        var actual = (string?)method.Invoke(null, [typeName, "page", typeof(string)]);
+
+        Assert.Equal(expected, actual);
+    }
+
     // ─── Result shape ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -402,6 +462,86 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
         Assert.DoesNotContain("'string' does not contain a definition for 'Date'", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_PrimaryConstructorDateTimeProvider_LocalVariableTypes_ReturnsSql()
+    {
+        var result = await _evaluator.EvaluateAsync(_alcCtx, new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            DbContextTypeName = DefaultMySqlDbContextType,
+            Expression =
+                "db.Orders.Where(o => o.CreatedAt <= dateTime.Now)"
+                + ".Select(o => new { SubmittedAt = dateTime.Now, o.Id })"
+                + ".ToListAsync(ct)",
+            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dateTime"] = "EFQueryLens.Core.Tests.Scripting.IDateTimeProvider",
+                ["ct"] = "CancellationToken",
+            },
+        });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("does not contain a definition", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_ReportStyleQuery_WithCapturedLocals_ReturnsSql()
+    {
+        var result = await _evaluator.EvaluateAsync(_alcCtx, new TranslationRequest
+        {
+            AssemblyPath = _alcCtx.AssemblyPath,
+            DbContextTypeName = DefaultMySqlDbContextType,
+            Expression =
+                "db.Customers.Where(x =>"
+                + " x.IsNotDeleted"
+                + " && cnDeviceIds.Contains(x.CustomerId))"
+                + ".Select(x => new"
+                + " {"
+                + " x.CustomerId,"
+                + " SubmittedAt = dateTime.Now,"
+                + " DateClosed = dateTime.Now"
+                + " })"
+                + ".ToListAsync(ct)",
+            LocalVariableTypes = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dateTime"] = "EFQueryLens.Core.Tests.Scripting.IDateTimeProvider",
+                ["cnDeviceIds"] = "System.Collections.Generic.List<System.Guid>",
+                ["ct"] = "CancellationToken",
+            },
+        });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("Compilation error", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_WithAliasUsingContext_InPredicate_ReturnsSql()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.Where(o => o.Status != Enums.OrderStatus.Cancelled).Select(o => o.Id)",
+            usingAliases: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Enums"] = "SampleMySqlApp.Domain.Enums",
+            });
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("does not contain a definition", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingDomainAlias_InfersNamespaceAliasFromLoadedAssemblies()
+    {
+        var result = await TranslateAsync(
+            "db.Orders.Where(o => o.Status == Domain.Enums.OrderStatus.Cancelled).Select(o => o.Id)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("Unknown variable 'Domain'", result.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -581,6 +721,65 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
             expression: "db.Customers.Where(c => c.Orders.Count(o => o.IsNotDeleted) >= minOrders)");
 
         Assert.Equal("int minOrders = 1;", stub);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_ContainsReceiverAfterAnd_InPredicate_UsesListNotBool()
+    {
+        var stub = BuildStubDeclarationForTest(
+            missingName: "cnDeviceIds",
+            expression:
+                "db.Customers.Where(x =>"
+                + " x.IsNotDeleted"
+                + " && cnDeviceIds.Contains(x.CustomerId))");
+
+        Assert.StartsWith("System.Collections.Generic.List<", stub, StringComparison.Ordinal);
+        Assert.Contains("cnDeviceIds", stub, StringComparison.Ordinal);
+        Assert.DoesNotContain("bool cnDeviceIds", stub, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_SelectContains_InWhere_UsesAnonymousProjectionStub()
+    {
+        var stub = BuildStubDeclarationForTest(
+            missingName: "syncOrderItemModels",
+            expression:
+                "db.OrderItems.Where(x =>"
+                + " syncOrderItemModels.Select(y => y.ProductId).Contains(x.ProductId))"
+                + ".ToListAsync(ct)");
+
+        Assert.Contains("syncOrderItemModels = new[]", stub, StringComparison.Ordinal);
+        Assert.Contains("ProductId", stub, StringComparison.Ordinal);
+        Assert.DoesNotContain("object syncOrderItemModels = default", stub, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Evaluate_SelectContainsPattern_ReturnsSql()
+    {
+        var result = await TranslateAsync(
+            "db.OrderItems"
+            + ".Where(x => syncOrderItemModels.Select(y => y.ProductId).Contains(x.ProductId))"
+            + ".ToListAsync(ct)");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("NullReferenceException", result.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_ListOfReferenceType_UsesNonNullElement()
+    {
+        var stub = BuildStubDeclarationForTest(
+            missingName: "syncOrderItemModels",
+            expression:
+                "db.OrderItems.Where(x => syncOrderItemModels.Select(y => y.ProductId).Contains(x.ProductId))",
+            localVariableTypes: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["syncOrderItemModels"] = "System.Collections.Generic.List<SampleMySqlApp.Domain.Entities.OrderItem>",
+            });
+
+        Assert.Contains("GetUninitializedObject", stub, StringComparison.Ordinal);
+        Assert.DoesNotContain("default(SampleMySqlApp.Domain.Entities.OrderItem)", stub, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -818,6 +1017,44 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
     }
 
     [Fact]
+    public void InferMissingExtensionStaticImports_CS1061_FindsZeroArgExtensionWithoutInvocation()
+    {
+        const string source = """
+public sealed class Runner
+{
+    public bool Run(string term) => term.IsMarked;
+}
+""";
+
+        var references = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => !a.IsDynamic && !string.IsNullOrWhiteSpace(a.Location))
+            .Select(a => a.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => MetadataReference.CreateFromFile(path))
+            .ToArray();
+
+        var compilation = CSharpCompilation.Create(
+            assemblyName: "ExtensionImportInferenceCs1061",
+            syntaxTrees: [CSharpSyntaxTree.ParseText(source)],
+            references: references,
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var errors = compilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+
+        Assert.Contains(errors, e => e.Id is "CS1061" or "CS1929");
+
+        var imports = InvokeInferMissingExtensionStaticImports(
+            errors,
+            compilation,
+            [typeof(StringTestExtensions).Assembly],
+            typeof(object));
+
+        Assert.Contains(imports, import => import.Contains("StringTestExtensions", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void InferMissingExtensionStaticImports_CS7036_UsesInvocationArityAndFindsZeroArgExtension()
     {
         const string source = """
@@ -853,10 +1090,36 @@ public sealed class C
         var imports = InvokeInferMissingExtensionStaticImports(
             errors,
             compilation,
-            [typeof(QueryEvaluatorTests).Assembly]);
+            [typeof(QueryEvaluatorTests).Assembly],
+            typeof(object));
 
         Assert.Contains(typeof(ReadOnlySpanCaseExtensions).FullName!, imports, StringComparer.Ordinal);
         Assert.DoesNotContain("System.MemoryExtensions", imports, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void InferExtensionStaticImportsProactively_FindsZeroArgExtensionOnEntityType()
+    {
+        var dbContextType = _alcCtx.FindDbContextType(DefaultMySqlDbContextType);
+        var sampleAssembly = _alcCtx.LoadedAssemblies.First(a =>
+            string.Equals(a.GetName().Name, "SampleMySqlApp", StringComparison.Ordinal));
+
+        var imports = InvokeInferExtensionStaticImportsProactively(
+            "db.Products.Where(p => p.IsNotDeleted())",
+            dbContextType,
+            [sampleAssembly]);
+
+        Assert.Contains("SampleMySqlApp.Domain.Extensions.ProductSoftDeleteExtensions", imports, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task Evaluate_MissingExtensionImport_ProactivelyFindsZeroArgExtension()
+    {
+        var result = await TranslateAsync("db.Products.Where(p => p.IsNotDeleted())");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.NotNull(result.Sql);
+        Assert.DoesNotContain("IsNotDeleted", result.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1105,13 +1368,18 @@ public sealed class C
         Assert.Equal("string?", expected);
     }
 
-    private string BuildStubDeclarationForTest(string missingName, string expression)
+    private string BuildStubDeclarationForTest(
+        string missingName,
+        string expression,
+        IReadOnlyDictionary<string, string>? localVariableTypes = null)
     {
         var dbContextType = _alcCtx.FindDbContextType(null, expression);
         var request = new TranslationRequest
         {
             AssemblyPath = _alcCtx.AssemblyPath,
             Expression = expression,
+            LocalVariableTypes = localVariableTypes
+                ?? new Dictionary<string, string>(StringComparer.Ordinal),
         };
 
         var method = typeof(QueryEvaluator).GetMethod(
@@ -1157,10 +1425,23 @@ public sealed class C
         return Assert.IsType<bool>(value);
     }
 
+    private static IEnumerable<Type> GetLoadableTypes(Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException rtle)
+        {
+            return rtle.Types.Where(t => t is not null).Cast<Type>();
+        }
+    }
+
     private static IReadOnlyList<string> InvokeInferMissingExtensionStaticImports(
         IReadOnlyList<Diagnostic> errors,
         CSharpCompilation compilation,
-        IReadOnlyList<Assembly> assemblies)
+        IReadOnlyList<Assembly> assemblies,
+        Type dbContextType)
     {
         var method = typeof(QueryEvaluator).GetMethod(
             "InferMissingExtensionStaticImports",
@@ -1168,9 +1449,34 @@ public sealed class C
 
         Assert.NotNull(method);
 
-        var value = method!.Invoke(null, [errors, compilation, assemblies]);
+        var value = method!.Invoke(null, [errors, compilation, assemblies, dbContextType]);
         return Assert.IsAssignableFrom<IReadOnlyList<string>>(value);
     }
+
+    private static IReadOnlyList<string> InvokeInferExtensionStaticImportsProactively(
+        string expression,
+        Type dbContextType,
+        IReadOnlyList<Assembly> assemblies)
+    {
+        var method = typeof(QueryEvaluator).GetMethod(
+            "InferExtensionStaticImportsProactively",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+
+        var value = method!.Invoke(null, [expression, dbContextType, assemblies]);
+        return Assert.IsAssignableFrom<IReadOnlyList<string>>(value);
+    }
+}
+
+public interface IDateTimeProvider
+{
+    DateTime Now { get; }
+}
+
+public static class StringTestExtensions
+{
+    public static bool IsMarked(this string value) => !string.IsNullOrEmpty(value);
 }
 
 public static class ReadOnlySpanCaseExtensions

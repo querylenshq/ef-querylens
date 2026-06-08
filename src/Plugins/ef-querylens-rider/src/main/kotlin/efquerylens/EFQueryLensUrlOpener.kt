@@ -53,17 +53,17 @@ class EFQueryLensUrlOpener : UrlOpener() {
     ): Boolean {
         thisLogger().info("[EFQueryLens] UrlOpener.openUrl called url=${url.take(120)}")
 
-        // Intercept efquerylens:// scheme links from the LSP hover popup.
-        // Rider calls BrowserLauncher.open() for unknown URI schemes, which invokes
-        // this UrlOpener before the OS shell sees it — so we handle the action here
-        // and return true to prevent any browser window from opening.
+        // Intercept efquerylens:// links opened via BrowserLauncher (e.g. external callers).
+        // Rider hover actions use Alt+Enter intention actions instead of clickable hover links.
         if (!url.startsWith("efquerylens://", ignoreCase = true)) {
             return false
         }
 
         val uri = runCatching { URI(url) }.getOrNull() ?: return true
         val host = uri.host?.lowercase() ?: return true
-        if (host != "copysql" && host != "opensql" && host != "opensqleditor" && host != "recalculate") return true
+        if (host != "copysql" && host != "opensql" && host != "opensqleditor" && host != "recalculate" && host != "setup") {
+            return true
+        }
 
         val params = parseQueryParams(uri.rawQuery ?: "")
         val fileUri = params["uri"] ?: return true
@@ -89,6 +89,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
     ) {
         when (type) {
             "recalculate" -> requestPreviewRecalculate(project, fileUri, line, character)
+            "setup" -> EFQueryLensSetupService.run(project, fileUri, line, character)
             "copysql", "opensqleditor" -> dispatchSqlAction(type, project, fileUri, line, character)
             else -> thisLogger().warn("[EFQueryLens] executeAction: unknown action type='$type'")
         }

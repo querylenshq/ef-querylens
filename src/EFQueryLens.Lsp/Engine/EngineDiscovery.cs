@@ -317,7 +317,9 @@ internal static partial class EngineDiscovery
             };
         }
 
-        if (File.Exists(bareCandidate))
+        // Unix AppHosts lose +x when the Rider/VSIX plugin ZIP is extracted; skip them and
+        // launch via `dotnet` when the native launcher is present but not executable.
+        if (File.Exists(bareCandidate) && IsNativeLauncherUsable(bareCandidate))
         {
             return new ProcessStartInfo
             {
@@ -344,6 +346,31 @@ internal static partial class EngineDiscovery
         }
 
         return null;
+    }
+
+    internal static bool IsNativeLauncherUsable(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return true;
+        }
+
+        try
+        {
+            var mode = File.GetUnixFileMode(path);
+            const UnixFileMode executeBits =
+                UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+            return (mode & executeBits) != 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static async Task PumpStderrAsync(Process process, Action<string>? debugLog)

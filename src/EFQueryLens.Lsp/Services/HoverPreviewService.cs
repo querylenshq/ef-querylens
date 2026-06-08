@@ -1,3 +1,4 @@
+using System.Reflection;
 using EFQueryLens.Core;
 using EFQueryLens.Core.Contracts;
 
@@ -37,7 +38,7 @@ internal sealed record QueryLensStructuredHoverResult(
 
 internal sealed partial class HoverPreviewService
 {
-    private const string HoverBuildMarker = "2026-03-28-vscode-linkfix";
+    private static readonly string HoverBuildMarker = ResolveBuildMarker();
 
     private readonly IQueryLensEngine _engine;
     private bool _debugEnabled;
@@ -65,5 +66,33 @@ internal sealed partial class HoverPreviewService
         }
 
         Console.Error.WriteLine($"[QL-Hover] {message}");
+    }
+
+    private static string ResolveBuildMarker()
+    {
+        try
+        {
+            var assembly = typeof(HoverPreviewService).Assembly;
+            var informational = assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion;
+
+            if (!string.IsNullOrWhiteSpace(informational))
+            {
+                return informational;
+            }
+
+            var version = assembly.GetName().Version;
+            if (version is not null)
+            {
+                return version.ToString();
+            }
+        }
+        catch
+        {
+            // Fall through to sentinel.
+        }
+
+        return "unknown";
     }
 }

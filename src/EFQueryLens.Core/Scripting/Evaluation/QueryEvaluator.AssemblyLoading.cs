@@ -59,4 +59,41 @@ public sealed partial class QueryEvaluator
 
         return merged;
     }
+
+    private static IReadOnlyList<Assembly> BuildExtensionDiscoveryAssemblySet(
+        ProjectAssemblyContext alcCtx,
+        IReadOnlyList<Assembly> compilationAssemblies)
+    {
+        var userAssemblies = alcCtx.LoadedAssemblies.ToList();
+        var userNames = userAssemblies
+            .Select(a => a.GetName().Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var discovery = new List<Assembly>(userAssemblies);
+        foreach (var asm in compilationAssemblies)
+        {
+            var name = asm.GetName().Name;
+            if (!string.IsNullOrWhiteSpace(name) && userNames.Contains(name))
+                continue;
+
+            if (IsTestOrHostAssembly(name))
+                continue;
+
+            discovery.Add(asm);
+        }
+
+        return discovery;
+    }
+
+    private static bool IsTestOrHostAssembly(string? assemblyName)
+    {
+        if (string.IsNullOrWhiteSpace(assemblyName))
+            return true;
+
+        return assemblyName.Contains("TestPlatform", StringComparison.OrdinalIgnoreCase)
+               || assemblyName.Contains("testhost", StringComparison.OrdinalIgnoreCase)
+               || assemblyName.StartsWith("xunit", StringComparison.OrdinalIgnoreCase)
+               || assemblyName.EndsWith(".Tests", StringComparison.OrdinalIgnoreCase);
+    }
 }

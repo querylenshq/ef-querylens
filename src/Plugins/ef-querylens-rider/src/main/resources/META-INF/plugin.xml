@@ -22,6 +22,10 @@
             <className>efquerylens.EFQueryLensReanalyzeIntentionAction</className>
             <category>EF QueryLens</category>
         </intentionAction>
+        <intentionAction>
+            <className>efquerylens.EFQueryLensSetupIntentionAction</className>
+            <category>EF QueryLens</category>
+        </intentionAction>
     </extensions>
 
     <extensions defaultExtensionNs="org.jetbrains">
@@ -34,6 +38,12 @@
                 class="efquerylens.EFQueryLensShowToolWindowAction"
                 text="Show EF QueryLens"
                 description="Open the EF QueryLens log tool window">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action id="efquerylens.SetupQueryLens"
+                class="efquerylens.EFQueryLensSetupAction"
+                text="Set up QueryLens"
+                description="Generate the offline DbContext factory for this project">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
     </actions>

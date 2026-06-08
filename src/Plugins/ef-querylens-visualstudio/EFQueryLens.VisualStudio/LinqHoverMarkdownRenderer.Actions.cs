@@ -179,6 +179,23 @@ internal static partial class LinqHoverMarkdownRenderer
                 return;
             }
 
+            if (host == "setup"
+                && TryExtractHoverCommandArgs(uri, out var setupDocumentUri, out var setupLine, out var setupCharacter)
+                && QueryLensPackage.Instance is QueryLensPackage setupPackage)
+            {
+                QueryLensSetupService.Run(
+                    setupPackage,
+                    new QueryLensActiveEditorContext(setupDocumentUri, setupLine, setupCharacter));
+                return;
+            }
+
+            return;
+        }
+
+        if (string.Equals(target, "command:efquerylens.setup", StringComparison.OrdinalIgnoreCase)
+            && QueryLensPackage.Instance is QueryLensPackage commandSetupPackage)
+        {
+            QueryLensSetupService.RunFromActiveEditor(commandSetupPackage);
             return;
         }
 

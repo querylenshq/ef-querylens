@@ -2,10 +2,45 @@
 
 The CLI host is `EFQueryLens.Cli`.
 
-Current state:
+## Commands
 
-- Command surface is being stabilized
-- IDE integrations are currently the primary production path
+### `setup`
+
+Generate the offline QueryLens DbContext factory for a project. This is the same flow as **Set up QueryLens** in the IDE: scan `AddDbContext` registrations, detect the EF Core provider, write a gitignored factory under `Properties/QueryLens/`, and append the ignore rule to `.gitignore`.
+
+```bash
+dotnet run --project src/EFQueryLens.Cli -- setup <projectPath> [--host <csprojPath>] [--provider SqlServer|Npgsql|MySql|Sqlite] [--force]
+```
+
+Arguments and options:
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `projectPath` | yes | Path to a `.csproj`, project directory, or `.sln`/`.slnx` file |
+| `--host` | no | Executable host `.csproj` when the path is a solution or class library |
+| `--provider` | no | Override provider auto-detection (`SqlServer`, `Npgsql`, `MySql`, `Sqlite`) |
+| `--force` | no | Overwrite a hand-edited generated factory file |
+
+Examples:
+
+```bash
+# Executable web/API project
+dotnet run --project src/EFQueryLens.Cli -- setup samples/SampleMySqlApp/SampleMySqlApp.csproj
+
+# Solution with multiple hosts — list hosts, then pass --host
+dotnet run --project src/EFQueryLens.Cli -- setup MyApp.sln --host src/MyApp.Api/MyApp.Api.csproj
+
+# Force regeneration after manual edits to the generated file
+dotnet run --project src/EFQueryLens.Cli -- setup src/MyApp.Api --force
+```
+
+Exit codes:
+
+- `0` — setup succeeded (`Generated`, `SkippedUpToDate`, or `SkippedExistingFactory`)
+- `1` — setup failed (missing build output, ambiguous host, provider unknown, etc.)
+- `2` — invalid `--provider` value
+
+Output includes the setup message, generated file path (when applicable), and discovered DbContext type names.
 
 Planned command set:
 
@@ -13,7 +48,7 @@ Planned command set:
 - `explain`
 - `diff`
 
-As command contracts become stable, this page will include complete argument and output schemas.
+As command contracts become stable, this page will include complete argument and output schemas for those verbs.
 
 ## Runtime Environment Variables
 

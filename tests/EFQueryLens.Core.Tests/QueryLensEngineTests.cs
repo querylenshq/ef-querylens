@@ -598,6 +598,26 @@ public class QueryLensEngineTests : IClassFixture<QueryLensEngineFixture>
     }
 
     [Fact]
+    public async Task InvalidateAssemblyCachesAsync_AllowsFreshReloadAfterRebuild()
+    {
+        await using var engine = CreateEngine();
+        var request = new TranslationRequest
+        {
+            AssemblyPath = _dll,
+            Expression = "db.Users",
+            DbContextTypeName = DefaultMySqlDbContextType,
+        };
+
+        var first = await engine.TranslateAsync(request);
+        Assert.True(first.Success, first.ErrorMessage);
+
+        await engine.InvalidateAssemblyCachesAsync();
+
+        var second = await engine.TranslateAsync(request);
+        Assert.True(second.Success, second.ErrorMessage);
+    }
+
+    [Fact]
     public async Task DisposeAsync_CalledTwice_IsIdempotent()
     {
         var engine = CreateEngine();

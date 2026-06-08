@@ -43,6 +43,13 @@ internal static partial class DesignTimeDbContextFactory
         }
     }
 
+    private static bool IsQueryLensFactoryInterface(Type genericTypeDefinition)
+    {
+        var fullName = genericTypeDefinition.FullName;
+        return string.Equals(fullName, QueryLensInterfaceName, StringComparison.Ordinal)
+               || string.Equals(fullName, GeneratedQueryLensInterfaceName, StringComparison.Ordinal);
+    }
+
     private static string Unwrap(Exception ex)
     {
         var current = ex;

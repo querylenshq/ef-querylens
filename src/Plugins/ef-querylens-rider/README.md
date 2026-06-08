@@ -27,8 +27,12 @@ EF QueryLens for Rider integrates with the QueryLens LSP backend and gives you S
 
 From `src/Plugins/ef-querylens-rider`:
 
-1. `./gradlew build`
-2. `./gradlew runIde`
+1. Use **JDK 21** for Gradle. JetBrains Runtime or Eclipse Temurin work well.
+   Microsoft Build of OpenJDK can fail `instrumentCode` with `Packages does not exist`
+   unless you create `%JAVA_HOME%\Packages` manually (requires admin under `Program Files`).
+   This project disables `instrumentCode` because the plugin has no UI forms.
+2. `./gradlew build`
+3. `./gradlew runIde`
 
 Build backend runtime inputs first so Rider can bundle and launch them:
 

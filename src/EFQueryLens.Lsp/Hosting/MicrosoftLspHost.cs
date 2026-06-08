@@ -16,14 +16,18 @@ internal static class MicrosoftLspHost
 
         var documentManager = new DocumentManager();
         var hoverPreviewService = new HoverPreviewService(engine, debugEnabled);
-        var hoverHandler = new HoverHandler(documentManager, hoverPreviewService);
-        var prewarm = new TranslationPrewarmService(hoverPreviewService, hoverHandler.StorePrewarmedEntry);
+        var hoverHandler = new HoverHandler(documentManager, hoverPreviewService, engine);
+        var assemblyChangeTracker = new AssemblyChangeTracker(hoverHandler);
+        var prewarm = new TranslationPrewarmService(
+            hoverPreviewService,
+            hoverHandler.BuildChainSemanticKeys,
+            hoverHandler.IsSemanticKeyReady);
 
         var lspHandler = new LanguageServerHandler(
             hover: hoverHandler,
             warmup: new WarmupHandler(documentManager, engine),
             daemonControl: new DaemonControlHandler(engine),
-            textSync: new TextDocumentSyncHandler(documentManager, prewarm),
+            textSync: new TextDocumentSyncHandler(documentManager, prewarm, assemblyChangeTracker),
             debugEnabled: debugEnabled);
 
         using var stdin = Console.OpenStandardInput();

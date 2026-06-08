@@ -113,6 +113,19 @@ public class DiagnosticTranslationTests
     }
 
     [Fact]
+    public void FormatSoftDiagnostics_CS0103_PascalCaseIdentifier_SuggestsUsingAlias()
+    {
+        var errors = Compile("class C { void M() { var x = Domain.Enums.Status; } }");
+        var cs0103 = errors.Where(e => e.Id == "CS0103").ToList();
+        Assert.NotEmpty(cs0103);
+
+        var result = FormatSoft(cs0103);
+
+        Assert.Contains("Using alias or namespace 'Domain'", result, StringComparison.Ordinal);
+        Assert.Contains("GlobalUsings", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FormatSoftDiagnostics_DuplicateCS0103SameIdentifier_Deduplicates()
     {
         // Two uses of the same unknown identifier → two CS0103 errors with same message.
@@ -171,7 +184,7 @@ public class DiagnosticTranslationTests
 
         var result = FormatSoft(cs1061);
 
-        Assert.Contains("Extension method or member not in scope", result, StringComparison.Ordinal);
+        Assert.Contains("NonexistentMethod", result, StringComparison.Ordinal);
         Assert.Contains("using directives", result, StringComparison.Ordinal);
     }
 

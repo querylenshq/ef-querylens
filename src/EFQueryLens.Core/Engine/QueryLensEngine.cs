@@ -91,7 +91,6 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
     
     private readonly bool _debugEnabled;
     private readonly int _dbContextPoolSize;
-    private readonly ShadowAssemblyCache _shadowCache;
     private bool _disposed;
 
     public QueryLensEngine()
@@ -102,8 +101,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
             fallback: 4,
             min: 1,
             max: 16);
-        _shadowCache = new ShadowAssemblyCache(_debugEnabled);
-        _shadowCache.RunStartupCleanup();
+        _ = ShadowAssemblyContextLoader.Cache;
     }
 
     // ── IQueryLensEngine ──────────────────────────────────────────────────────

@@ -46,4 +46,13 @@ internal sealed partial class HoverHandler
         CacheEntry(cacheKey, computed, semanticContext);
         LogHoverDebug($"prewarm-stored line={line} char={character}");
     }
+
+    /// <summary>
+    /// Returns <c>true</c> if a <see cref="QueryTranslationStatus.Ready"/> result is already
+    /// stored for <paramref name="semanticKey"/>. The prewarm service calls this to skip
+    /// queries it has already translated, so the same unchanged query is never re-analysed
+    /// on a subsequent didOpen / didSave / didChange sweep.
+    /// </summary>
+    internal bool IsSemanticKeyReady(string semanticKey)
+        => TryGetSemanticCachedEntry(semanticKey, out _);
 }

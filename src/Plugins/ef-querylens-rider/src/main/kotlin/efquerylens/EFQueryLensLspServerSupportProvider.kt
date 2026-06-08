@@ -15,8 +15,11 @@ import com.intellij.platform.lsp.api.LspServerNotificationsHandler
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
+import org.eclipse.lsp4j.services.LanguageServer
 import java.awt.datatransfer.StringSelection
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermission
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -71,6 +74,9 @@ private class EFQueryLensServerDescriptor(
     }
 
     override fun isSupportedFile(file: VirtualFile): Boolean = file.extension.equals("cs", ignoreCase = true)
+
+    override val lsp4jServerClass: Class<out LanguageServer>
+        get() = EFQueryLensLspServer::class.java
 
     override fun createLsp4jClient(handler: LspServerNotificationsHandler): Lsp4jClient = EFQueryLensClient(handler, hostProject)
 
@@ -182,10 +188,38 @@ private class EFQueryLensServerDescriptor(
         withEnvironment("QUERYLENS_WORKSPACE", workspacePath)
         withEnvironment("QUERYLENS_DAEMON_WORKSPACE", workspacePath)
 
-        resolvePackagedDaemonExecutable()?.let { withEnvironment("QUERYLENS_DAEMON_EXE", it.absolutePathString()) }
-        resolvePackagedDaemonAssembly()?.let { withEnvironment("QUERYLENS_DAEMON_DLL", it.absolutePathString()) }
+        resolvePackagedDaemonExecutable()?.let {
+            ensureUnixDaemonLauncherExecutable(it)
+            withEnvironment("QUERYLENS_DAEMON_EXE", it.absolutePathString())
+        }
+        resolvePackagedDaemonAssembly()?.let {
+            ensureUnixDaemonLauncherExecutable(it)
+            withEnvironment("QUERYLENS_DAEMON_DLL", it.absolutePathString())
+        }
 
         return this
+    }
+
+    private fun ensureUnixDaemonLauncherExecutable(referencePath: Path) {
+        val os = System.getProperty("os.name").lowercase()
+        if (!os.contains("linux") && !os.contains("mac")) {
+            return
+        }
+
+        val launcher = referencePath.parent?.resolve("EFQueryLens.Daemon") ?: return
+        if (!Files.isRegularFile(launcher)) {
+            return
+        }
+
+        runCatching {
+            val permissions = Files.getPosixFilePermissions(launcher).toMutableSet()
+            permissions.add(PosixFilePermission.OWNER_EXECUTE)
+            permissions.add(PosixFilePermission.GROUP_EXECUTE)
+            permissions.add(PosixFilePermission.OTHERS_EXECUTE)
+            Files.setPosixFilePermissions(launcher, permissions)
+        }.onFailure { error ->
+            logWarn("[EFQueryLens] Could not mark daemon launcher executable at '$launcher'", error)
+        }
     }
 
     /**

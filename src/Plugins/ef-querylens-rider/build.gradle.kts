@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.3.20"
-    id("org.jetbrains.intellij.platform") version "2.13.1"
+    kotlin("jvm") version "2.4.0"
+    id("org.jetbrains.intellij.platform") version "2.16.0"
     id("org.jlleitschuh.gradle.ktlint") version "14.2.0"
 }
 
@@ -109,6 +109,7 @@ val bundleQueryLensRuntime by tasks.registering {
         // /p:UseAppHost=true -r <rid>: adds the tiny native launcher (.exe / bare) for that platform.
         // EngineDiscovery.cs finds the AppHost adjacent to the DLL and uses it directly.
         for (rid in rids) {
+            val daemonOutput = out.resolve("daemon/$rid")
             dotnetPublish(
                 daemonCsprojPath,
                 "-c",
@@ -118,8 +119,16 @@ val bundleQueryLensRuntime by tasks.registering {
                 rid,
                 "/p:UseAppHost=true",
                 "--output",
-                out.resolve("daemon/$rid").absolutePath,
+                daemonOutput.absolutePath,
             )
+
+            // ZIP-based plugin installs often strip the Unix execute bit from AppHosts.
+            if (rid.startsWith("linux") || rid.startsWith("osx")) {
+                val daemonLauncher = daemonOutput.resolve("EFQueryLens.Daemon")
+                if (daemonLauncher.isFile) {
+                    daemonLauncher.setExecutable(true, false)
+                }
+            }
         }
     }
 }
@@ -168,6 +177,10 @@ fun extractLatestChangelogAsHtml(changelogFile: File): String {
 
 intellijPlatform {
     buildSearchableOptions = false
+    // Microsoft JDK installs lack a top-level "Packages" directory that Apache Ant
+    // (used by instrumentCode) expects. This plugin has no UI forms, so skipping
+    // instrumentation is safe and avoids requiring admin access under Program Files.
+    instrumentCode = false
 
     pluginConfiguration {
         ideaVersion {

@@ -7,6 +7,7 @@ internal static class QueryLensCommandIds
 {
     internal const int RestartDaemon = 0x0100;
     internal const int OpenLogs = 0x0101;
+    internal const int SetupQueryLens = 0x0102;
 }
 
 internal static class QueryLensCommandGuids

@@ -71,9 +71,30 @@ internal static class Program
 
         // Shared state
         var lastActivity = DateTime.UtcNow;
-        var inflight = new ConcurrentDictionary<string, Lazy<Task<QueryTranslationResult>>>(StringComparer.Ordinal);
         var cache = app.Services.GetRequiredService<IMemoryCache>();
         var engine = app.Services.GetRequiredService<IQueryLensEngine>();
+
+        // Durable, content-addressed result store. Survives the daemon's idle-shutdown and IDE
+        // restarts so analysed SQL is not recomputed just because a process was recycled. A null
+        // store (open failure) degrades gracefully to the in-memory cache only.
+        var cacheDbPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "EFQueryLens",
+            "Cache",
+            $"{WorkspaceHash(workspacePath)}.db");
+        var resultStore = QueryResultStore.TryOpen(cacheDbPath, jsonOptions);
+        Console.Error.WriteLine(resultStore is null
+            ? "[QL-Engine] result-store disabled (open failed) — using in-memory cache only"
+            : $"[QL-Engine] result-store ready db={cacheDbPath}");
+
+        // Owns caching, in-flight dedup, the per-translation timeout, negative-result caching, and
+        // the interactive-vs-warm concurrency gates.
+        var coordinatorOptions = TranslationCoordinatorOptions.FromEnvironment();
+        var coordinator = new TranslationCoordinator(engine, cache, resultStore, coordinatorOptions);
+        Console.Error.WriteLine(
+            $"[QL-Engine] coordinator timeoutMs={coordinatorOptions.TimeoutMs} " +
+            $"negativeTtlMs={coordinatorOptions.NegativeCacheTtlMs} " +
+            $"maxConcurrent={coordinatorOptions.MaxConcurrent} maxWarm={coordinatorOptions.MaxWarmConcurrent}");
 
         // GET /ping
         app.MapGet("/ping", () =>
@@ -82,70 +103,21 @@ internal static class Program
             return Results.Ok("pong");
         });
 
-        // POST /translate
+        // POST /translate — interactive (hover) path: bounded, cached, deduplicated.
         app.MapPost("/translate", async (TranslationRequest request) =>
         {
             lastActivity = DateTime.UtcNow;
-
-            var cacheKey = ComputeCacheKey(request);
-
-            if (cache.TryGetValue<QueryTranslationResult>(cacheKey, out var cached) && cached is not null)
-            {
-                return Results.Ok(cached);
-            }
-
-            var lazy = inflight.GetOrAdd(
-                cacheKey,
-                _ => new Lazy<Task<QueryTranslationResult>>(
-                    () => engine.TranslateAsync(request, CancellationToken.None),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
-
-            QueryTranslationResult result;
-            try
-            {
-                result = await lazy.Value;
-            }
-            finally
-            {
-                inflight.TryRemove(cacheKey, out _);
-            }
-
-            if (result.Success)
-            {
-                cache.Set(cacheKey, result, TimeSpan.FromSeconds(60));
-            }
-
+            var result = await coordinator.TranslateAsync(request);
             lastActivity = DateTime.UtcNow;
             return Results.Ok(result);
         });
 
-        // POST /translate/warm
-        // Returns 202 immediately; starts a background translation so hover can hit cache.
-        // Uses the same inflight dict as /translate — deduplicates concurrent requests naturally.
+        // POST /translate/warm — background path: returns 202 immediately and warms the cache
+        // under a smaller concurrency gate so it never blocks an interactive /translate.
         app.MapPost("/translate/warm", (TranslationRequest request) =>
         {
             lastActivity = DateTime.UtcNow;
-            var cacheKey = ComputeCacheKey(request);
-
-            if (cache.TryGetValue<QueryTranslationResult>(cacheKey, out _))
-            {
-                // Already cached — nothing to do.
-                return Results.Accepted();
-            }
-
-            inflight.GetOrAdd(
-                cacheKey,
-                key => new Lazy<Task<QueryTranslationResult>>(
-                    () => Task.Run(async () =>
-                    {
-                        var r = await engine.TranslateAsync(request, CancellationToken.None);
-                        if (r.Success)
-                            cache.Set(key, r, TimeSpan.FromSeconds(60));
-                        inflight.TryRemove(key, out _);
-                        return r;
-                    }),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
-
+            _ = coordinator.Warm(request);
             return Results.Accepted();
         });
 
@@ -158,14 +130,24 @@ internal static class Program
             return Results.Ok(snapshot);
         });
 
-        // POST /invalidate
-        app.MapPost("/invalidate", () =>
+        // POST /setup — generate the offline DbContext factory for a project (auto-detect provider
+        // + contexts), so users don't hand-write/commit one. Runs off the request thread since it
+        // loads the user assembly to discover DbContext types.
+        app.MapPost("/setup", async (EFQueryLens.Core.Scaffolding.SetupRequest request) =>
         {
             lastActivity = DateTime.UtcNow;
-            if (cache is MemoryCache mc)
-            {
-                mc.Clear();
-            }
+            var result = await Task.Run(() => EFQueryLens.Core.Scaffolding.FactoryScaffolder.Run(request));
+            lastActivity = DateTime.UtcNow;
+            return Results.Ok(result);
+        });
+
+        // POST /invalidate
+        app.MapPost("/invalidate", async () =>
+        {
+            lastActivity = DateTime.UtcNow;
+            coordinator.Invalidate();
+            await engine.InvalidateAssemblyCachesAsync();
+            lastActivity = DateTime.UtcNow;
             return Results.Ok();
         });
 
@@ -225,6 +207,9 @@ internal static class Program
         }
         finally
         {
+            coordinator.Dispose();
+            resultStore?.Dispose();
+
             if (!string.IsNullOrEmpty(portFilePath) && File.Exists(portFilePath))
             {
                 try { File.Delete(portFilePath); } catch { /* best-effort */ }
@@ -293,28 +278,5 @@ internal static class Program
         var normalized = workspacePath.Replace('\\', '/').ToLowerInvariant();
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
         return Convert.ToHexString(bytes)[..12].ToLowerInvariant();
-    }
-
-    /// <summary>
-    /// Returns the first 16 hex characters of the SHA256 of all <see cref="TranslationRequest"/> fields
-    /// that affect the compiled eval assembly or its stub declarations.
-    /// </summary>
-    private static string ComputeCacheKey(TranslationRequest r)
-    {
-        var sb = new StringBuilder();
-        sb.Append(r.Expression).Append('\0');
-        sb.Append(r.AssemblyPath ?? string.Empty).Append('\0');
-        sb.Append(r.DbContextTypeName ?? string.Empty).Append('\0');
-        sb.Append(r.ContextVariableName).Append('\0');
-        foreach (var ns in r.AdditionalImports.OrderBy(x => x, StringComparer.Ordinal))
-            sb.Append(ns).Append('\0');
-        foreach (var kv in r.UsingAliases.OrderBy(x => x.Key, StringComparer.Ordinal))
-            sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
-        foreach (var st in r.UsingStaticTypes.OrderBy(x => x, StringComparer.Ordinal))
-            sb.Append(st).Append('\0');
-        foreach (var kv in r.LocalVariableTypes.OrderBy(x => x.Key, StringComparer.Ordinal))
-            sb.Append(kv.Key).Append(':').Append(kv.Value).Append('\0');
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
-        return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
     }
 }

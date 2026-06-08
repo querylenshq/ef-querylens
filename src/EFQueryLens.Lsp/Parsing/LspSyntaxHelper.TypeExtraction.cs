@@ -32,6 +32,12 @@ public static partial class LspSyntaxHelper
             var anchorStatement = node.FirstAncestorOrSelf<StatementSyntax>();
             if (anchorStatement is null) return result;
 
+            var typeDeclaration = anchorStatement.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+            if (typeDeclaration is not null)
+            {
+                CollectPrimaryConstructorParameters(typeDeclaration, result);
+            }
+
             CollectLocalsInScope(anchorStatement, result);
         }
         catch
@@ -78,6 +84,31 @@ public static partial class LspSyntaxHelper
             var outerStatement = scope.Parent?.FirstAncestorOrSelf<StatementSyntax>();
             if (outerStatement is not null)
                 visited = outerStatement;
+        }
+    }
+
+    private static void CollectPrimaryConstructorParameters(
+        TypeDeclarationSyntax typeDeclaration,
+        Dictionary<string, string> result)
+    {
+        if (typeDeclaration.ParameterList is null)
+        {
+            return;
+        }
+
+        foreach (var param in typeDeclaration.ParameterList.Parameters)
+        {
+            var paramName = param.Identifier.ValueText;
+            if (result.ContainsKey(paramName) || param.Type is null)
+            {
+                continue;
+            }
+
+            var typeName = param.Type.ToString();
+            if (!string.IsNullOrWhiteSpace(typeName))
+            {
+                result[paramName] = typeName;
+            }
         }
     }
 
@@ -172,18 +203,14 @@ public static partial class LspSyntaxHelper
             // $"..." is always System.String
             InterpolatedStringExpressionSyntax => "string",
 
-            // TypeName.Property — heuristic: PascalCase receiver is likely a type
-            MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax receiver }
-                when IsProbablyTypeName(receiver.Identifier.ValueText)
-                => receiver.Identifier.ValueText,
-
-            // TypeName.Method(...)
-            InvocationExpressionSyntax
-            {
-                Expression: MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax receiver2 }
-            } when IsProbablyTypeName(receiver2.Identifier.ValueText)
-                => receiver2.Identifier.ValueText,
-
+            // Everything else — member access (Type.Member), method calls (Type.Method(...)),
+            // bare identifiers, etc. — needs symbol binding to type correctly, which this
+            // reference-free syntax pass cannot do. We deliberately do NOT guess (guessing the
+            // receiver name was the cause of the "Math" bug, where `var page = Math.Max(...)` was
+            // typed as the static class "Math"). Instead we emit no type and let the engine
+            // resolve it: usage-based inference plus the compile → diagnostic → re-stub loop bind
+            // the real type against the loaded assembly, with the static-type stub guard as the
+            // safety floor.
             _ => null,
         };
 
@@ -197,7 +224,4 @@ public static partial class LspSyntaxHelper
         if (text.Contains('.')) return "double";
         return "int";
     }
-
-    private static bool IsProbablyTypeName(string identifier) =>
-        !string.IsNullOrEmpty(identifier) && char.IsUpper(identifier[0]);
 }

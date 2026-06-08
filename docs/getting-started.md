@@ -39,27 +39,26 @@ cd src/Plugins/ef-querylens-rider
 dotnet build src/Plugins/ef-querylens-visualstudio/EFQueryLens.VisualStudio/EFQueryLens.VisualStudio.csproj -c Debug
 ```
 
-## 3) Add a QueryLens DbContext factory
+## 3) Set up QueryLens for your project
 
-Add `IQueryLensDbContextFactory<TContext>` in your executable startup project so QueryLens can construct your DbContext reliably.
+Build your EF Core solution first, then run **Set up QueryLens**. QueryLens scans your `AddDbContext` registrations, copies the provider configuration into a gitignored generated factory, and updates `.gitignore` so nothing is committed.
 
-```csharp
-using EFQueryLens.Core;
+### In the IDE (recommended)
 
-public sealed class QueryLensDbContextFactory : IQueryLensDbContextFactory<AppDbContext>
-{
-	public AppDbContext Create()
-	{
-		var options = new DbContextOptionsBuilder<AppDbContext>()
-			.UseSqlServer("<connection-string>")
-			.Options;
+1. Open a `.cs` file in your executable host project (API, worker, or console app).
+2. Hover an EF Core LINQ query.
+3. If setup is needed, click **Set up QueryLens for this project** in the hover, or run the command **EF QueryLens: Setup** from the command palette.
+4. Rebuild the host project so the generated factory is compiled locally.
 
-		return new AppDbContext(options);
-	}
-}
+### From the CLI
+
+```bash
+dotnet run --project src/EFQueryLens.Cli -- setup path/to/YourHost.csproj
 ```
 
-See [factory-setup.md](factory-setup.md) for placement rules and multi-DbContext guidance.
+If your solution has multiple executable hosts, pass `--host path/to/Host.csproj`. See [cli-reference.md](cli-reference.md) for full options.
+
+See [factory-setup.md](factory-setup.md) for placement rules, multi-DbContext behavior, and manual factory authoring when you need full control.
 
 ## 4) Verify first hover
 
@@ -71,8 +70,9 @@ See [factory-setup.md](factory-setup.md) for placement rules and multi-DbContext
 ## Troubleshooting
 
 - If no preview appears, rebuild your solution and reopen the file.
+- If setup fails with "build the project first", compile the executable host and run setup again.
 - If actions fail, inspect plugin logs (`efquerylens` category).
-- If provider SQL looks wrong, validate your project uses a supported EF Core provider.
+- If provider SQL looks wrong, re-run setup with `--provider` or validate your `AddDbContext` configuration.
 
 ## Performance Tuning
 

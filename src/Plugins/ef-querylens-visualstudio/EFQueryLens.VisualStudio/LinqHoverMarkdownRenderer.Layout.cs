@@ -65,6 +65,53 @@ internal static partial class LinqHoverMarkdownRenderer
         return tb;
     }
 
+    private static FrameworkElement RenderFactoryPrompt(string markdown, string uri, int line, int character)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        _ = uri;
+        _ = line;
+        _ = character;
+
+        var hostBorder = new Border
+        {
+            Background = Brushes.Transparent,
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 380,
+            MaxHeight = 420,
+        };
+
+        var stack = new StackPanel
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+
+        foreach (var block in markdown.Replace("\r\n", "\n").Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = block.Trim();
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            if (trimmed.StartsWith("**", StringComparison.Ordinal)
+                && trimmed.EndsWith("**", StringComparison.Ordinal)
+                && trimmed.IndexOf("**", 2, StringComparison.Ordinal) < 0)
+            {
+                stack.Children.Add(RenderHeading(trimmed.Trim('*').Trim(), 13, preferredCopySql: null));
+                continue;
+            }
+
+            stack.Children.Add(RenderParagraph(trimmed, preferredCopySql: null));
+        }
+
+        hostBorder.Child = stack;
+        return hostBorder;
+    }
+
     private static FrameworkElement RenderHeaderLine(string text, string? preferredCopySql)
     {
         ThreadHelper.ThrowIfNotOnUIThread();

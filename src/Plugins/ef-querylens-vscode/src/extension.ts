@@ -4,7 +4,7 @@ import {
     commands,
     ExtensionContext,
     Hover,
-    OutputChannel,
+    LogOutputChannel,
     window,
     workspace,
 } from 'vscode';
@@ -24,10 +24,10 @@ import { createSqlActionHandlers } from './commands/sqlActions';
 import { QueryLensSettings } from './types';
 
 let client: LanguageClient | undefined;
-let queryLensOutputChannel: OutputChannel | undefined;
+let queryLensOutputChannel: LogOutputChannel | undefined;
 
 export function activate(context: ExtensionContext) {
-    queryLensOutputChannel = window.createOutputChannel('EF QueryLens');
+    queryLensOutputChannel = window.createOutputChannel('EF QueryLens', { log: true });
     context.subscriptions.push(queryLensOutputChannel);
 
     const packagedLspDir = context.asAbsolutePath('server');
@@ -109,7 +109,7 @@ export function activate(context: ExtensionContext) {
             },
             provideHover: async (document, position, token, next) => {
                 const hover = await next(document, position, token);
-                return enableTrustedHoverCommands(hover as Hover | null, ['efquerylens.copySql', 'efquerylens.showSql', 'efquerylens.openSqlEditor', 'efquerylens.recalculate']);
+                return enableTrustedHoverCommands(hover as Hover | null, ['efquerylens.copySql', 'efquerylens.showSql', 'efquerylens.openSqlEditor', 'efquerylens.recalculate', 'efquerylens.setup']);
             }
         },
         synchronize: {

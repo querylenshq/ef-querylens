@@ -13,7 +13,7 @@ public sealed partial class QueryLensEngine
         lock (gate)
         {
             var sourceFingerprint = BuildSourceFingerprint(sourceAssemblyPath);
-            var shadowAssemblyPath = _shadowCache.ResolveOrCreateBundle(sourceAssemblyPath);
+            var shadowAssemblyPath = ShadowAssemblyContextLoader.ResolveShadowAssemblyPath(sourceAssemblyPath);
 
             if (_alcCache.TryGetValue(sourceAssemblyPath, out var existing))
             {

@@ -91,6 +91,7 @@ public sealed partial class QueryEvaluator
 
             // 3. Build compilation assembly set and compute eval-runner cache key.
             var compilationAssemblies = BuildCompilationAssemblySet(alcCtx);
+            var extensionDiscoveryAssemblies = BuildExtensionDiscoveryAssemblySet(alcCtx, compilationAssemblies);
             var asmSetHash = ComputeAssemblySetHash(
                 compilationAssemblies);
             var evalCacheKey =
@@ -130,6 +131,7 @@ public sealed partial class QueryEvaluator
                 var stubs = new List<string>();
                 var synthesizedUsingStaticTypes = new HashSet<string>(StringComparer.Ordinal);
                 var synthesizedUsingNamespaces = new HashSet<string>(StringComparer.Ordinal);
+                var synthesizedUsingAliases = new Dictionary<string, string>(StringComparer.Ordinal);
                 var includeGridifyFallbackExtensions = false;
                 var maxRetries = 5;
                 CSharpCompilation compilation;
@@ -141,6 +143,14 @@ public sealed partial class QueryEvaluator
 
                     var workingRequest = request with { Expression = workingExpression };
 
+                    foreach (var import in InferExtensionStaticImportsProactively(
+                                 workingExpression,
+                                 dbContextType,
+                                 extensionDiscoveryAssemblies))
+                    {
+                        synthesizedUsingStaticTypes.Add(import);
+                    }
+
                     var src = BuildEvalSource(
                         dbContextType,
                         workingRequest,
@@ -149,6 +159,7 @@ public sealed partial class QueryEvaluator
                         knownTypes,
                         synthesizedUsingStaticTypes,
                         synthesizedUsingNamespaces,
+                        synthesizedUsingAliases,
                         includeGridifyFallbackExtensions);
                     compilation = BuildCompilation(src, refs);
                     var errors = compilation.GetDiagnostics()
@@ -194,6 +205,29 @@ public sealed partial class QueryEvaluator
 
                         stubs.Add(BuildStubDeclaration(n!, rootId, workingRequest, dbContextType));
                         changed = true;
+                    }
+
+                    foreach (var aliasName in errors
+                                 .Where(d => d.Id == "CS0103")
+                                 .Select(TryExtractMissingIdentifierFromDiagnostic)
+                                 .Where(n => n is not null)
+                                 .Distinct(StringComparer.Ordinal)
+                                 .Where(n => !workingRequest.UsingAliases.ContainsKey(n!)
+                                             && !synthesizedUsingAliases.ContainsKey(n!)
+                                             && LooksLikeTypeOrNamespacePrefix(
+                                                 n!,
+                                                 workingRequest.Expression,
+                                                 workingRequest.UsingAliases)))
+                    {
+                        if (TryInferUsingAliasForNamespacePrefix(
+                                aliasName!,
+                                workingRequest.Expression,
+                                knownTypes,
+                                out var aliasTarget)
+                            && synthesizedUsingAliases.TryAdd(aliasName!, aliasTarget))
+                        {
+                            changed = true;
+                        }
                     }
 
                     // CS0246 / CS0234: type or namespace not found. The type likely lives in a
@@ -249,8 +283,8 @@ public sealed partial class QueryEvaluator
                         if (oldStub is null)
                             continue;
 
-                        var typedStub = BuildStubFromTypeName(expectedType, argName);
-                        if (string.Equals(oldStub, typedStub, StringComparison.Ordinal))
+                        var typedStub = BuildStubFromTypeName(expectedType, argName, dbContextType);
+                        if (typedStub is null || string.Equals(oldStub, typedStub, StringComparison.Ordinal))
                             continue;
 
                         stubs.Remove(oldStub);
@@ -290,7 +324,11 @@ public sealed partial class QueryEvaluator
                         changed = true;
                     }
 
-                    foreach (var import in InferMissingExtensionStaticImports(errors, compilation, compilationAssemblies))
+                    foreach (var import in InferMissingExtensionStaticImports(
+                                 errors,
+                                 compilation,
+                                 extensionDiscoveryAssemblies,
+                                 dbContextType))
                     {
                         if (synthesizedUsingStaticTypes.Add(import))
                         {
@@ -374,8 +412,18 @@ public sealed partial class QueryEvaluator
             }
             else
             {
+                var failureMessage = captureSkipReason ?? captureError ?? "Offline capture produced no SQL commands.";
+                if (failureMessage.Contains("NullReferenceException", StringComparison.OrdinalIgnoreCase))
+                {
+                    failureMessage +=
+                        "\n\nHint: A captured in-memory collection in your query was stubbed for offline SQL preview. "
+                        + "QueryLens could not evaluate it safely — ensure the collection parameter has a concrete type "
+                        + "visible in the method signature (e.g. List<YourDto>), or use a direct id list pattern "
+                        + "like ids.Contains(x.Id).";
+                }
+
                 return Failure(
-                    captureSkipReason ?? captureError ?? "Offline capture produced no SQL commands.",
+                    failureMessage,
                     sw.Elapsed,
                     dbContextType,
                     alcCtx.LoadedAssemblies);

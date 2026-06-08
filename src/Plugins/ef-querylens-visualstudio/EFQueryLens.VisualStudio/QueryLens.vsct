@@ -40,6 +40,14 @@
           <LocCanonicalName>OpenLogs</LocCanonicalName>
         </Strings>
       </Button>
+
+      <Button guid="guidQueryLensCmdSet" id="cmdidSetupQueryLens" priority="0x0120" type="Button">
+        <Parent guid="guidQueryLensCmdSet" id="QueryLensToolsGroup" />
+        <Strings>
+          <ButtonText>Set up QueryLens</ButtonText>
+          <LocCanonicalName>SetupQueryLens</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -52,6 +60,7 @@
       <IDSymbol name="QueryLensToolsGroup" value="0x1020" />
       <IDSymbol name="cmdidRestartDaemon" value="0x0100" />
       <IDSymbol name="cmdidOpenLogs" value="0x0101" />
+      <IDSymbol name="cmdidSetupQueryLens" value="0x0102" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

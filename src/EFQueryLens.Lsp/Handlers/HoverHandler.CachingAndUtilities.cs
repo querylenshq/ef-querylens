@@ -1,5 +1,6 @@
 using EFQueryLens.Core;
 using EFQueryLens.Core.Contracts;
+using EFQueryLens.Lsp.Engine;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 
@@ -45,13 +46,21 @@ internal sealed partial class HoverHandler
 
     private bool IsExpired(CachedEntry entry)
     {
-        // InQueue placeholders use a shorter TTL so a stale "computing..." message
-        // doesn't linger if the background task silently failed or was never started.
-        var ttlMs = entry.Status is QueryTranslationStatus.InQueue
-            ? _inQueueCacheTtlMs
-            : _hoverCacheTtlMs;
+        // Ready results are durable: once a query has been translated, its SQL stays valid
+        // until the query text changes (a different normalized expression → a different
+        // semantic key), the assembly is rebuilt (a new fingerprint → a different key) or the
+        // caches are explicitly invalidated. We deliberately do NOT time-expire Ready entries
+        // so hovering the same unchanged query repeatedly never re-triggers analysis.
+        // The LRU trim (CacheMaxEntries) bounds memory instead of a timer.
+        if (entry.Status is QueryTranslationStatus.Ready)
+        {
+            return false;
+        }
 
-        return entry.CreatedAtTicks + TimeSpan.FromMilliseconds(ttlMs).Ticks <= DateTime.UtcNow.Ticks;
+        // Transient placeholders (InQueue / Starting / DaemonUnavailable) use the shorter TTL
+        // so a stale "computing..." message — or a brief daemon-unavailable error — doesn't
+        // linger if the background task silently failed or the engine was momentarily down.
+        return entry.CreatedAtTicks + TimeSpan.FromMilliseconds(_inQueueCacheTtlMs).Ticks <= DateTime.UtcNow.Ticks;
     }
 
     private async Task<string?> GetSourceTextAsync(string documentUri, string filePath, CancellationToken cancellationToken)
@@ -147,6 +156,24 @@ internal sealed partial class HoverHandler
         _hoverCache.Clear();
         _semanticHoverCache.Clear();
         LogHoverDebug($"hover-cache-invalidated reason={reason}");
+
+        if (_engine is IEngineControl control)
+        {
+            _ = InvalidateDaemonCacheAsync(control, reason);
+        }
+    }
+
+    private static async Task InvalidateDaemonCacheAsync(IEngineControl control, string reason)
+    {
+        try
+        {
+            await control.InvalidateCacheAsync();
+        }
+        catch
+        {
+            // Best-effort — LSP caches are already cleared.
+            Console.Error.WriteLine($"[QL-Hover] daemon-cache-invalidate-failed reason={reason}");
+        }
     }
 
     private void LogHoverDebug(string message)

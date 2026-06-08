@@ -54,15 +54,27 @@ internal sealed partial class HoverHandler
             return computed.Hover;
         }
 
-        // Cache miss — return InQueue immediately and compute in background.
-        // TryCacheEntryInQueue uses TryAdd so only one concurrent hover wins the race
-        // and starts the background task; others read the InQueue entry next hover.
+        // Cache miss — start the background compute. TryCacheEntryInQueue uses TryAdd so only one
+        // concurrent hover wins the race and starts the task; others read the InQueue entry.
         var inQueueEntry = new ComputedEntry(BuildInQueueHover(), BuildInQueueStructured(), QueryTranslationStatus.InQueue);
         if (TryCacheEntryInQueue(cacheKey, inQueueEntry))
         {
             LogHoverDebug($"hover-cache-miss-queued line={effectiveLine} char={effectiveCharacter}");
-            _ = Task.Run(() => BackgroundComputeAndCacheAsync(
+            var compute = Task.Run(() => BackgroundComputeAndCacheAsync(
                 cacheKey, filePath, sourceText, effectiveLine, effectiveCharacter, semanticContext));
+
+            // Bounded synchronous wait: give the compute a short budget to finish so a fast (or
+            // already-warmed) query shows its SQL on the FIRST hover instead of "computing…".
+            // If it doesn't finish in time, fall back to the placeholder as before.
+            if (_hoverWaitBudgetMs > 0)
+            {
+                var finished = await Task.WhenAny(compute, Task.Delay(_hoverWaitBudgetMs, cancellationToken));
+                if (finished == compute && TryGetCachedEntry(cacheKey, out var freshEntry))
+                {
+                    LogHoverDebug($"hover-wait-resolved line={effectiveLine} char={effectiveCharacter} status={freshEntry!.Status}");
+                    return freshEntry.Hover;
+                }
+            }
         }
         else
         {

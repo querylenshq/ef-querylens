@@ -4,8 +4,8 @@ using EFQueryLens.Lsp.Parsing;
 namespace EFQueryLens.Lsp.Services;
 
 /// <summary>
-/// Warms the hover cache by translating all LINQ chains in a document on a background
-/// thread and writing the results into the hover cache via <see cref="_onPrewarmed"/>.
+/// Warms the daemon translation cache by issuing fire-and-forget
+/// <c>POST /translate/warm</c> requests for all LINQ chains in a document.
 ///
 /// Triggered on <c>didOpen</c> and <c>didSave</c> immediately via <see cref="WarmDocument"/>,
 /// and on <c>didChange</c> with a configurable debounce delay via
@@ -14,17 +14,20 @@ namespace EFQueryLens.Lsp.Services;
 internal sealed class TranslationPrewarmService
 {
     private readonly HoverPreviewService _hoverPreviewService;
-    private readonly Action<string, string, int, int, CombinedHoverResult>? _onPrewarmed;
+    private readonly Func<string, string, IReadOnlyList<LinqChainInfo>, IReadOnlyList<string>>? _resolveChainKeys;
+    private readonly Func<string, bool>? _isKeyReady;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _debounceTokens
         = new(StringComparer.OrdinalIgnoreCase);
     private readonly int _debounceMs;
 
     public TranslationPrewarmService(
         HoverPreviewService hoverPreviewService,
-        Action<string, string, int, int, CombinedHoverResult>? onPrewarmed = null)
+        Func<string, string, IReadOnlyList<LinqChainInfo>, IReadOnlyList<string>>? resolveChainKeys = null,
+        Func<string, bool>? isKeyReady = null)
     {
         _hoverPreviewService = hoverPreviewService;
-        _onPrewarmed = onPrewarmed;
+        _resolveChainKeys = resolveChainKeys;
+        _isKeyReady = isKeyReady;
         _debounceMs = LspEnvironment.ReadInt(
             "QUERYLENS_CHANGE_PREWARM_DEBOUNCE_MS",
             fallback: 1_500,
@@ -51,7 +54,6 @@ internal sealed class TranslationPrewarmService
     {
         if (_debounceMs <= 0) return;
 
-        // Cancel any previously scheduled warm for this file.
         if (_debounceTokens.TryRemove(filePath, out var oldCts))
         {
             oldCts.Cancel();
@@ -93,14 +95,28 @@ internal sealed class TranslationPrewarmService
             if (chains.Count == 0)
                 return;
 
-            foreach (var chain in chains)
+            var keys = _resolveChainKeys?.Invoke(filePath, sourceText, chains);
+
+            for (var i = 0; i < chains.Count; i++)
             {
                 if (ct.IsCancellationRequested) return;
 
-                var combined = await _hoverPreviewService.BuildCombinedAsync(
-                    filePath, sourceText, chain.Line, chain.Character, ct);
+                var chain = chains[i];
+                var key = keys is not null && i < keys.Count ? keys[i] : null;
 
-                _onPrewarmed?.Invoke(filePath, sourceText, chain.Line, chain.Character, combined);
+                if (key is not null && _isKeyReady?.Invoke(key) == true)
+                {
+                    continue;
+                }
+
+                await _hoverPreviewService.WarmAtPositionAsync(
+                    filePath,
+                    sourceText,
+                    chain.Line,
+                    chain.Character,
+                    ct);
+
+                await Task.Yield();
             }
         }
         catch

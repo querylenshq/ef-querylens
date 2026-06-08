@@ -17,6 +17,12 @@ internal static partial class LinqHoverMarkdownRenderer
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
+        if (string.Equals(response.Mode, "factory-prompt", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(response.StatusMessage))
+        {
+            return RenderFactoryPrompt(response.StatusMessage!, uri, line, character);
+        }
+
         var status = response.Status;
         var isQueueStatus = status is 1 or 2;
         var isServiceUnavailable = status is 3;

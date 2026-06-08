@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
+using EFQueryLens.Lsp.Engine;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 
@@ -9,18 +11,24 @@ internal sealed partial class HoverHandler
 {
     private readonly DocumentManager _documentManager;
     private readonly HoverPreviewService _hoverPreviewService;
+    private readonly IQueryLensEngine? _engine;
     private readonly ConcurrentDictionary<string, CachedEntry> _hoverCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CachedEntry> _semanticHoverCache = new(StringComparer.OrdinalIgnoreCase);
     private int _hoverCacheTtlMs;
     private int _inQueueCacheTtlMs;
     private int _hoverQueuedAdaptiveWaitMs;
     private int _structuredQueuedAdaptiveWaitMs;
+    private int _hoverWaitBudgetMs;
     private bool _debugEnabled;
 
-    public HoverHandler(DocumentManager documentManager, HoverPreviewService hoverPreviewService)
+    public HoverHandler(
+        DocumentManager documentManager,
+        HoverPreviewService hoverPreviewService,
+        IQueryLensEngine? engine = null)
     {
         _documentManager = documentManager;
         _hoverPreviewService = hoverPreviewService;
+        _engine = engine;
         _hoverCacheTtlMs = LspEnvironment.ReadInt(
             "QUERYLENS_HOVER_CACHE_TTL_MS",
             fallback: 15_000,
@@ -41,6 +49,14 @@ internal sealed partial class HoverHandler
             fallback: 200,
             min: 0,
             max: 2_000);
+        // How long the first hover on a cache miss will synchronously wait for the background
+        // compute before falling back to the "computing…" placeholder. 0 = never wait (return
+        // the placeholder immediately, the prior behavior).
+        _hoverWaitBudgetMs = LspEnvironment.ReadInt(
+            "QUERYLENS_HOVER_WAIT_BUDGET_MS",
+            fallback: 500,
+            min: 0,
+            max: 5_000);
         _debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
     }
 

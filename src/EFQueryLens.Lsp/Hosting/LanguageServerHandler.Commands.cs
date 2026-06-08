@@ -1,3 +1,4 @@
+using EFQueryLens.Core.Scaffolding;
 using EFQueryLens.Lsp.Handlers;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Newtonsoft.Json.Linq;
@@ -48,6 +49,114 @@ internal sealed partial class LanguageServerHandler
             ["removedCachedResults"] = invalidateResponse.RemovedCachedResults,
             ["removedInflightJobs"] = invalidateResponse.RemovedInflightJobs,
             ["hover"] = hover is null ? null : JObject.FromObject(hover),
+        };
+    }
+
+    [JsonRpcMethod("efquerylens/setup/detect", UseSingleObjectParameterDeserialization = true)]
+    public Task<JObject> SetupDetectAsync(TextDocumentPositionParams request, CancellationToken ct)
+    {
+        if (_debugEnabled) Console.Error.WriteLine("[QL-LSP] request method=efquerylens/setup/detect");
+
+        var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
+        var detect = _daemonControl.DetectSetupHosts(filePath);
+        return Task.FromResult(ToSetupDetectJObject(detect));
+    }
+
+    [JsonRpcMethod("efquerylens/setup/apply", UseSingleObjectParameterDeserialization = true)]
+    public async Task<JObject> SetupApplyAsync(JObject request, CancellationToken ct)
+    {
+        if (_debugEnabled) Console.Error.WriteLine("[QL-LSP] request method=efquerylens/setup/apply");
+
+        var textDocumentUri = request["textDocument"]?["uri"]?.Value<string>();
+        if (string.IsNullOrWhiteSpace(textDocumentUri))
+        {
+            return new JObject
+            {
+                ["success"] = false,
+                ["message"] = "Missing textDocument.uri for setup apply.",
+                ["action"] = SetupAction.NotBuilt.ToString(),
+            };
+        }
+
+        var filePath = DocumentPathResolver.Resolve(new Uri(textDocumentUri));
+        var applyRequest = new SetupApplyRequest
+        {
+            HostProjectPath = request["hostProjectPath"]?.Value<string>(),
+            ProviderOverride = ParseProviderKind(request["provider"]?.Value<string>()),
+            Force = request["force"]?.Value<bool>() ?? false,
+        };
+
+        var response = await _daemonControl.SetupApplyAsync(filePath, applyRequest, ct);
+        if (response.Success)
+        {
+            _hover.InvalidateForManualRecalculate();
+        }
+
+        return ToSetupResponseJObject(response);
+    }
+
+    [JsonRpcMethod("efquerylens/setup", UseSingleObjectParameterDeserialization = true)]
+    public async Task<JObject> SetupAsync(TextDocumentPositionParams request, CancellationToken ct)
+    {
+        if (_debugEnabled) Console.Error.WriteLine("[QL-LSP] request method=efquerylens/setup");
+
+        var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
+        var response = await _daemonControl.SetupApplyAsync(filePath, new SetupApplyRequest(), ct);
+
+        if (response.Success)
+        {
+            _hover.InvalidateForManualRecalculate();
+        }
+
+        return ToSetupResponseJObject(response);
+    }
+
+    private static JObject ToSetupResponseJObject(SetupResponse response)
+        => new()
+        {
+            ["success"] = response.Success,
+            ["message"] = response.Message,
+            ["action"] = response.Action,
+            ["generatedFilePath"] = response.GeneratedFilePath,
+            ["provider"] = response.Provider.ToString(),
+            ["requiresReview"] = response.RequiresReview,
+        };
+
+    private static JObject ToSetupDetectJObject(SetupDetectResult detect)
+    {
+        var hosts = new JArray(
+            detect.Hosts.Select(host => new JObject
+            {
+                ["projectPath"] = host.ProjectPath,
+                ["displayName"] = host.DisplayName,
+                ["assemblyPath"] = host.AssemblyPath,
+                ["projectDirectory"] = host.ProjectDirectory,
+                ["isDefault"] = host.IsDefault,
+            }));
+
+        return new JObject
+        {
+            ["requiresHostSelection"] = detect.RequiresHostSelection,
+            ["defaultHostProjectPath"] = detect.DefaultHostProjectPath,
+            ["hosts"] = hosts,
+            ["message"] = detect.Message,
+        };
+    }
+
+    private static ProviderKind ParseProviderKind(string? provider)
+    {
+        if (string.IsNullOrWhiteSpace(provider))
+        {
+            return ProviderKind.Unknown;
+        }
+
+        return provider.Trim().ToLowerInvariant() switch
+        {
+            "sqlserver" => ProviderKind.SqlServer,
+            "npgsql" or "postgres" or "postgresql" => ProviderKind.Npgsql,
+            "mysql" => ProviderKind.MySql,
+            "sqlite" => ProviderKind.Sqlite,
+            _ => ProviderKind.Unknown,
         };
     }
 
@@ -223,6 +332,21 @@ internal sealed partial class LanguageServerHandler
 
             await RecalculatePreviewAsync(req, ct);
             return new JObject { ["success"] = true };
+        }
+
+        if (command.Equals("efquerylens.setup", StringComparison.OrdinalIgnoreCase))
+        {
+            var arguments = request["arguments"] as JArray;
+            var req = arguments?.Count > 0
+                ? arguments[0].ToObject<TextDocumentPositionParams>()
+                : null;
+
+            if (req is null)
+            {
+                return new JObject { ["success"] = false, ["message"] = "Missing setup request payload." };
+            }
+
+            return await SetupAsync(req, ct);
         }
 
         return new JObject

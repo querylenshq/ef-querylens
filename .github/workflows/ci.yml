@@ -27,11 +27,13 @@ jobs:
         run: dotnet build EFQueryLens.slnx --no-restore
       - name: Test
         run: dotnet test EFQueryLens.slnx --no-build
-      - name: Build VS Code client
+      - name: Test VS Code extension
         working-directory: src/Plugins/ef-querylens-vscode
         run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
           npm ci
-          npm run compile
+          xvfb-run -a npm test
       - name: Build Rider plugin Kotlin sources
         working-directory: src/Plugins/ef-querylens-rider
         run: |

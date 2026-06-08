@@ -47,6 +47,11 @@ internal sealed partial class ShadowAssemblyCache
             throw new DirectoryNotFoundException($"Source output directory not found: {sourceDir}");
         }
 
+        // The shadow root may be deleted between calls (e.g., isolated test roots).
+        // Re-create required directories so promotion via Directory.Move never fails.
+        Directory.CreateDirectory(_bundleRoot);
+        Directory.CreateDirectory(_stagingRoot);
+
         var manifest = BuildManifest(sourceDir);
         var bundleKey = ComputeBundleKey(sourceDir, manifest);
         var bundlePath = Path.Combine(_bundleRoot, bundleKey);
@@ -54,12 +59,23 @@ internal sealed partial class ShadowAssemblyCache
 
         if (File.Exists(bundleAssemblyPath))
         {
-            lock (_gate)
+            // Incomplete bundles can exist if an earlier promotion happened before all
+            // executable artifacts (runtimeconfig/deps) were present. Verify and
+            // re-create when required so ALC loading never fails.
+            var runtimeConfigPath = Path.ChangeExtension(bundleAssemblyPath, ".runtimeconfig.json");
+            var depsPath = Path.ChangeExtension(bundleAssemblyPath, ".deps.json");
+
+            if (File.Exists(runtimeConfigPath) && File.Exists(depsPath))
             {
-                TouchDirectory(bundlePath);
+                lock (_gate)
+                {
+                    TouchDirectory(bundlePath);
+                }
+
+                return bundleAssemblyPath;
             }
 
-            return bundleAssemblyPath;
+            TryDeleteDirectory(bundlePath);
         }
 
         var stagingPath = Path.Combine(_stagingRoot, $"{bundleKey}-{Guid.NewGuid():N}");

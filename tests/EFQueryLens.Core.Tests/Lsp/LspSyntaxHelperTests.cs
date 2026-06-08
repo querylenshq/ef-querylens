@@ -635,6 +635,99 @@ public class LspSyntaxHelperTests
     }
 
     [Fact]
+    public void ExtractUsingContext_MergesProjectGlobalUsings()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ql-global-usings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "GlobalUsings.cs"), "global using SampleMySqlApp.Domain.Extensions;");
+            File.WriteAllText(Path.Combine(dir, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            var sourceFile = Path.Combine(dir, "Report.cs");
+            File.WriteAllText(sourceFile, "namespace Demo; internal sealed class Report { }");
+
+            var context = LspSyntaxHelper.ExtractUsingContext("namespace Demo; internal sealed class C { }", sourceFile);
+
+            Assert.Contains("SampleMySqlApp.Domain.Extensions", context.Imports);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExtractUsingContext_MergesParentDirectoryGlobalUsingsAndBuildProps()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ql-parent-usings-" + Guid.NewGuid().ToString("N"));
+        var projectDir = Path.Combine(root, "src", "Demo");
+        Directory.CreateDirectory(projectDir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(root, "GlobalUsings.cs"),
+                "global using Domain = Share.Medics.Insights.Domain;");
+            File.WriteAllText(
+                Path.Combine(root, "Directory.Build.props"),
+                """
+                <Project>
+                  <ItemGroup>
+                    <Using Include="Share.Medics.Insights.Domain.Enums" Alias="Enums" />
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDir, "Demo.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            var sourceFile = Path.Combine(projectDir, "Report.cs");
+            File.WriteAllText(sourceFile, "namespace Demo; internal sealed class Report { }");
+
+            var context = LspSyntaxHelper.ExtractUsingContext("namespace Demo; internal sealed class C { }", sourceFile);
+
+            Assert.True(context.Aliases.TryGetValue("Domain", out var domainTarget));
+            Assert.Equal("Share.Medics.Insights.Domain", domainTarget);
+            Assert.True(context.Aliases.TryGetValue("Enums", out var enumsTarget));
+            Assert.Equal("Share.Medics.Insights.Domain.Enums", enumsTarget);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExtractUsingContext_MergesCsprojUsingItems()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ql-csproj-usings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, "Demo.csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup>
+                    <Using Include="System.Linq" />
+                    <Using Include="SampleMySqlApp.Domain.Extensions" Static="true" />
+                    <Using Include="SampleMySqlApp.Domain.Entities" Alias="Enums" />
+                  </ItemGroup>
+                </Project>
+                """);
+            var sourceFile = Path.Combine(dir, "Report.cs");
+            File.WriteAllText(sourceFile, "namespace Demo; internal sealed class Report { }");
+
+            var context = LspSyntaxHelper.ExtractUsingContext("namespace Demo; internal sealed class C { }", sourceFile);
+
+            Assert.Contains("System.Linq", context.Imports);
+            Assert.Contains("SampleMySqlApp.Domain.Extensions", context.StaticTypes);
+            Assert.True(context.Aliases.TryGetValue("Enums", out var aliasTarget));
+            Assert.Equal("SampleMySqlApp.Domain.Entities", aliasTarget);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ExtractUsingContext_DeduplicatesRepeatedImports()
     {
         var source = """

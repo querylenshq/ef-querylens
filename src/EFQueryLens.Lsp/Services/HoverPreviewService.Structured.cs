@@ -21,12 +21,14 @@ internal sealed partial class HoverPreviewService
             cancellationToken,
             log);
 
-        return FormatStructured(canonical, filePath);
+        return FormatStructured(canonical, filePath, line, character);
     }
 
     private QueryLensStructuredHoverResult FormatStructured(
         HoverCanonicalComputationResult canonical,
-        string filePath)
+        string filePath,
+        int line,
+        int character)
     {
         static QueryLensStructuredHoverResult Fail(
             string msg,
@@ -53,6 +55,28 @@ internal sealed partial class HoverPreviewService
                 Mode: "queued",
                 Status: canonical.Status,
                 StatusMessage: canonical.Message,
+                AvgTranslationMs: canonical.AvgTranslationMs,
+                LastTranslationMs: canonical.LastTranslationMs);
+        }
+
+        if (!canonical.Success && IsNoFactoryError(canonical.Message))
+        {
+            return new QueryLensStructuredHoverResult(
+                Success: true,
+                ErrorMessage: null,
+                Statements: [],
+                CommandCount: 0,
+                SourceExpression: canonical.SourceExpression,
+                ExecutedExpression: null,
+                DbContextType: null,
+                ProviderName: null,
+                SourceFile: filePath,
+                SourceLine: canonical.SourceLine,
+                Warnings: [],
+                EnrichedSql: null,
+                Mode: "factory-prompt",
+                Status: QueryTranslationStatus.Ready,
+                StatusMessage: BuildFactoryMissingMarkdown(filePath, line, character),
                 AvgTranslationMs: canonical.AvgTranslationMs,
                 LastTranslationMs: canonical.LastTranslationMs);
         }

@@ -23,6 +23,8 @@ internal sealed class FakeQueryLensEngine : IQueryLensEngine
         CancellationToken ct = default) =>
         Task.FromResult(new ModelSnapshot { DbContextType = "FakeContext" });
 
+    public Task InvalidateAssemblyCachesAsync(CancellationToken ct = default) => Task.CompletedTask;
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
@@ -44,6 +46,8 @@ internal sealed class FakeEngineControl : IQueryLensEngine, IEngineControl
         ModelInspectionRequest request,
         CancellationToken ct = default) =>
         Task.FromResult(new ModelSnapshot { DbContextType = "FakeContext" });
+
+    public Task InvalidateAssemblyCachesAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

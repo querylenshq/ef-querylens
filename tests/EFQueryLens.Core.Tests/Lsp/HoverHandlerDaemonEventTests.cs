@@ -123,6 +123,8 @@ public class HoverHandlerDaemonEventTests
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
+        public Task InvalidateAssemblyCachesAsync(CancellationToken ct = default) => Task.CompletedTask;
+
         public Task<QueryTranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct = default)
             => Task.FromResult(new QueryTranslationResult());
 

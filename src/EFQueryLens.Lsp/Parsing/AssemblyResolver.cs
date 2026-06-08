@@ -146,7 +146,7 @@ public static partial class AssemblyResolver
     /// <summary>
     /// Determines if a .csproj is an executable project (console app or web app).
     /// </summary>
-    private static bool IsExecutableProject(string csprojContent)
+    internal static bool IsExecutableProject(string csprojContent)
     {
         // Web SDK projects are always executable
         if (csprojContent.Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase) ||

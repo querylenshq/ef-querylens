@@ -21,4 +21,10 @@ public interface IQueryLensEngine : IAsyncDisposable
     Task<ModelSnapshot> InspectModelAsync(
         ModelInspectionRequest request,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Evicts all cached assembly load contexts so the next translation reloads from shadow
+    /// copies. Call after a rebuild or when translation caches are invalidated.
+    /// </summary>
+    Task InvalidateAssemblyCachesAsync(CancellationToken ct = default);
 }

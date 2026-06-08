@@ -2,11 +2,12 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EFQueryLens.Core.Contracts;
+using EFQueryLens.Core.Scaffolding;
 
 namespace EFQueryLens.Lsp.Engine;
 
 /// <summary>
-/// Engine control operations beyond IQueryLensEngine (restart, invalidate cache).
+/// Engine control operations beyond IQueryLensEngine (restart, invalidate cache, setup).
 /// </summary>
 internal interface IEngineControl
 {
@@ -14,6 +15,17 @@ internal interface IEngineControl
     Task RestartAsync(CancellationToken ct = default);
     Task InvalidateCacheAsync(CancellationToken ct = default);
     Task WarmTranslateAsync(TranslationRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// Generates the offline DbContext factory for a project. Default implementation reports
+    /// "unavailable" so non-HTTP/fake engines need not implement it.
+    /// </summary>
+    Task<SetupResult> SetupAsync(SetupRequest request, CancellationToken ct = default)
+        => Task.FromResult(new SetupResult
+        {
+            Action = SetupAction.NotBuilt,
+            Message = "Setup is unavailable for this engine mode.",
+        });
 }
 
 /// <summary>
@@ -66,6 +78,9 @@ internal sealed class EngineHttpClient : IQueryLensEngine, IEngineControl
         return await PostJsonAsync<ModelInspectionRequest, ModelSnapshot>("/inspect-model", request, ct);
     }
 
+    public Task InvalidateAssemblyCachesAsync(CancellationToken ct = default) =>
+        InvalidateCacheAsync(ct);
+
     // --- IEngineControl ---
 
     public async Task PingAsync(CancellationToken ct = default)
@@ -116,6 +131,19 @@ internal sealed class EngineHttpClient : IQueryLensEngine, IEngineControl
         catch
         {
             // Best-effort — engine may still be starting up; pre-warm is not critical.
+        }
+    }
+
+    public async Task<SetupResult> SetupAsync(SetupRequest request, CancellationToken ct = default)
+    {
+        try
+        {
+            return await PostJsonAsync<SetupRequest, SetupResult>("/setup", request, ct);
+        }
+        catch (HttpRequestException)
+        {
+            await TryReconnectPortAsync(ct);
+            return await PostJsonAsync<SetupRequest, SetupResult>("/setup", request, ct);
         }
     }
 

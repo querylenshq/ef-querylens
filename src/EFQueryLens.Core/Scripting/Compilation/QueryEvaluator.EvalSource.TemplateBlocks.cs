@@ -27,11 +27,12 @@ public sealed partial class QueryEvaluator
         IReadOnlySet<string> knownNamespaces,
         IReadOnlySet<string> knownTypes,
         IReadOnlyCollection<string> synthesizedUsingStaticTypes,
-        IReadOnlyCollection<string> synthesizedUsingNamespaces)
+        IReadOnlyCollection<string> synthesizedUsingNamespaces,
+        IReadOnlyDictionary<string, string> synthesizedUsingAliases)
     {
         foreach (var import in request.AdditionalImports)
         {
-            if (IsValidUsingName(import) && IsResolvableNamespace(import, knownNamespaces))
+            if (IsValidUsingName(import))
                 sb.AppendLine($"using {import};");
         }
 
@@ -44,16 +45,23 @@ public sealed partial class QueryEvaluator
         }
 
         foreach (var kvp in request.UsingAliases
+                     .Where(kvp => IsValidAliasName(kvp.Key) && IsValidUsingName(kvp.Value))
+                     .OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
+        {
+            sb.AppendLine($"using {kvp.Key} = {kvp.Value};");
+        }
+
+        foreach (var kvp in synthesizedUsingAliases
                      .Where(kvp => IsValidAliasName(kvp.Key)
                                    && IsValidUsingName(kvp.Value)
-                                   && IsResolvableTypeOrNamespace(kvp.Value, knownNamespaces, knownTypes))
+                                   && !request.UsingAliases.ContainsKey(kvp.Key))
                      .OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
         {
             sb.AppendLine($"using {kvp.Key} = {kvp.Value};");
         }
 
         foreach (var st in request.UsingStaticTypes
-                     .Where(st => IsValidUsingName(st) && IsResolvableType(st, knownTypes))
+                     .Where(IsValidUsingName)
                      .Distinct(StringComparer.Ordinal)
                      .Order(StringComparer.Ordinal))
         {
@@ -80,9 +88,10 @@ public sealed partial class QueryEvaluator
         var contextDeclaration =
             $"        var {request.ContextVariableName} = ({dbContextType.FullName!.Replace('+', '.')})(object)__ctx__;";
 
-        var stubsBlock = stubs.Count == 0
+        var mergedStubs = MergeLocalAndRetryStubs(dbContextType, request, stubs);
+        var stubsBlock = mergedStubs.Count == 0
             ? string.Empty
-            : string.Join(Environment.NewLine, stubs.Select(static stub => $"        {stub}"));
+            : string.Join(Environment.NewLine, mergedStubs.Select(static stub => $"        {stub}"));
 
         var renderedRunner = EvalSourceTemplateCatalog.Render(
             EvalSourceTemplateCatalog.Runner,
@@ -95,6 +104,57 @@ public sealed partial class QueryEvaluator
             });
 
         sb.Append(renderedRunner);
+    }
+
+    private static List<string> MergeLocalAndRetryStubs(
+        Type dbContextType,
+        TranslationRequest request,
+        IReadOnlyList<string> stubs)
+    {
+        var merged = new List<string>();
+        var declared = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var kv in request.LocalVariableTypes.OrderBy(static x => x.Key, StringComparer.Ordinal))
+        {
+            if (string.Equals(kv.Key, request.ContextVariableName, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(kv.Value))
+            {
+                continue;
+            }
+
+            var stub = BuildStubFromTypeName(kv.Value, kv.Key, dbContextType)
+                       ?? BuildStubDeclaration(kv.Key, null, request, dbContextType);
+            if (TryExtractStubVariableName(stub, out var name) && declared.Add(name))
+            {
+                merged.Add(stub);
+            }
+        }
+
+        foreach (var stub in stubs)
+        {
+            if (TryExtractStubVariableName(stub, out var name) && declared.Add(name))
+            {
+                merged.Add(stub);
+            }
+        }
+
+        return merged;
+    }
+
+    private static bool TryExtractStubVariableName(string stub, out string variableName)
+    {
+        variableName = string.Empty;
+        var match = System.Text.RegularExpressions.Regex.Match(
+            stub,
+            @"^\s*(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        variableName = match.Groups[2].Value;
+        return !string.IsNullOrWhiteSpace(variableName);
     }
 
     private static void AppendFallbackExtensions(StringBuilder sb, bool includeGridifyFallbackExtensions)

@@ -17,8 +17,11 @@ using Task = System.Threading.Tasks.Task;
 [Guid(QueryLensCommandGuids.PackageString)]
 internal sealed class QueryLensPackage : AsyncPackage
 {
+    internal static QueryLensPackage? Instance { get; private set; }
+
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
+        Instance = this;
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
         if (await GetServiceAsync(typeof(IMenuCommandService)) is not OleMenuCommandService menuCommandService)
@@ -30,6 +33,7 @@ internal sealed class QueryLensPackage : AsyncPackage
 
         AddMenuCommand(menuCommandService, QueryLensCommandIds.RestartDaemon, HandleRestartDaemonCommand);
         AddMenuCommand(menuCommandService, QueryLensCommandIds.OpenLogs, HandleOpenLogsCommand);
+        AddMenuCommand(menuCommandService, QueryLensCommandIds.SetupQueryLens, HandleSetupQueryLensCommand);
     }
 
     private static void AddMenuCommand(OleMenuCommandService menuCommandService, int commandId, EventHandler handler)
@@ -58,6 +62,12 @@ internal sealed class QueryLensPackage : AsyncPackage
         });
     }
 
+    private void HandleSetupQueryLensCommand(object sender, EventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        QueryLensSetupService.RunFromActiveEditor(this);
+    }
+
     private void HandleOpenLogsCommand(object sender, EventArgs e)
     {
         RunCommand(async cancellationToken =>
@@ -84,6 +94,11 @@ internal sealed class QueryLensPackage : AsyncPackage
     {
         if (disposing)
         {
+            if (ReferenceEquals(Instance, this))
+            {
+                Instance = null;
+            }
+
             QueryLensLogOpener.StopTail();
             QueryLensLanguageClient.DisposeCurrent();
         }

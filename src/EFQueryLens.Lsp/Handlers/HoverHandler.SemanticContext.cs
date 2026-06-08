@@ -1,5 +1,5 @@
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp.Parsing;
-using Microsoft.CodeAnalysis;
 
 namespace EFQueryLens.Lsp.Handlers;
 
@@ -42,25 +42,16 @@ internal sealed partial class HoverHandler
     {
         semanticContext = null;
 
-        // Resolve the assembly fingerprint and DbContext type once — both are needed
-        // to build a semantic key that can be matched by the prewarm service (Phase 4).
-        var fingerprint = AssemblyResolver.TryGetAssemblyFingerprint(filePath)
-                          ?? $"no-assembly|{Path.GetFullPath(filePath)}";
-
-        var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
-        var dbContextType = (!string.IsNullOrWhiteSpace(targetAssembly)
-                             && !targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal))
-            ? AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly)
-            : null;
-
         if (TryFindContainingChain(sourceText, line, character, out var containingChain))
         {
-            dbContextType ??= LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, containingChain.ContextVariableName);
-            semanticContext = new SemanticHoverContext(
-                SemanticKey: $"{fingerprint}|{dbContextType ?? string.Empty}|{NormalizeWhitespace(containingChain.Expression)}",
-                EffectiveLine: containingChain.Line,
-                EffectiveCharacter: containingChain.Character);
-            return true;
+            semanticContext = CreateSemanticHoverContext(
+                filePath,
+                sourceText,
+                containingChain.Expression,
+                containingChain.ContextVariableName,
+                containingChain.Line,
+                containingChain.Character);
+            return semanticContext is not null;
         }
 
         var siblingRoots = ProjectSourceHelper.GetSiblingRoots(filePath);
@@ -71,12 +62,76 @@ internal sealed partial class HoverHandler
             return false;
         }
 
-        dbContextType ??= LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName);
-        semanticContext = new SemanticHoverContext(
-            SemanticKey: $"{fingerprint}|{dbContextType ?? string.Empty}|{NormalizeWhitespace(expression)}",
-            EffectiveLine: line,
-            EffectiveCharacter: character);
-        return true;
+        semanticContext = CreateSemanticHoverContext(
+            filePath,
+            sourceText,
+            expression,
+            contextVariableName,
+            line,
+            character);
+        return semanticContext is not null;
+    }
+
+    /// <summary>
+    /// Single source of truth for the semantic (translation-request) cache key.
+    /// Uses the same canonical hash as the daemon so locals, usings, and aliases
+    /// all participate in cache identity.
+    /// </summary>
+    internal static string BuildSemanticKey(TranslationRequest request)
+        => TranslationRequestBuilder.BuildSemanticCacheKey(request);
+
+    /// <summary>
+    /// Builds the semantic key for every chain in a document. Used by the prewarm service
+    /// to decide which chains are already analysed.
+    /// </summary>
+    internal IReadOnlyList<string> BuildChainSemanticKeys(
+        string filePath,
+        string sourceText,
+        IReadOnlyList<LinqChainInfo> chains)
+    {
+        var keys = new string[chains.Count];
+        for (var i = 0; i < chains.Count; i++)
+        {
+            var chain = chains[i];
+            var request = TranslationRequestBuilder.TryBuild(
+                filePath,
+                sourceText,
+                chain.Expression,
+                chain.ContextVariableName,
+                chain.Line,
+                chain.Character);
+            keys[i] = request is not null
+                ? BuildSemanticKey(request)
+                : $"unresolved|{chain.Line}|{chain.Character}|{NormalizeWhitespace(chain.Expression)}";
+        }
+
+        return keys;
+    }
+
+    private static SemanticHoverContext? CreateSemanticHoverContext(
+        string filePath,
+        string sourceText,
+        string expression,
+        string contextVariableName,
+        int effectiveLine,
+        int effectiveCharacter)
+    {
+        var request = TranslationRequestBuilder.TryBuild(
+            filePath,
+            sourceText,
+            expression,
+            contextVariableName,
+            effectiveLine,
+            effectiveCharacter);
+        if (request is null)
+        {
+            return null;
+        }
+
+        return new SemanticHoverContext(
+            SemanticKey: BuildSemanticKey(request),
+            EffectiveLine: effectiveLine,
+            EffectiveCharacter: effectiveCharacter);
     }
 
     private static bool TryFindContainingChain(string sourceText, int line, int character, out LinqChainInfo containingChain)

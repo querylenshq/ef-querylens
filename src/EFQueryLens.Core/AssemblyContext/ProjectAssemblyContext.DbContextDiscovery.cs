@@ -133,9 +133,33 @@ public sealed partial class ProjectAssemblyContext
             string.Equals(t.Name, typeName, StringComparison.Ordinal) ||
             string.Equals(t.FullName, typeName, StringComparison.Ordinal));
 
+        nameMatch ??= TryResolveDbContextByImplementedInterface(all, typeName);
+
         return nameMatch ?? throw new InvalidOperationException(
             $"DbContext type '{typeName}' not found in '{Path.GetFileName(AssemblyPath)}'. " +
             $"Available: {string.Join(", ", all.Select(t => t.FullName))}");
+    }
+
+    /// <summary>
+    /// Maps injected DbContext abstractions (e.g. <c>IReadOnlyMedicsInsightsDbContext</c>)
+    /// to the single concrete <see cref="DbContext"/> that implements them.
+    /// </summary>
+    private static Type? TryResolveDbContextByImplementedInterface(IReadOnlyList<Type> contexts, string typeName)
+    {
+        var simpleName = typeName;
+        var lastDot = typeName.LastIndexOf('.');
+        if (lastDot >= 0)
+        {
+            simpleName = typeName[(lastDot + 1)..];
+        }
+
+        var matches = contexts.Where(ctx => ctx.GetInterfaces().Any(iface =>
+                string.Equals(iface.Name, simpleName, StringComparison.Ordinal)
+                || string.Equals(iface.FullName, typeName, StringComparison.Ordinal)
+                || typeName.EndsWith("." + iface.Name, StringComparison.Ordinal)))
+            .ToList();
+
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     /// <summary>

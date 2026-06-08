@@ -16,9 +16,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.13.40008" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
@@ -56,12 +56,8 @@
 
   <!-- Ensure EFQueryLens.Lsp is built before VSIX packaging; do not add it as an assembly reference -->
   <ItemGroup>
-    <ProjectReference Include="..\..\..\EFQueryLens.Lsp\EFQueryLens.Lsp.csproj"
-                      ReferenceOutputAssembly="false"
-                      SkipGetTargetFrameworkProperties="true" />
-     <ProjectReference Include="..\..\..\EFQueryLens.Daemon\EFQueryLens.Daemon.csproj"
-                       ReferenceOutputAssembly="false"
-                       SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="..\..\..\EFQueryLens.Lsp\EFQueryLens.Lsp.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
+     <ProjectReference Include="..\..\..\EFQueryLens.Daemon\EFQueryLens.Daemon.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
   <Target Name="PublishLspServerForVsix" BeforeTargets="BundleLspServer">
@@ -79,12 +75,9 @@
   -->
   <Target Name="BundleLspServer" BeforeTargets="GetVsixSourceItems" DependsOnTargets="PublishLspServerForVsix">
     <ItemGroup>
-      <_LspServerFiles Include="$(LspPublishDir)**\*"
-                       Exclude="$(LspPublishDir)**\*.pdb;$(LspPublishDir)ref\**" />
+      <_LspServerFiles Include="$(LspPublishDir)**\*" Exclude="$(LspPublishDir)**\*.pdb;$(LspPublishDir)ref\**" />
     </ItemGroup>
-    <Copy SourceFiles="@(_LspServerFiles)"
-          DestinationFiles="@(_LspServerFiles->'$(TargetDir)server\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_LspServerFiles)" DestinationFiles="@(_LspServerFiles->'$(TargetDir)server\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <ItemGroup>
       <Content Include="$(TargetDir)server\**\*">
         <Link>server\%(RecursiveDir)%(Filename)%(Extension)</Link>
@@ -96,12 +89,9 @@
   <!-- Copy published EFQueryLens.Daemon output into $(TargetDir)daemon\ and include in VSIX. -->
   <Target Name="BundleDaemon" BeforeTargets="GetVsixSourceItems" DependsOnTargets="PublishDaemonForVsix">
     <ItemGroup>
-      <_DaemonFiles Include="$(DaemonPublishDir)**\*"
-                    Exclude="$(DaemonPublishDir)**\*.pdb;$(DaemonPublishDir)ref\**" />
+      <_DaemonFiles Include="$(DaemonPublishDir)**\*" Exclude="$(DaemonPublishDir)**\*.pdb;$(DaemonPublishDir)ref\**" />
     </ItemGroup>
-    <Copy SourceFiles="@(_DaemonFiles)"
-          DestinationFiles="@(_DaemonFiles->'$(TargetDir)daemon\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_DaemonFiles)" DestinationFiles="@(_DaemonFiles->'$(TargetDir)daemon\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <ItemGroup>
       <Content Include="$(TargetDir)daemon\**\*">
         <Link>daemon\%(RecursiveDir)%(Filename)%(Extension)</Link>

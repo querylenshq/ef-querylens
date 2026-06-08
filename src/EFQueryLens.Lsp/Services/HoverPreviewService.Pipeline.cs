@@ -1,4 +1,5 @@
 using EFQueryLens.Core;
+using EFQueryLens.Lsp.Engine;
 using EFQueryLens.Lsp.Parsing;
 using System.Diagnostics;
 using EFQueryLens.Core.Contracts;
@@ -69,33 +70,27 @@ internal sealed partial class HoverPreviewService
             || targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal)
             || !File.Exists(targetAssembly))
         {
-            return Fail("Could not locate compiled target assembly for this file. Build the project and try again.", sourceLine);
+            return Fail(AssemblyResolver.FormatTargetAssemblyFailureMessage(targetAssembly), sourceLine);
         }
 
-        var usingContext = LspSyntaxHelper.ExtractUsingContext(sourceText);
-        var localVariableTypes = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition(sourceText, line, character);
-        log($"extract-local-types line={line} char={character} count={localVariableTypes.Count} vars={string.Join(",", localVariableTypes.Keys)}");
-        // Factory declaration is authoritative (T in IQueryLensDbContextFactory<T> is always concrete).
-        // Fall back to the declared type of the context variable for projects without a factory.
-        var dbContextTypeName = AssemblyResolver.TryExtractDbContextTypeFromFactory(targetAssembly)
-            ?? LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName);
+        var translationRequest = TranslationRequestBuilder.TryBuild(
+            filePath,
+            sourceText,
+            expression,
+            contextVariableName,
+            line,
+            character);
+        if (translationRequest is null)
+        {
+            return Fail("Could not build a translation request for the current caret location.", sourceLine);
+        }
+
+        log($"extract-local-types line={line} char={character} count={translationRequest.LocalVariableTypes.Count} vars={string.Join(",", translationRequest.LocalVariableTypes.Keys)}");
 
         try
         {
             var sw = Stopwatch.StartNew();
             log($"translate-start line={line} char={character} assembly={targetAssembly}");
-
-            var translationRequest = new TranslationRequest
-            {
-                AssemblyPath = targetAssembly,
-                Expression = expression,
-                ContextVariableName = contextVariableName,
-                DbContextTypeName = dbContextTypeName,
-                AdditionalImports = usingContext.Imports.ToArray(),
-                UsingAliases = new Dictionary<string, string>(usingContext.Aliases, StringComparer.Ordinal),
-                UsingStaticTypes = usingContext.StaticTypes.ToArray(),
-                LocalVariableTypes = localVariableTypes,
-            };
 
             var queued = await TranslateQueuedOrImmediateAsync(translationRequest, cancellationToken);
 
@@ -173,6 +168,56 @@ internal sealed partial class HoverPreviewService
         }
     }
 
+    /// <summary>
+    /// Fire-and-forget daemon translation warm for a LINQ position. Populates the daemon
+    /// cache without blocking on hover formatting.
+    /// </summary>
+    internal async Task WarmAtPositionAsync(
+        string filePath,
+        string sourceText,
+        int line,
+        int character,
+        CancellationToken cancellationToken)
+    {
+        if (_engine is not IEngineControl control)
+        {
+            return;
+        }
+
+        var siblingRoots = ProjectSourceHelper.GetSiblingRoots(filePath);
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            sourceText,
+            line,
+            character,
+            out var contextVariableName,
+            siblingRoots);
+        if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
+        {
+            return;
+        }
+
+        var request = TranslationRequestBuilder.TryBuild(
+            filePath,
+            sourceText,
+            expression,
+            contextVariableName,
+            line,
+            character);
+        if (request is null || string.IsNullOrWhiteSpace(request.AssemblyPath))
+        {
+            return;
+        }
+
+        try
+        {
+            await control.WarmTranslateAsync(request, cancellationToken);
+        }
+        catch
+        {
+            // Best-effort — prewarm must never surface errors to the LSP host.
+        }
+    }
+
     internal async Task<CombinedHoverResult> BuildCombinedAsync(
         string filePath,
         string sourceText,
@@ -190,7 +235,7 @@ internal sealed partial class HoverPreviewService
             log);
 
         var markdown = FormatMarkdown(canonical, filePath, line, character);
-        var structured = FormatStructured(canonical, filePath);
+        var structured = FormatStructured(canonical, filePath, line, character);
 
         if (markdown.Success && markdown.Status is QueryTranslationStatus.Ready)
         {

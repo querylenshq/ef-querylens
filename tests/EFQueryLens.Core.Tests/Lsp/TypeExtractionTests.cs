@@ -220,6 +220,21 @@ public class TypeExtractionTests
         Assert.Equal("System.Guid", typeName);
     }
 
+    [Fact]
+    public void ExtractLocalVariableTypes_VarWithMathCalls_DoesNotInferStaticMathType()
+    {
+        var source = """
+            var page = Math.Max(request.Page, 1);
+            var pageSize = Math.Clamp(request.PageSize, 1, 200);
+            _ = page;
+            """;
+
+        var types = Extract(source, "_ = page;");
+
+        Assert.False(types.ContainsKey("page"));
+        Assert.False(types.ContainsKey("pageSize"));
+    }
+
     // ─── Scope boundaries ─────────────────────────────────────────────────────
 
     [Fact]
@@ -309,6 +324,29 @@ public class TypeExtractionTests
 
         Assert.True(types.TryGetValue("id", out var typeName));
         Assert.Equal("System.Guid", typeName);
+    }
+
+    [Fact]
+    public void ExtractLocalVariableTypes_PrimaryConstructorParameter_IsFound()
+    {
+        var source = """
+            public sealed class ReportService(IDateTimeProvider dateTime)
+            {
+                async Task Run(IReadOnlyDbContext db, CancellationToken ct)
+                {
+                    _ = dateTime.Now;
+                }
+            }
+            """;
+
+        var types = Extract(source, "_ = dateTime.Now;");
+
+        Assert.True(types.TryGetValue("dateTime", out var dateTimeType));
+        Assert.Equal("IDateTimeProvider", dateTimeType);
+        Assert.True(types.TryGetValue("db", out var dbType));
+        Assert.Equal("IReadOnlyDbContext", dbType);
+        Assert.True(types.TryGetValue("ct", out var ctType));
+        Assert.Equal("CancellationToken", ctType);
     }
 
     // ─── Edge cases ───────────────────────────────────────────────────────────

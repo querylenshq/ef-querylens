@@ -62,7 +62,7 @@ internal static partial class DesignTimeDbContextFactory
                     !t.IsAbstract && !t.IsInterface &&
                     t.GetInterfaces().Any(i =>
                         i.IsGenericType &&
-                        i.GetGenericTypeDefinition().FullName == QueryLensInterfaceName &&
+                        IsQueryLensFactoryInterface(i.GetGenericTypeDefinition()) &&
                         i.GetGenericArguments()[0].FullName == dbContextType.FullName));
 
                 // Compatibility fallback: accept "duck-typed" factories that expose
@@ -111,7 +111,7 @@ internal static partial class DesignTimeDbContextFactory
                 var factory = Activator.CreateInstance(factoryType)!;
                 var matchingInterface = factoryType.GetInterfaces().FirstOrDefault(i =>
                     i.IsGenericType
-                    && i.GetGenericTypeDefinition().FullName == QueryLensInterfaceName
+                    && IsQueryLensFactoryInterface(i.GetGenericTypeDefinition())
                     && i.GetGenericArguments()[0].FullName == dbContextType.FullName);
 
                 var method = matchingInterface?.GetMethod("CreateOfflineContext")

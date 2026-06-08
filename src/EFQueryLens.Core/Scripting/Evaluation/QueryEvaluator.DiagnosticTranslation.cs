@@ -22,7 +22,7 @@ public sealed partial class QueryEvaluator
             {
                 "CS0103" => TranslateCS0103(d),
                 "CS0246" or "CS0234" or "CS0400" => TranslateCS0246(d),
-                "CS1061" or "CS1929" => "Extension method or member not in scope — check your using directives.",
+                "CS1061" or "CS1929" => TranslateCS1061(d),
                 "CS7036" => "Missing required argument — ensure all method parameters are provided.",
                 "CS0019" => "Operator cannot be applied to the operand types — check variable types match the expression.",
                 "CS1503" => TranslateCS1503(d),
@@ -42,10 +42,36 @@ public sealed partial class QueryEvaluator
     private static readonly Regex _cs0246Pattern =
         new(@"The type or namespace name '(.+?)' could not be found", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex _cs1061Pattern =
+        new(@"'(.+?)' does not contain a definition for '(.+?)'", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static string TranslateCS1061(Diagnostic d)
+    {
+        var m = _cs1061Pattern.Match(d.GetMessage());
+        if (!m.Success)
+        {
+            return "Extension method or member not in scope — check your using directives.";
+        }
+
+        var receiver = m.Groups[1].Value;
+        var member = m.Groups[2].Value;
+        return $"'{member}' is not available on '{receiver}' — check using directives, or ensure injected services (e.g. dateTime) and extension methods (e.g. IsNotDeleted) are visible to QueryLens.";
+    }
+
     private static string TranslateCS0103(Diagnostic d)
     {
         var m = _cs0103Pattern.Match(d.GetMessage());
         var name = m.Success ? m.Groups[1].Value : "?";
+
+        if (name.Length > 0
+            && char.IsUpper(name[0])
+            && name.All(static c => char.IsLetterOrDigit(c) || c == '_'))
+        {
+            return $"Using alias or namespace '{name}' is not in scope — add "
+                   + $"'using {name} = Your.Namespace;' to the file, GlobalUsings, or .csproj "
+                   + $"<Using Include=\"Your.Namespace\" Alias=\"{name}\" />.";
+        }
+
         return $"Unknown variable '{name}'. Add a local before the query, e.g.: var {name} = default;";
     }
 

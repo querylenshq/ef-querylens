@@ -147,6 +147,92 @@ public class HoverCacheStatusTests
         Assert.Equal(QueryTranslationStatus.Ready, GetEntryStatus(entry!));
     }
 
+    // ── Ready entries are durable (never time-expire) ─────────────────────────
+
+    [Fact]
+    public void IsExpired_ReadyEntry_IsDurable_EvenWhenCreatedLongAgo()
+    {
+        // A Ready entry created far in the past must still be retrievable: Ready results stay
+        // valid until the query text or assembly changes, not until a timer elapses. This is
+        // the core of the "stop re-analysing the same query" behaviour.
+        var handler = CreateHandlerWithTtls(hoverTtlMs: 1, inQueueTtlMs: 1);
+        var staleReady = CreateCachedEntry(
+            DateTime.UtcNow.AddDays(-7).Ticks,
+            hover: new Hover(),
+            structured: null,
+            status: QueryTranslationStatus.Ready);
+
+        var field = typeof(HoverHandler).GetField("_hoverCache", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var dict = field.GetValue(handler)!;
+        dict.GetType().GetProperty("Item")!.SetValue(dict, staleReady, ["durable"]);
+
+        var found = InvokeTryGetCachedEntry(handler, "durable", out var entry);
+
+        Assert.True(found);
+        Assert.Equal(QueryTranslationStatus.Ready, GetEntryStatus(entry!));
+    }
+
+    [Fact]
+    public void IsExpired_InQueueEntry_CreatedLongAgo_IsExpired()
+    {
+        // The flip side: a stale InQueue placeholder must still expire so a failed/abandoned
+        // background compute does not leave a permanent "computing..." entry.
+        var handler = CreateHandlerWithTtls(hoverTtlMs: 60_000, inQueueTtlMs: 3_000);
+        var staleInQueue = CreateCachedEntry(
+            DateTime.UtcNow.AddMinutes(-5).Ticks,
+            hover: new Hover(),
+            structured: null,
+            status: QueryTranslationStatus.InQueue);
+
+        var field = typeof(HoverHandler).GetField("_hoverCache", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var dict = field.GetValue(handler)!;
+        dict.GetType().GetProperty("Item")!.SetValue(dict, staleInQueue, ["stale-inqueue"]);
+
+        Assert.False(InvokeTryGetCachedEntry(handler, "stale-inqueue", out _));
+    }
+
+    // ── Shared semantic keys are not evicted per-file (cross-file reuse) ───────
+
+    [Fact]
+    public void SemanticCache_SharedReadyEntry_SurvivesAndStaysReusable()
+    {
+        // Two source files can contain the same query and therefore resolve to the same
+        // semantic key — keys are content-addressed (full translation request hash) and NOT file-scoped. Removing/editing the query in one file
+        // must not drop the shared entry the other file still reuses. The prewarm path is
+        // eviction-free, so a stored Ready semantic entry persists and stays a cache hit.
+        var handler = CreateHandler();
+        var semCtx = CreateSemanticHoverContext("shared-key", 1, 1);
+        var (readyComputed, _) = MakeEntries(QueryTranslationStatus.Ready);
+
+        InvokeCacheEntry(handler, "fileA-primary", readyComputed, semCtx);
+        Assert.Equal(1, GetDictionaryCount(handler, "_semanticHoverCache"));
+
+        // The only handler operations the prewarm performs for an already-analysed query (or a
+        // query that has disappeared from a file) are read-only — none remove the entry.
+        Assert.True(handler.IsSemanticKeyReady("shared-key"));
+        Assert.True(InvokeTryGetSemanticCachedEntry(handler, "shared-key", out _));
+
+        // Entry is still present and Ready → a second file hovering the same query still hits.
+        Assert.Equal(1, GetDictionaryCount(handler, "_semanticHoverCache"));
+        Assert.True(InvokeTryGetSemanticCachedEntry(handler, "shared-key", out var entry));
+        Assert.Equal(QueryTranslationStatus.Ready, GetEntryStatus(entry!));
+    }
+
+    [Fact]
+    public void TranslationPrewarmService_DoesNotWireSemanticEvictionDelegate()
+    {
+        // Regression guard: per-file semantic-cache eviction wrongly dropped entries shared
+        // across files. The service must not accept an Action<IEnumerable<string>> evictor.
+        var hasEvictionParam = typeof(TranslationPrewarmService)
+            .GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .SelectMany(c => c.GetParameters())
+            .Any(p => p.ParameterType == typeof(Action<IEnumerable<string>>));
+
+        Assert.False(hasEvictionParam,
+            "TranslationPrewarmService must not wire a semantic-cache eviction delegate — " +
+            "per-file eviction drops keys other files still reuse.");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static HoverHandler CreateHandler() =>
@@ -276,6 +362,7 @@ public class HoverCacheStatusTests
     private sealed class NoOpQueryLensEngine : IQueryLensEngine
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public Task InvalidateAssemblyCachesAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task<QueryTranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct = default)
             => Task.FromResult(new QueryTranslationResult());
         public Task<ModelSnapshot> InspectModelAsync(ModelInspectionRequest request, CancellationToken ct = default)

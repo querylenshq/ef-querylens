@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Reflection;
+using System.Runtime.Loader;
 using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
@@ -16,15 +19,22 @@ public sealed partial class QueryEvaluator
             return $"var {name} = {request.ContextVariableName};";
 
         // Use LSP-provided authoritative type when available — skip heuristics entirely.
+        // A null result means the supplied type is unusable as a local's type (e.g. a static
+        // class like 'Math' mis-inferred from `var page = Math.Max(...)`). In that case we fall
+        // through to the usage-based heuristics below, which recover the real type (e.g. int).
         if (request.LocalVariableTypes.TryGetValue(name, out var knownTypeName)
-            && !string.IsNullOrWhiteSpace(knownTypeName))
-            return BuildStubFromTypeName(knownTypeName, name);
+            && !string.IsNullOrWhiteSpace(knownTypeName)
+            && BuildStubFromTypeName(knownTypeName, name, dbContextType) is { } lspStub)
+            return lspStub;
 
         // Gridify placeholders must win over generic member-access synthesis.
         // `query` is commonly used both as IGridifyQuery and as `query.Page` / `query.PageSize`.
         // If we synthesize it as anonymous object first, extension calls fail with CS1503.
         if (TryBuildGridifyStubDeclaration(name, request.Expression, dbContextType, out var gridifyStub))
             return gridifyStub;
+
+        if (TryBuildSelectContainsCollectionStub(name, request.Expression, dbContextType) is { } selectContainsStub)
+            return selectContainsStub;
 
         var memberTypes = InferMemberAccessTypes(name, request.Expression, dbContextType, request.UsingAliases);
         if (memberTypes.Count > 0)
@@ -47,12 +57,8 @@ public sealed partial class QueryEvaluator
             return $"{tn} {name} = {value};";
         }
 
-        if (LooksLikeBooleanConditionIdentifier(name, request.Expression))
-            return $"bool {name} = true;";
-
-        if (LooksLikeNumericArithmeticIdentifier(name, request.Expression))
-            return $"int {name} = 1;";
-
+        // Collection receivers like `cnDeviceIds.Contains(x.Id)` often appear after `&&` in
+        // predicates; infer them before the boolean-condition heuristic mis-types them as bool.
         var elem = InferContainsElementType(name, request.Expression, dbContextType);
         if (elem is not null)
         {
@@ -60,6 +66,12 @@ public sealed partial class QueryEvaluator
             var containsValues = BuildContainsPlaceholderValues(elem);
             return $"System.Collections.Generic.List<{en}> {name} = new() {{ {containsValues} }};";
         }
+
+        if (LooksLikeBooleanConditionIdentifier(name, request.Expression))
+            return $"bool {name} = true;";
+
+        if (LooksLikeNumericArithmeticIdentifier(name, request.Expression))
+            return $"int {name} = 1;";
 
         var sel = InferSelectEntityType(name, request.Expression, dbContextType);
         if (sel is not null)
@@ -78,10 +90,19 @@ public sealed partial class QueryEvaluator
         if (LooksLikeCancellationTokenArgument(name, request.Expression))
             return $"System.Threading.CancellationToken {name} = default;";
 
-        return $"object {name} = default;";
+        if (LooksLikeSelectReceiver(name, request.Expression))
+            return $"System.Collections.Generic.List<object> {name} = new();";
+
+        return $"System.Collections.Generic.List<object> {name} = new();";
     }
 
-    private static string BuildStubFromTypeName(string typeName, string varName)
+    /// <summary>
+    /// Builds a local-variable stub declaration for a known type name. Returns <c>null</c> when
+    /// the type name cannot legally be a variable's type — i.e. it resolves to a static, abstract
+    /// or interface type — so callers can fall back to other inference instead of emitting code
+    /// that fails to compile (CS0723 "variable of static type" / CS0716 "convert to static type").
+    /// </summary>
+    private static string? BuildStubFromTypeName(string typeName, string varName, Type dbContextType)
     {
         return typeName.Trim() switch
         {
@@ -109,7 +130,7 @@ public sealed partial class QueryEvaluator
             var tn when tn.EndsWith("[]", StringComparison.Ordinal)
                 => $"{tn[..^2]}[] {varName} = System.Array.Empty<{tn[..^2]}>();",
             var tn when TryExtractCollectionElementType(tn, out var elem)
-                => $"System.Collections.Generic.List<{elem}> {varName} = new() {{ default({elem}) }};",
+                => BuildListStubDeclaration(varName, elem, dbContextType),
             // Expression<Func<...>> — generate a typed lambda rather than GetUninitializedObject.
             // An uninitialized Expression has null internal nodes (Body, Parameters, etc.);
             // EF Core walks the expression tree to produce SQL and will throw on any null node.
@@ -120,13 +141,135 @@ public sealed partial class QueryEvaluator
                 => IsBoolPredicateExpression(tn)
                     ? $"{tn} {varName} = _ => true;"
                     : $"{tn} {varName} = _ => default!;",
-            // Unknown complex type (user-defined DTO, entity, etc.).
-            // Use GetUninitializedObject so the instance is non-null: EF Core must be able to
-            // evaluate captured parameter expressions (e.g. model.PlanningCaseId) at runtime,
-            // and a null reference throws before SQL is ever produced.
-            // Strip nullable-reference-type annotation ('?') — typeof() has no CLR distinction for ref types.
-            var tn => $"var {varName} = ({tn.TrimEnd('?')})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({tn.TrimEnd('?')}));",
+            // Unknown complex type (user-defined DTO, entity, etc.) — delegated so we can guard
+            // against static/abstract/interface type names that cannot be a variable's type.
+            var tn => BuildComplexTypeStub(tn, varName, dbContextType),
         };
+    }
+
+    /// <summary>
+    /// Stub for an unknown but presumed-instantiable complex type (user DTO/entity). Uses
+    /// <c>GetUninitializedObject</c> so the instance is non-null — EF Core must be able to
+    /// evaluate captured parameter expressions (e.g. <c>model.PlanningCaseId</c>) at runtime, and
+    /// a null reference throws before SQL is produced. Returns <c>null</c> when the type name
+    /// resolves to a static / abstract / interface type, which can be neither declared as a
+    /// variable (CS0723) nor used as a cast target (CS0716) — the caller then falls back to other
+    /// inference. (Strips the nullable-reference '?' — <c>typeof()</c> has no CLR distinction.)
+    /// </summary>
+    private static string? BuildComplexTypeStub(string typeName, string varName, Type dbContextType)
+    {
+        var bare = typeName.TrimEnd('?');
+
+        if (IsNonInstantiableTypeName(bare, dbContextType))
+            return null;
+
+        var resolved = TryResolveTypeName(bare, dbContextType);
+        if (resolved is { IsInterface: true } or { IsAbstract: true })
+            return null;
+
+        if (resolved is null && LooksLikeUnresolvedInterfaceName(bare))
+            return null;
+
+        return $"var {varName} = ({bare})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({bare}));";
+    }
+
+    private static bool LooksLikeUnresolvedInterfaceName(string typeName)
+    {
+        var simple = typeName.Contains('.')
+            ? typeName[(typeName.LastIndexOf('.') + 1)..]
+            : typeName;
+
+        return simple.Length > 2
+               && simple[0] == 'I'
+               && char.IsUpper(simple[1])
+               && char.IsLower(simple[2]);
+    }
+
+    // Type names already proven (non-)instantiable, to avoid repeated reflection in the retry loop.
+    private static readonly ConcurrentDictionary<string, bool> _nonInstantiableTypeNameCache =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns true when <paramref name="typeName"/> resolves to a static, abstract or interface
+    /// type — none of which can be a local variable's type. Unresolvable names return false so
+    /// existing behaviour is preserved for genuinely unknown (but possibly valid) type names.
+    /// </summary>
+    private static bool IsNonInstantiableTypeName(string typeName, Type dbContextType)
+    {
+        var bare = typeName.Trim();
+        if (bare.Length == 0)
+            return false;
+
+        return _nonInstantiableTypeNameCache.GetOrAdd(bare, key =>
+        {
+            var resolved = TryResolveTypeName(key, dbContextType);
+            // A static class is reported by reflection as abstract + sealed, so IsAbstract covers
+            // both static and abstract classes; IsInterface covers interfaces.
+            return resolved is not null && (resolved.IsAbstract || resolved.IsInterface);
+        });
+    }
+
+    /// <summary>
+    /// Best-effort resolution of a simple or namespace-qualified type name to a <see cref="Type"/>,
+    /// searching the runtime, the <c>System</c> namespace (for BCL helpers like <c>Math</c>), and
+    /// the DbContext's load context. Generic / array / collection / Expression forms never reach
+    /// here — they are matched by earlier branches of <see cref="BuildStubFromTypeName"/>.
+    /// </summary>
+    private static Type? TryResolveTypeName(string typeName, Type dbContextType)
+    {
+        var direct = Type.GetType(typeName, throwOnError: false);
+        if (direct is not null)
+            return direct;
+
+        if (!typeName.Contains('.'))
+        {
+            // Common static/helper types (Math, Console, Convert, …) live in System.
+            var system = Type.GetType("System." + typeName, throwOnError: false);
+            if (system is not null)
+                return system;
+        }
+
+        var alc = AssemblyLoadContext.GetLoadContext(dbContextType.Assembly);
+        var assemblies = (IEnumerable<Assembly>?)alc?.Assemblies ?? AppDomain.CurrentDomain.GetAssemblies();
+        foreach (var asm in assemblies)
+        {
+            var t = asm.GetType(typeName, throwOnError: false);
+            if (t is not null)
+                return t;
+        }
+
+        return null;
+    }
+
+    private static string BuildListStubDeclaration(string varName, string elementType, Type dbContextType)
+    {
+        var initializer = BuildCollectionElementInitializer(elementType, dbContextType);
+        return $"System.Collections.Generic.List<{elementType}> {varName} = new() {{ {initializer} }};";
+    }
+
+    private static string BuildCollectionElementInitializer(string elementType, Type dbContextType)
+    {
+        var bare = elementType.TrimEnd('?');
+        var resolved = TryResolveTypeName(bare, dbContextType);
+
+        if (resolved is not null)
+        {
+            if (resolved.IsValueType || resolved == typeof(string))
+                return BuildScalarPlaceholderExpression(resolved);
+
+            if (!resolved.IsInterface && !resolved.IsAbstract)
+            {
+                var tn = ToCSharpTypeName(resolved);
+                return $"({tn})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({tn}))";
+            }
+        }
+
+        if (LooksLikeUnresolvedInterfaceName(bare) || IsNonInstantiableTypeName(bare, dbContextType))
+        {
+            return "new object()";
+        }
+
+        return $"({bare})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({bare}))";
     }
 
     private static bool TryExtractCollectionElementType(string typeName, out string elementType)
@@ -140,7 +283,9 @@ public sealed partial class QueryEvaluator
         if (outer is not ("List" or "IList" or "ICollection" or "IEnumerable"
             or "IReadOnlyList" or "IReadOnlyCollection" or "ISet" or "HashSet"
             or "System.Collections.Generic.List" or "System.Collections.Generic.IList"
-            or "System.Collections.Generic.IEnumerable" or "System.Collections.Generic.IReadOnlyList"))
+            or "System.Collections.Generic.ICollection" or "System.Collections.Generic.IEnumerable"
+            or "System.Collections.Generic.IReadOnlyList" or "System.Collections.Generic.IReadOnlyCollection"
+            or "System.Collections.Generic.HashSet" or "System.Collections.Generic.ISet"))
             return false;
 
         var inner = typeName[(lt + 1)..gt].Trim();

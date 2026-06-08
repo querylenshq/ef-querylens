@@ -103,3 +103,4 @@ src/Plugins/ef-querylens-rider/server/
 .tsp-copilot/
 .tsp-worktrees/
 .env.copilot
+**/.vscode-test/**

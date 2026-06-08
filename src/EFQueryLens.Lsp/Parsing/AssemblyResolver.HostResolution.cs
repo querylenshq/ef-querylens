@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using EFQueryLens.Core.Scaffolding;
 
 namespace EFQueryLens.Lsp.Parsing;
 
@@ -25,42 +26,103 @@ public static partial class AssemblyResolver
     /// </summary>
     internal static string? TryExtractDbContextTypeFromFactory(string assemblyDllPath)
     {
-        // Derive the project source root from the DLL path by walking up until we find a .csproj.
-        // Standard layout: {projectDir}/bin/{config}/{tfm}/Assembly.dll
+        var types = TryExtractDbContextTypesFromFactory(assemblyDllPath);
+        return types.Count == 1 ? types[0] : null;
+    }
+
+    internal static IReadOnlyList<string> TryExtractDbContextTypesFromFactory(string assemblyDllPath)
+    {
+        var projectDir = TryGetProjectDirectoryFromAssembly(assemblyDllPath);
+        if (string.IsNullOrEmpty(projectDir))
+        {
+            return [];
+        }
+
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in EnumerateProjectSourceFiles(projectDir))
+        {
+            try
+            {
+                var text = File.ReadAllText(file);
+                foreach (Match match in Regex.Matches(
+                             text,
+                             @"IQueryLensDbContextFactory\s*<\s*(?:global::)?([\w.]+)\s*>",
+                             RegexOptions.None,
+                             TimeSpan.FromSeconds(2)))
+                {
+                    var typeName = match.Groups[1].Value.Trim();
+                    if (typeName.Length > 0
+                        && !typeName.Equals("out", StringComparison.OrdinalIgnoreCase)
+                        && !typeName.Equals("TContext", StringComparison.OrdinalIgnoreCase))
+                    {
+                        found.Add(typeName);
+                    }
+                }
+            }
+            catch { /* ignore unreadable files */ }
+        }
+
+        return found.OrderBy(static t => t, StringComparer.Ordinal).ToList();
+    }
+
+    private static string? TryGetProjectDirectoryFromAssembly(string assemblyDllPath)
+    {
         var dir = Path.GetDirectoryName(assemblyDllPath);
         while (!string.IsNullOrEmpty(dir))
         {
             try
             {
                 if (Directory.GetFiles(dir, "*.csproj", SearchOption.TopDirectoryOnly).Length > 0)
-                    break;
+                {
+                    return dir;
+                }
             }
             catch { /* continue */ }
 
             dir = Path.GetDirectoryName(dir);
         }
 
-        if (string.IsNullOrEmpty(dir))
-            return null;
-
-        foreach (var file in EnumerateProjectSourceFiles(dir))
-        {
-            try
-            {
-                var text = File.ReadAllText(file);
-                var match = Regex.Match(
-                    text,
-                    @"IQueryLensDbContextFactory\s*<\s*([\w.]+)\s*>",
-                    RegexOptions.None,
-                    TimeSpan.FromSeconds(1));
-
-                if (match.Success)
-                    return match.Groups[1].Value.Trim();
-            }
-            catch { /* ignore unreadable files */ }
-        }
-
         return null;
+    }
+
+    /// <summary>
+    /// True when the executable host project already has QueryLens factory source on disk
+    /// (generated or hand-written) but the caller could not load it from the built assembly yet.
+    /// </summary>
+    public static bool HostProjectHasQueryLensFactorySource(string sourceFilePath)
+    {
+        try
+        {
+            var assemblyPath = TryGetTargetAssembly(sourceFilePath);
+            if (string.IsNullOrWhiteSpace(assemblyPath)
+                || assemblyPath.StartsWith("DEBUG_FAIL", StringComparison.Ordinal)
+                || !File.Exists(assemblyPath))
+            {
+                return false;
+            }
+
+            var projectDir = TryGetProjectDirectoryFromAssembly(assemblyPath);
+            if (string.IsNullOrEmpty(projectDir))
+            {
+                return false;
+            }
+
+            var generatedPath = Path.Combine(
+                projectDir,
+                "Properties",
+                "QueryLens",
+                "QueryLensDbContextFactory.g.cs");
+            if (File.Exists(generatedPath))
+            {
+                return true;
+            }
+
+            return HasQueryLensFactory(projectDir);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -154,38 +216,19 @@ public static partial class AssemblyResolver
     {
         var libraryCsprojName = Path.GetFileName(libraryCsprojPath);
 
-        // Step 4a: Walk up to find the .sln file
-        var slnDir = Path.GetDirectoryName(libraryCsprojPath);
-        string? slnFile = null;
-
-        while (!string.IsNullOrEmpty(slnDir))
-        {
-            var slnFiles = Directory.GetFiles(slnDir, "*.sln");
-            if (slnFiles.Length > 0)
-            {
-                slnFile = slnFiles.First();
-                debugLog += $"  -> Found solution: {Path.GetFileName(slnFile)}\n";
-                break;
-            }
-
-            slnDir = Directory.GetParent(slnDir)?.FullName;
-        }
-
+        // Step 4a: Walk up to find the solution file (.slnx preferred over .sln)
+        var slnFile = SolutionFileResolver.FindSolutionFile(Path.GetDirectoryName(libraryCsprojPath)!);
         if (slnFile is null)
         {
-            debugLog += "  -> EXCEPTION: No .sln file found.\n";
+            debugLog += "  -> EXCEPTION: No .slnx or .sln file found.\n";
             return null;
         }
 
-        // Step 4b: Parse the .sln to extract project paths
-        var slnContent = File.ReadAllText(slnFile);
-        var projectEntries = Regex.Matches(slnContent,
-                @"Project\("".+?""\)\s*=\s*"".+?""\s*,\s*""(.+?\.csproj)""",
-                RegexOptions.Multiline)
-            .Select(m => Path.GetFullPath(
-                Path.Combine(Path.GetDirectoryName(slnFile)!, m.Groups[1].Value)))
-            .Where(p => File.Exists(p) && !string.Equals(p,
-                Path.GetFullPath(libraryCsprojPath), StringComparison.OrdinalIgnoreCase))
+        debugLog += $"  -> Found solution: {Path.GetFileName(slnFile)}\n";
+
+        // Step 4b: Parse the solution to extract project paths
+        var projectEntries = SolutionFileResolver.ParseSolutionProjects(slnFile)
+            .Where(p => !string.Equals(p, Path.GetFullPath(libraryCsprojPath), StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         debugLog += $"  -> Found {projectEntries.Count} other projects in solution\n";
@@ -229,6 +272,12 @@ public static partial class AssemblyResolver
         // (the user set them up as the QueryLens host) over projects that are merely
         // referencing the library for other purposes (e.g. data-migration workers).
         // Within the same tier, the most recently built DLL wins.
+        var preferredTfm = TryGetLibraryPreferredTfm(libraryCsprojPath, libraryAssemblyName);
+        if (preferredTfm is not null)
+        {
+            debugLog += $"  -> Library preferred TFM: {preferredTfm}\n";
+        }
+
         var scored = new List<CandidateAssembly>();
 
         foreach (var (csprojPath, exeAssemblyName) in candidates)
@@ -240,6 +289,13 @@ public static partial class AssemblyResolver
             if (hostDllPaths.Count == 0)
             {
                 debugLog += $"  -> {exeAssemblyName}: no output DLL found\n";
+                continue;
+            }
+
+            hostDllPaths = FilterHostDllPathsByTfm(hostDllPaths, preferredTfm, ref debugLog, exeAssemblyName);
+            hostDllPaths = FilterHostDllPathsByColocatedLibrary(hostDllPaths, libraryAssemblyName, ref debugLog, exeAssemblyName);
+            if (hostDllPaths.Count == 0)
+            {
                 continue;
             }
 
@@ -333,14 +389,101 @@ public static partial class AssemblyResolver
         return msBuildDll is not null ? [msBuildDll] : [];
     }
 
+    private static string? TryGetLibraryPreferredTfm(string libraryCsprojPath, string libraryAssemblyName)
+    {
+        var debugLog = string.Empty;
+        var libraryDllPaths = FindProjectOutputDllPaths(libraryCsprojPath, libraryAssemblyName, ref debugLog);
+        if (libraryDllPaths.Count == 0)
+        {
+            return null;
+        }
+
+        var bestLibraryDll = SelectBestDll(libraryDllPaths, ref debugLog);
+        return bestLibraryDll is null ? null : TryExtractTfmFromOutputPath(bestLibraryDll);
+    }
+
+    private static List<string> FilterHostDllPathsByTfm(
+        List<string> hostDllPaths,
+        string? preferredTfm,
+        ref string debugLog,
+        string exeAssemblyName)
+    {
+        if (string.IsNullOrWhiteSpace(preferredTfm))
+        {
+            return hostDllPaths;
+        }
+
+        var tfmMatches = hostDllPaths
+            .Where(path => string.Equals(
+                TryExtractTfmFromOutputPath(path),
+                preferredTfm,
+                StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (tfmMatches.Count > 0)
+        {
+            debugLog += $"  -> {exeAssemblyName}: narrowed to {tfmMatches.Count} host output(s) for TFM {preferredTfm}\n";
+            return tfmMatches;
+        }
+
+        return hostDllPaths;
+    }
+
+    private static List<string> FilterHostDllPathsByColocatedLibrary(
+        List<string> hostDllPaths,
+        string libraryAssemblyName,
+        ref string debugLog,
+        string exeAssemblyName)
+    {
+        var colocated = hostDllPaths
+            .Where(path => File.Exists(Path.Combine(Path.GetDirectoryName(path)!, $"{libraryAssemblyName}.dll")))
+            .ToList();
+
+        if (colocated.Count > 0 && colocated.Count < hostDllPaths.Count)
+        {
+            debugLog +=
+                $"  -> {exeAssemblyName}: narrowed to {colocated.Count} host output(s) with co-located {libraryAssemblyName}.dll\n";
+            return colocated;
+        }
+
+        return hostDllPaths;
+    }
+
+    private static string? TryExtractTfmFromOutputPath(string dllPath)
+    {
+        var parts = dllPath.Replace('\\', '/').Split('/');
+        foreach (var part in parts)
+        {
+            if (part.Length > 3
+                && part.StartsWith("net", StringComparison.OrdinalIgnoreCase)
+                && char.IsDigit(part[3]))
+            {
+                return part;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Picks the single best DLL from a list of candidates using runtime-artifact presence,
     /// ref/obj path detection, and last-write timestamp as tiebreakers.
     /// </summary>
-    private static string? SelectBestDll(List<string> paths, ref string debugLog)
+    private static string? SelectBestDll(List<string> paths, ref string debugLog, string? libraryAssemblyName = null)
     {
         if (paths.Count == 0)
             return null;
+
+        if (!string.IsNullOrWhiteSpace(libraryAssemblyName))
+        {
+            var colocated = paths
+                .Where(path => File.Exists(Path.Combine(Path.GetDirectoryName(path)!, $"{libraryAssemblyName}.dll")))
+                .ToList();
+            if (colocated.Count > 0)
+            {
+                paths = colocated;
+            }
+        }
 
         var selected = paths
             .Select(path => new CandidateAssembly(

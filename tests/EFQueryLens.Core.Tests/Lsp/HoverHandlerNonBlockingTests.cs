@@ -212,6 +212,8 @@ public class HoverHandlerNonBlockingTests
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
+        public Task InvalidateAssemblyCachesAsync(CancellationToken ct = default) => Task.CompletedTask;
+
         public Task<QueryTranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct = default)
             => Task.FromException<QueryTranslationResult>(new InvalidOperationException("daemon offline"));
 
@@ -222,6 +224,8 @@ public class HoverHandlerNonBlockingTests
     private sealed class NoOpQueryLensEngine : IQueryLensEngine
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task InvalidateAssemblyCachesAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<QueryTranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct = default)
             => Task.FromResult(new QueryTranslationResult());

@@ -21,6 +21,10 @@ public sealed partial class QueryEvaluator
     {
         var id = Regex.Escape(variableName);
 
+        // `ids.Contains(x.Id)` — receiver is a collection, not a boolean flag.
+        if (Regex.IsMatch(expression, $@"(?<!\w){id}\s*\.\s*\w+"))
+            return false;
+
         // Handles conditions like: isIntranetUser || ...  and  ... && isIntranetUser
         if (Regex.IsMatch(expression, $@"(?<!\w){id}(?!\w)\s*(\|\||&&)"))
             return true;

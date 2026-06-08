@@ -7,11 +7,16 @@ internal sealed class TextDocumentSyncHandler
 {
     public DocumentManager DocumentManager { get; }
     private readonly TranslationPrewarmService? _prewarm;
+    private readonly AssemblyChangeTracker? _assemblyChangeTracker;
 
-    public TextDocumentSyncHandler(DocumentManager documentManager, TranslationPrewarmService? prewarm = null)
+    public TextDocumentSyncHandler(
+        DocumentManager documentManager,
+        TranslationPrewarmService? prewarm = null,
+        AssemblyChangeTracker? assemblyChangeTracker = null)
     {
         DocumentManager = documentManager;
         _prewarm = prewarm;
+        _assemblyChangeTracker = assemblyChangeTracker;
     }
 
     public void DidOpen(DidOpenTextDocumentParams request)
@@ -48,8 +53,10 @@ internal sealed class TextDocumentSyncHandler
         }
 
         var uriString = request.TextDocument.Uri.ToString();
+        var filePath = UriToFilePath(uriString);
         DocumentManager.UpdateDocument(uriString, request.Text);
-        _prewarm?.WarmDocument(UriToFilePath(uriString), request.Text);
+        _assemblyChangeTracker?.CheckOnSave(filePath);
+        _prewarm?.WarmDocument(filePath, request.Text);
     }
 
     private static string UriToFilePath(string uriString)

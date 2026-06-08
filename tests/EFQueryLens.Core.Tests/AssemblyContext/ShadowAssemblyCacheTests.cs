@@ -58,6 +58,26 @@ public class ShadowAssemblyCacheTests : IDisposable
         return (sourceDir, dllPath);
     }
 
+    // ─── ShadowAssemblyContextLoader ────────────────────────────────────────
+
+    [Fact]
+    public void ShadowAssemblyContextLoader_ResolveShadowAssemblyPath_ReturnsPathUnderShadowRoot()
+    {
+        var (sourceDir, assemblyPath) = CreateFakeSourceDir();
+        try
+        {
+            var shadowPath = ShadowAssemblyContextLoader.ResolveShadowAssemblyPath(assemblyPath);
+
+            Assert.True(File.Exists(shadowPath));
+            Assert.StartsWith(_shadowRoot, shadowPath, StringComparison.OrdinalIgnoreCase);
+            Assert.NotEqual(Path.GetFullPath(assemblyPath), shadowPath, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(sourceDir, recursive: true); } catch { }
+        }
+    }
+
     // ─── Constructor ──────────────────────────────────────────────────────────
 
     [Fact]

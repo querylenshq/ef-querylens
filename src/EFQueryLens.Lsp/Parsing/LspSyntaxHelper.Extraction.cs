@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -119,65 +120,257 @@ public static partial class LspSyntaxHelper
         return targetExpression.ToString();
     }
 
-    public static SourceUsingContext ExtractUsingContext(string sourceText)
+    public static SourceUsingContext ExtractUsingContext(string sourceText, string? sourceFilePath = null)
     {
         var tree = CSharpSyntaxTree.ParseText(sourceText);
-        var root = tree.GetRoot();
+        var context = CollectUsingContextFromRoot(tree.GetRoot(), includeFileNamespaces: true);
 
-        var imports = new List<string>();
-        var importSet = new HashSet<string>(StringComparer.Ordinal);
-        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
-        var staticTypes = new List<string>();
-        var staticSet = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var usingDirective in root.DescendantNodes().OfType<UsingDirectiveSyntax>())
+        if (!string.IsNullOrWhiteSpace(sourceFilePath))
         {
-            var name = usingDirective.Name?.ToString();
-            if (string.IsNullOrWhiteSpace(name))
+            MergeProjectUsingContext(sourceFilePath, context);
+        }
+
+        return context.ToSourceUsingContext();
+    }
+
+    private sealed class MutableUsingContext
+    {
+        public List<string> Imports { get; } = [];
+        public HashSet<string> ImportSet { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> Aliases { get; } = new(StringComparer.Ordinal);
+        public List<string> StaticTypes { get; } = [];
+        public HashSet<string> StaticSet { get; } = new(StringComparer.Ordinal);
+
+        public SourceUsingContext ToSourceUsingContext()
+            => new(Imports, Aliases, StaticTypes);
+    }
+
+    private static MutableUsingContext CollectUsingContextFromRoot(
+        SyntaxNode root,
+        bool includeFileNamespaces,
+        bool globalUsingsOnly = false)
+    {
+        var context = new MutableUsingContext();
+
+        foreach (var usingDirective in root.ChildNodes().OfType<UsingDirectiveSyntax>())
+        {
+            if (globalUsingsOnly && usingDirective.GlobalKeyword.IsKind(SyntaxKind.None))
             {
                 continue;
             }
 
-            if (usingDirective.Alias is { Name.Identifier.ValueText: { Length: > 0 } aliasName })
-            {
-                aliases[aliasName] = name;
-                continue;
-            }
+            AddUsingDirective(context, usingDirective);
+        }
 
-            if (!usingDirective.StaticKeyword.IsKind(SyntaxKind.None))
+        if (!globalUsingsOnly)
+        {
+            foreach (var usingDirective in root.DescendantNodes().OfType<UsingDirectiveSyntax>())
             {
-                if (staticSet.Add(name))
+                if (usingDirective.Parent is CompilationUnitSyntax)
                 {
-                    staticTypes.Add(name);
+                    continue;
+                }
+
+                AddUsingDirective(context, usingDirective);
+            }
+        }
+
+        if (includeFileNamespaces)
+        {
+            foreach (var namespaceDecl in root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>())
+            {
+                var ns = namespaceDecl.Name.ToString();
+                if (string.IsNullOrWhiteSpace(ns))
+                {
+                    continue;
+                }
+
+                if (context.ImportSet.Add(ns))
+                {
+                    context.Imports.Add(ns);
+                }
+            }
+        }
+
+        return context;
+    }
+
+    private static void AddUsingDirective(MutableUsingContext context, UsingDirectiveSyntax usingDirective)
+    {
+        var name = usingDirective.Name?.ToString();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        if (usingDirective.Alias is { Name.Identifier.ValueText: { Length: > 0 } aliasName })
+        {
+            context.Aliases.TryAdd(aliasName, name);
+            return;
+        }
+
+        if (!usingDirective.StaticKeyword.IsKind(SyntaxKind.None))
+        {
+            if (context.StaticSet.Add(name))
+            {
+                context.StaticTypes.Add(name);
+            }
+
+            return;
+        }
+
+        if (context.ImportSet.Add(name))
+        {
+            context.Imports.Add(name);
+        }
+    }
+
+    private static void MergeProjectUsingContext(string sourceFilePath, MutableUsingContext context)
+    {
+        var projectDir = AssemblyResolver.TryGetProjectDirectory(sourceFilePath);
+        if (projectDir is null)
+        {
+            return;
+        }
+
+        var visitedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var dir = projectDir; dir is not null && visitedDirs.Add(dir); dir = Directory.GetParent(dir)?.FullName)
+        {
+            foreach (var root in GetGlobalUsingRootsInDirectory(dir))
+            {
+                var globalContext = CollectUsingContextFromRoot(root, includeFileNamespaces: false, globalUsingsOnly: true);
+                MergeUsingContext(context, globalContext);
+            }
+
+            foreach (var csproj in Directory.GetFiles(dir, "*.csproj", SearchOption.TopDirectoryOnly))
+            {
+                MergeCsprojUsings(csproj, context);
+            }
+
+            foreach (var buildProps in Directory.GetFiles(dir, "Directory.Build.*", SearchOption.TopDirectoryOnly))
+            {
+                MergeCsprojUsings(buildProps, context);
+            }
+        }
+    }
+
+    private static void MergeUsingContext(MutableUsingContext target, MutableUsingContext source)
+    {
+        foreach (var import in source.Imports)
+        {
+            if (target.ImportSet.Add(import))
+            {
+                target.Imports.Add(import);
+            }
+        }
+
+        foreach (var kvp in source.Aliases)
+        {
+            target.Aliases.TryAdd(kvp.Key, kvp.Value);
+        }
+
+        foreach (var staticType in source.StaticTypes)
+        {
+            if (target.StaticSet.Add(staticType))
+            {
+                target.StaticTypes.Add(staticType);
+            }
+        }
+    }
+
+    private static IEnumerable<SyntaxNode> GetGlobalUsingRootsInDirectory(string projectDir)
+    {
+        foreach (var file in Directory.GetFiles(projectDir, "*.cs", SearchOption.TopDirectoryOnly))
+        {
+            if (IsBuildOutputPath(file))
+            {
+                continue;
+            }
+
+            var fileName = Path.GetFileName(file);
+            string text;
+            try
+            {
+                text = File.ReadAllText(file);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (!fileName.Contains("GlobalUsings", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(fileName, "Usings.cs", StringComparison.OrdinalIgnoreCase)
+                && !text.Contains("global using", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            SyntaxNode root;
+            try
+            {
+                root = CSharpSyntaxTree.ParseText(text).GetRoot();
+            }
+            catch
+            {
+                continue;
+            }
+
+            yield return root;
+        }
+    }
+
+    private static bool IsBuildOutputPath(string filePath)
+    {
+        var normalized = filePath.Replace('/', Path.DirectorySeparatorChar);
+        return normalized.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+               || normalized.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void MergeCsprojUsings(string csprojPath, MutableUsingContext context)
+    {
+        string text;
+        try
+        {
+            text = File.ReadAllText(csprojPath);
+        }
+        catch
+        {
+            return;
+        }
+
+        foreach (Match match in CsprojUsingRegex().Matches(text))
+        {
+            var include = match.Groups["include"].Value.Trim();
+            if (string.IsNullOrWhiteSpace(include))
+            {
+                continue;
+            }
+
+            if (match.Groups["alias"].Success)
+            {
+                context.Aliases.TryAdd(match.Groups["alias"].Value.Trim(), include);
+                continue;
+            }
+
+            if (match.Groups["static"].Success)
+            {
+                if (context.StaticSet.Add(include))
+                {
+                    context.StaticTypes.Add(include);
                 }
 
                 continue;
             }
 
-            if (importSet.Add(name))
+            if (context.ImportSet.Add(include))
             {
-                imports.Add(name);
+                context.Imports.Add(include);
             }
         }
-
-        // Add namespaces declared in the file itself. Code inside a namespace can
-        // use extension methods from that same namespace without an explicit using,
-        // but QueryLens compiles generated snippets in the global namespace, so we
-        // need to import these explicitly to preserve behavior.
-        foreach (var namespaceDecl in root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>())
-        {
-            var ns = namespaceDecl.Name.ToString();
-            if (string.IsNullOrWhiteSpace(ns))
-            {
-                continue;
-            }
-
-            if (importSet.Add(ns))
-            {
-                imports.Add(ns);
-            }
-        }
-
-        return new SourceUsingContext(imports, aliases, staticTypes);
     }
+
+    [GeneratedRegex(
+        @"<Using\s+Include\s*=\s*""(?<include>[^""]+)""(?:\s+Alias\s*=\s*""(?<alias>[^""]+)""|\s+Static\s*=\s*""(?<static>true)"")?\s*/?>",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CsprojUsingRegex();
 }
