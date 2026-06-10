@@ -336,9 +336,9 @@ class EFQueryLensUrlOpener : UrlOpener() {
 
     private fun fallbackStatusMessage(statusCode: Int): String =
         when (statusCode) {
-            3 -> "EF QueryLens services are unavailable and cannot communicate right now."
-            2 -> "EF QueryLens is starting up and warming translation services."
-            else -> "EF QueryLens queued this query and is still processing it."
+            3 -> "EF QueryLens — engine unavailable. Try Restart QueryLens."
+            2 -> "EF QueryLens — starting engine…"
+            else -> "EF QueryLens — translating query… hover again shortly."
         }
 
     internal fun showStatusMessage(

@@ -336,6 +336,11 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
     [InlineData("System.Math", null)]                  // static class (qualified)
     [InlineData("System.IDisposable", null)]           // interface
     [InlineData("int", "int page = 0;")]               // primitive — unchanged
+    [InlineData("global::System.String", "string page = \"\";")]
+    [InlineData("List<global::System.String>", "System.Collections.Generic.List<System.String> page = new() { \"qlstub0\" };")]
+    [InlineData("Guid?", "System.Guid? page = System.Guid.Empty;")]
+    [InlineData("System.Guid?", "System.Guid? page = System.Guid.Empty;")]
+    [InlineData("int?", "int? page = 0;")]
     public void BuildStubFromTypeName_NonInstantiableTypes_ReturnNull(string typeName, string? expected)
     {
         var method = typeof(EFQueryLens.Core.Scripting.Evaluation.QueryEvaluator)
@@ -764,6 +769,35 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         Assert.True(result.Success, result.ErrorMessage);
         Assert.NotNull(result.Sql);
         Assert.DoesNotContain("NullReferenceException", result.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_GuidWithValueAccess_UsesNullableGuidStub()
+    {
+        var stub = BuildStubDeclarationForTest(
+            "applicationInputReplyDraftId",
+            "db.Orders.Where(o => o.Id == applicationInputReplyDraftId.Value)",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["applicationInputReplyDraftId"] = "Guid",
+            });
+
+        Assert.Contains("System.Guid?", stub, StringComparison.Ordinal);
+        Assert.Contains("applicationInputReplyDraftId", stub, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildStubDeclaration_NullableGuidType_UsesNullableGuidStub()
+    {
+        var stub = BuildStubDeclarationForTest(
+            "applicationInputReplyDraftId",
+            "db.Orders.Where(o => o.Id == applicationInputReplyDraftId.Value)",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["applicationInputReplyDraftId"] = "Guid?",
+            });
+
+        Assert.Equal("System.Guid? applicationInputReplyDraftId = System.Guid.Empty;", stub);
     }
 
     [Fact]

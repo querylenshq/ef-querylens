@@ -23,9 +23,20 @@ public sealed partial class QueryEvaluator
         // class like 'Math' mis-inferred from `var page = Math.Max(...)`). In that case we fall
         // through to the usage-based heuristics below, which recover the real type (e.g. int).
         if (request.LocalVariableTypes.TryGetValue(name, out var knownTypeName)
-            && !string.IsNullOrWhiteSpace(knownTypeName)
-            && BuildStubFromTypeName(knownTypeName, name, dbContextType) is { } lspStub)
-            return lspStub;
+            && !string.IsNullOrWhiteSpace(knownTypeName))
+        {
+            // LSP may supply a non-nullable value type while the expression uses Nullable<T>.Value.
+            if (LooksLikeNullableValueAccess(name, request.Expression)
+                && !IsNullableTypeName(knownTypeName))
+            {
+                var nullableTypeName = $"{knownTypeName.TrimEnd('?')}?";
+                if (BuildStubFromTypeName(nullableTypeName, name, dbContextType) is { } nullableStub)
+                    return nullableStub;
+            }
+
+            if (BuildStubFromTypeName(knownTypeName, name, dbContextType) is { } lspStub)
+                return lspStub;
+        }
 
         // Gridify placeholders must win over generic member-access synthesis.
         // `query` is commonly used both as IGridifyQuery and as `query.Page` / `query.PageSize`.
@@ -102,9 +113,16 @@ public sealed partial class QueryEvaluator
     /// or interface type — so callers can fall back to other inference instead of emitting code
     /// that fails to compile (CS0723 "variable of static type" / CS0716 "convert to static type").
     /// </summary>
+    private static string NormalizeTypeNameForStub(string typeName)
+        => typeName.Trim().Replace("global::", string.Empty, StringComparison.Ordinal);
+
     private static string? BuildStubFromTypeName(string typeName, string varName, Type dbContextType)
     {
-        return typeName.Trim() switch
+        typeName = NormalizeTypeNameForStub(typeName);
+        if (TryBuildNullableValueTypeStub(typeName, varName, out var nullableStub))
+            return nullableStub;
+
+        return typeName switch
         {
             "int" or "Int32" or "System.Int32" => $"int {varName} = 0;",
             "long" or "Int64" or "System.Int64" => $"long {varName} = 0L;",
@@ -158,12 +176,22 @@ public sealed partial class QueryEvaluator
     /// </summary>
     private static string? BuildComplexTypeStub(string typeName, string varName, Type dbContextType)
     {
-        var bare = typeName.TrimEnd('?');
+        var normalized = NormalizeTypeNameForStub(typeName);
+        if (TryBuildNullableValueTypeStub(normalized, varName, out var nullableStub))
+            return nullableStub;
+
+        var bare = normalized.TrimEnd('?');
+
+        if (IsStringTypeName(bare))
+            return $"string {varName} = \"\";";
 
         if (IsNonInstantiableTypeName(bare, dbContextType))
             return null;
 
         var resolved = TryResolveTypeName(bare, dbContextType);
+        if (resolved == typeof(string))
+            return $"string {varName} = \"\";";
+
         if (resolved is { IsInterface: true } or { IsAbstract: true })
             return null;
 
@@ -171,6 +199,59 @@ public sealed partial class QueryEvaluator
             return null;
 
         return $"var {varName} = ({bare})global::System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof({bare}));";
+    }
+
+    private static bool IsStringTypeName(string typeName)
+        => typeName is "string" or "String" or "System.String" or "string?" or "String?" or "System.String?";
+
+    private static bool IsNullableTypeName(string typeName)
+    {
+        var normalized = NormalizeTypeNameForStub(typeName);
+        return normalized.EndsWith('?')
+               || normalized.StartsWith("Nullable<", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeNullableValueAccess(string variableName, string expression)
+        => !string.IsNullOrWhiteSpace(variableName)
+           && !string.IsNullOrWhiteSpace(expression)
+           && expression.Contains($"{variableName}.Value", StringComparison.Ordinal);
+
+    private static bool TryBuildNullableValueTypeStub(string typeName, string varName, out string? stub)
+    {
+        stub = null;
+        string inner;
+        if (typeName.EndsWith('?'))
+        {
+            inner = typeName[..^1].Trim();
+        }
+        else if (typeName.StartsWith("Nullable<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            inner = typeName["Nullable<".Length..^1].Trim();
+        }
+        else
+        {
+            return false;
+        }
+
+        stub = inner switch
+        {
+            "Guid" or "System.Guid" => $"System.Guid? {varName} = System.Guid.Empty;",
+            "int" or "Int32" or "System.Int32" => $"int? {varName} = 0;",
+            "long" or "Int64" or "System.Int64" => $"long? {varName} = 0L;",
+            "short" or "Int16" or "System.Int16" => $"short? {varName} = 0;",
+            "byte" or "Byte" or "System.Byte" => $"byte? {varName} = 0;",
+            "bool" or "Boolean" or "System.Boolean" => $"bool? {varName} = false;",
+            "decimal" or "Decimal" or "System.Decimal" => $"decimal? {varName} = 0m;",
+            "double" or "Double" or "System.Double" => $"double? {varName} = 0.0;",
+            "float" or "Single" or "System.Single" => $"float? {varName} = 0.0f;",
+            "DateTime" or "System.DateTime" => $"System.DateTime? {varName} = System.DateTime.UtcNow;",
+            "DateTimeOffset" or "System.DateTimeOffset" => $"System.DateTimeOffset? {varName} = System.DateTimeOffset.UtcNow;",
+            "DateOnly" or "System.DateOnly" => $"System.DateOnly? {varName} = System.DateOnly.FromDateTime(System.DateTime.Today);",
+            "TimeOnly" or "System.TimeOnly" => $"System.TimeOnly? {varName} = System.TimeOnly.MinValue;",
+            _ => null,
+        };
+
+        return stub is not null;
     }
 
     private static bool LooksLikeUnresolvedInterfaceName(string typeName)
@@ -249,7 +330,10 @@ public sealed partial class QueryEvaluator
 
     private static string BuildCollectionElementInitializer(string elementType, Type dbContextType)
     {
-        var bare = elementType.TrimEnd('?');
+        var bare = NormalizeTypeNameForStub(elementType).TrimEnd('?');
+        if (IsStringTypeName(bare))
+            return BuildScalarPlaceholderExpression(typeof(string));
+
         var resolved = TryResolveTypeName(bare, dbContextType);
 
         if (resolved is not null)

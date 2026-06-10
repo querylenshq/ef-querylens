@@ -6,12 +6,14 @@ internal sealed record LspClientConfiguration(
     bool? DebugEnabled = null,
     bool? EnableLspHover = null,
     bool? HoverProgressNotify = null,
+    bool? SqlReadyNotify = null,
     int? HoverProgressDelayMs = null,
     int? HoverCacheTtlMs = null,
     int? MarkdownQueueAdaptiveWaitMs = null,
     int? StructuredQueueAdaptiveWaitMs = null,
     int? WarmupSuccessTtlMs = null,
-    int? WarmupFailureCooldownMs = null)
+    int? WarmupFailureCooldownMs = null,
+    int? HoverWaitWhenWarmMs = null)
 {
     internal static LspClientConfiguration FromInitializeRequest(JToken? initializeRequest)
     {
@@ -40,12 +42,14 @@ internal sealed record LspClientConfiguration(
             DebugEnabled: ReadBool(config, "debugEnabled"),
             EnableLspHover: ReadBool(config, "enableLspHover"),
             HoverProgressNotify: ReadBool(config, "hoverProgressNotify"),
+            SqlReadyNotify: ReadBool(config, "sqlReadyNotify"),
             HoverProgressDelayMs: ReadInt(config, "hoverProgressDelayMs", min: 0, max: 5_000),
             HoverCacheTtlMs: ReadInt(config, "hoverCacheTtlMs", min: 0, max: 120_000),
             MarkdownQueueAdaptiveWaitMs: ReadInt(config, "markdownQueueAdaptiveWaitMs", min: 0, max: 2_000),
             StructuredQueueAdaptiveWaitMs: ReadInt(config, "structuredQueueAdaptiveWaitMs", min: 0, max: 2_000),
             WarmupSuccessTtlMs: ReadInt(config, "warmupSuccessTtlMs", min: 0, max: 600_000),
-            WarmupFailureCooldownMs: ReadInt(config, "warmupFailureCooldownMs", min: 0, max: 120_000));
+            WarmupFailureCooldownMs: ReadInt(config, "warmupFailureCooldownMs", min: 0, max: 120_000),
+            HoverWaitWhenWarmMs: ReadInt(config, "hoverWaitWhenWarmMs", min: 0, max: 5_000));
     }
 
     private static bool? ReadBool(JObject config, string propertyName)

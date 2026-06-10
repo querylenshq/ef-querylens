@@ -114,6 +114,28 @@
           "type": "boolean",
           "default": false,
           "description": "Emit verbose QueryLens client/server diagnostic logs to help isolate LSP or CodeLens issues."
+        },
+        "efquerylens.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the global QueryLens readiness indicator in the status bar."
+        },
+        "efquerylens.hoverWaitWhenWarmMs": {
+          "type": "number",
+          "default": 8000,
+          "minimum": 0,
+          "maximum": 30000,
+          "description": "Milliseconds to wait on the first hover when the assembly is already warm. Complex composed queries may need 8–15s on first compile. 0 disables synchronous wait."
+        },
+        "efquerylens.hoverProgressNotify": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show progress notifications for slow hovers."
+        },
+        "efquerylens.notifyWhenSqlReady": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a toast with an Open SQL action when a background hover translation finishes."
         }
       }
     }

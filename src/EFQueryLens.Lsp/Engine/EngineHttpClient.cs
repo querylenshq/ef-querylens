@@ -203,7 +203,16 @@ internal sealed class EngineHttpClient : IQueryLensEngine, IEngineControl
         CancellationToken ct)
     {
         var response = await _httpClient.PostAsJsonAsync(path, request, EngineJsonOptions.Default, ct);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            if (EngineErrorParser.TryParseException(body) is Exception parsed)
+            {
+                throw parsed;
+            }
+
+            response.EnsureSuccessStatusCode();
+        }
 
         var result = await response.Content.ReadFromJsonAsync<TResponse>(EngineJsonOptions.Default, ct);
         if (result is null)

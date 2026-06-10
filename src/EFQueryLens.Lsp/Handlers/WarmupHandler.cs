@@ -70,11 +70,6 @@ internal sealed partial class WarmupHandler
             return new WarmupResponse(false, false, null, "empty-source");
         }
 
-        if (LspSyntaxHelper.FindAllLinqChains(sourceText).Count == 0)
-        {
-            return new WarmupResponse(false, false, null, "no-linq-chain");
-        }
-
         var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
         if (string.IsNullOrWhiteSpace(targetAssembly)
             || targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal)
@@ -86,6 +81,11 @@ internal sealed partial class WarmupHandler
         if (TryGetCachedWarmup(targetAssembly, out var cached))
         {
             LogDebug($"warmup-cache-hit assembly={targetAssembly} success={cached.Success} message={cached.Message}");
+            if (cached.Success)
+            {
+                _statusTracker?.SetAssemblyWarmed(warmed: true, targetAssembly);
+            }
+
             return new WarmupResponse(cached.Success, true, targetAssembly, cached.Message);
         }
 
@@ -113,6 +113,7 @@ internal sealed partial class WarmupHandler
             LogDebug($"warmup-inflight-join assembly={targetAssembly} context={dbContextTypeName ?? "<auto>"}");
         }
 
+        using var warmupScope = _statusTracker?.BeginWarmup();
         return await inflight.Value.WaitAsync(cancellationToken);
     }
 
@@ -130,6 +131,7 @@ internal sealed partial class WarmupHandler
 
             sw.Stop();
             CacheWarmup(targetAssembly, success: true, "ready");
+            _statusTracker?.SetAssemblyWarmed(warmed: true, targetAssembly);
             LogDebug($"warmup-success assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} context={dbContextTypeName ?? "<auto>"}");
             return new WarmupResponse(true, false, targetAssembly, "ready");
         }
@@ -142,6 +144,7 @@ internal sealed partial class WarmupHandler
             if (IsMultipleDbContextAmbiguity(ex))
             {
                 CacheWarmup(targetAssembly, success: true, "skipped-multi-dbcontext");
+                _statusTracker?.SetAssemblyWarmed(warmed: true, targetAssembly);
                 LogDebug($"warmup-skipped assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} reason=multi-dbcontext context={dbContextTypeName ?? "<auto>"}");
                 return new WarmupResponse(true, false, targetAssembly, "skipped-multi-dbcontext");
             }

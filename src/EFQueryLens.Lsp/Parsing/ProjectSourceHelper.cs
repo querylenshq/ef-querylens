@@ -8,7 +8,7 @@ namespace EFQueryLens.Lsp.Parsing;
 /// Provides a short-lived cache of parsed SyntaxNode roots for all .cs files in a project,
 /// used for cross-file method declaration lookup (e.g. Expression parameter helper synthesis).
 /// </summary>
-internal static class ProjectSourceHelper
+internal static partial class ProjectSourceHelper
 {
     private sealed record CachedProjectRoots(IReadOnlyList<SyntaxNode> Roots, long ExpiresAtUtcTicks);
 

@@ -32,7 +32,7 @@ internal static class TranslationRequestBuilder
 
         var usingContext = LspSyntaxHelper.ExtractUsingContext(sourceText, filePath);
         var localVariableTypes = LspSyntaxHelper.ExtractLocalVariableTypesAtPosition(sourceText, line, character);
-        var variableTypeName = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName);
+        var variableTypeName = LspSyntaxHelper.TryResolveDbContextTypeName(sourceText, contextVariableName, filePath);
         var factoryContextTypes = !string.IsNullOrWhiteSpace(assemblyPath)
             ? AssemblyResolver.TryExtractDbContextTypesFromFactory(assemblyPath)
             : [];
@@ -58,6 +58,11 @@ internal static class TranslationRequestBuilder
         string? variableTypeName,
         IReadOnlyList<string> factoryContextTypes)
     {
+        if (string.Equals(variableTypeName, "var", StringComparison.Ordinal))
+        {
+            variableTypeName = null;
+        }
+
         if (!string.IsNullOrWhiteSpace(variableTypeName))
         {
             var variableSimple = SimpleTypeName(variableTypeName);

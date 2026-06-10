@@ -35,4 +35,32 @@ public sealed class TranslationRequestBuilderTests
 
         Assert.Equal("Sample.AppDbContext", result);
     }
+
+    [Fact]
+    public void ResolveDbContextTypeName_MatchesInferredFactoryDbContextType()
+    {
+        var result = TranslationRequestBuilder.ResolveDbContextTypeName(
+            "MedicsInsightsDbContext",
+            [
+                "Share.Medics.Insights.Core.Infrastructure.Services.MedicsInsightsDbContext",
+                "Share.Medics.Insights.Core.Infrastructure.Services.ReadOnlyMedicsInsightsDbContext",
+            ]);
+
+        Assert.Equal(
+            "Share.Medics.Insights.Core.Infrastructure.Services.MedicsInsightsDbContext",
+            result);
+    }
+
+    [Fact]
+    public void ResolveDbContextTypeName_TreatsVarAsUnresolved()
+    {
+        var result = TranslationRequestBuilder.ResolveDbContextTypeName(
+            "var",
+            [
+                "Share.Medics.Insights.Core.Infrastructure.Services.MedicsInsightsDbContext",
+                "Share.Medics.Insights.Core.Infrastructure.Services.ReadOnlyMedicsInsightsDbContext",
+            ]);
+
+        Assert.Null(result);
+    }
 }

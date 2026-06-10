@@ -101,12 +101,25 @@ public static partial class LspSyntaxHelper
                 break;
             }
 
+            // The runner scaffold injects DbContext instances (context, dbContext, …).
+            // Inlining a prior "context = await factory.CreateDbContextAsync()" assignment
+            // would embed `await` into the expression and cause CS4032 in the sync Run template.
+            if (LooksLikeDbContextRoot(identifier.Identifier.ValueText))
+            {
+                break;
+            }
+
             if (!TryResolveLocalExpressionCore(
                     identifier.Identifier.ValueText,
                     currentAnchorStatement,
                     out var resolvedExpression,
                     out var resolvedAtStatement)
                 || resolvedAtStatement is null)
+            {
+                break;
+            }
+
+            if (IsAwaitWrappedExpression(resolvedExpression))
             {
                 break;
             }
@@ -149,6 +162,17 @@ public static partial class LspSyntaxHelper
                     return true;
             }
         }
+    }
+
+    private static bool IsAwaitWrappedExpression(ExpressionSyntax expression)
+    {
+        var current = expression;
+        while (current is ParenthesizedExpressionSyntax parenthesized)
+        {
+            current = parenthesized.Expression;
+        }
+
+        return current is AwaitExpressionSyntax;
     }
 
     private sealed class TransparentQueryableCastStripper : CSharpSyntaxRewriter

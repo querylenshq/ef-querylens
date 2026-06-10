@@ -1,5 +1,6 @@
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp.Handlers;
+using EFQueryLens.Lsp.HoverPipeline;
 
 namespace EFQueryLens.Core.Tests.Lsp;
 
@@ -87,40 +88,8 @@ public class SemanticCacheKeyTests
 
     private static void SeedSemanticReadyEntry(HoverHandler handler, string semanticKey)
     {
-        var semanticContextType = typeof(HoverHandler).GetNestedType(
-            "SemanticHoverContext",
-            System.Reflection.BindingFlags.NonPublic)!;
-        var semanticContext = Activator.CreateInstance(semanticContextType, semanticKey, 1, 1)!;
-
-        var structuredResult = new EFQueryLens.Lsp.Services.QueryLensStructuredHoverResult(
-            Success: true,
-            ErrorMessage: null,
-            Statements: [],
-            CommandCount: 1,
-            SourceExpression: "db.Orders",
-            ExecutedExpression: null,
-            DbContextType: "AppDb",
-            ProviderName: "sqlite",
-            SourceFile: null,
-            SourceLine: 1,
-            Warnings: [],
-            EnrichedSql: null,
-            Mode: "direct",
-            Status: QueryTranslationStatus.Ready,
-            StatusMessage: null,
-            AvgTranslationMs: 0);
-
-        var computedEntryType = typeof(HoverHandler).GetNestedType("ComputedEntry", System.Reflection.BindingFlags.NonPublic)!;
-        var computedEntry = Activator.CreateInstance(
-            computedEntryType,
-            new Microsoft.VisualStudio.LanguageServer.Protocol.Hover(),
-            structuredResult,
-            QueryTranslationStatus.Ready)!;
-
-        var cacheEntryMethod = typeof(HoverHandler).GetMethod(
-            "CacheEntry",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        cacheEntryMethod.Invoke(handler, ["primary", computedEntry, semanticContext]);
+        var region = new QueryRegion(semanticKey, "rk", "fp|1|1", 1, 1, "db.Orders", "db");
+        handler.ResultCache.Store(region, new HoverResult(QueryTranslationStatus.Ready, new Microsoft.VisualStudio.LanguageServer.Protocol.Hover(), null));
     }
 
     private sealed class NoOpQueryLensEngine : IQueryLensEngine

@@ -11,7 +11,8 @@ export function enableTrustedHoverCommands(
     }
 
     const trusted = { enabledCommands: [...enabledCommands] };
-    const contents = hover.contents.map(item => {
+    const rawContents = Array.isArray(hover.contents) ? hover.contents : [hover.contents];
+    const contents = rawContents.map(item => {
         if (item instanceof MarkdownString) {
             const markdown = new MarkdownString(rewriteQueryLensActionLinks(item.value));
             markdown.baseUri = item.baseUri;

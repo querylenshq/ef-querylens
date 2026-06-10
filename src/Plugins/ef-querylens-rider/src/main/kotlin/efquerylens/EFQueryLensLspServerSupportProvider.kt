@@ -303,6 +303,11 @@ private class EFQueryLensClient(
         opener.showSqlPopup(project, preview)
     }
 
+    @JsonNotification("efquerylens/statusChanged")
+    fun statusChanged(payload: Any?) {
+        EFQueryLensHostStatus.updateFromSnapshot(payload)
+    }
+
     @JsonNotification("efquerylens/copySqlToClipboard")
     @Suppress("UNCHECKED_CAST")
     fun copySqlToClipboard(payload: Any?) {

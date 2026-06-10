@@ -1,4 +1,5 @@
 using EFQueryLens.Core;
+using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Engine;
 using EFQueryLens.Lsp.Parsing;
 using System.Diagnostics;
@@ -35,7 +36,9 @@ internal sealed partial class HoverPreviewService
         int line,
         int character,
         CancellationToken cancellationToken,
-        Action<string> log)
+        Action<string> log,
+        string? preresolvedExpression = null,
+        string? preresolvedContextVariable = null)
     {
         static HoverCanonicalComputationResult Fail(
             string message,
@@ -56,13 +59,32 @@ internal sealed partial class HoverPreviewService
 
         var sourceLine = line + 1;
 
-        var siblingRoots = ProjectSourceHelper.GetSiblingRoots(filePath);
-        var expression = LspSyntaxHelper.TryExtractLinqExpression(sourceText, line, character, out var contextVariableName, siblingRoots);
-        log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName} siblingFiles={siblingRoots.Count}");
+        string? expression;
+        string? contextVariableName;
+        if (!string.IsNullOrWhiteSpace(preresolvedExpression)
+            && !string.IsNullOrWhiteSpace(preresolvedContextVariable))
+        {
+            expression = preresolvedExpression;
+            contextVariableName = preresolvedContextVariable;
+            log($"extract-linq line={line} char={character} found=True ctx={contextVariableName} source=preresolved");
+        }
+        else
+        {
+            expression = LspSyntaxHelper.TryExtractLinqExpression(
+                sourceText,
+                line,
+                character,
+                out contextVariableName,
+                sourceFilePath: filePath);
+            log($"extract-linq line={line} char={character} found={!string.IsNullOrWhiteSpace(expression)} ctx={contextVariableName}");
+        }
 
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
-            return Fail("Could not extract a LINQ query expression at the current caret location.", sourceLine);
+            return Fail(
+                "Could not extract a LINQ query expression at the current caret location.",
+                sourceLine,
+                QueryTranslationStatus.Ready);
         }
 
         var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
@@ -125,6 +147,9 @@ internal sealed partial class HoverPreviewService
             }
 
             sw.Stop();
+            QueryLensOperationalLog.Info(
+                $"translate-ready file={Path.GetFileName(filePath)} line={line} char={character} " +
+                $"elapsedMs={sw.ElapsedMilliseconds} commands={translation.Commands?.Count ?? 0}");
             log(
                 $"translate-finished line={line} char={character} " +
                 $"success={translation.Success} elapsedMs={sw.ElapsedMilliseconds} " +
@@ -184,13 +209,12 @@ internal sealed partial class HoverPreviewService
             return;
         }
 
-        var siblingRoots = ProjectSourceHelper.GetSiblingRoots(filePath);
         var expression = LspSyntaxHelper.TryExtractLinqExpression(
             sourceText,
             line,
             character,
             out var contextVariableName,
-            siblingRoots);
+            sourceFilePath: filePath);
         if (string.IsNullOrWhiteSpace(expression) || string.IsNullOrWhiteSpace(contextVariableName))
         {
             return;
@@ -223,7 +247,9 @@ internal sealed partial class HoverPreviewService
         string sourceText,
         int line,
         int character,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? preresolvedExpression = null,
+        string? preresolvedContextVariable = null)
     {
         Action<string> log = message => LogDebug($"combined {message}");
         var canonical = await BuildCanonicalAsync(
@@ -232,7 +258,9 @@ internal sealed partial class HoverPreviewService
             line,
             character,
             cancellationToken,
-            log);
+            log,
+            preresolvedExpression,
+            preresolvedContextVariable);
 
         var markdown = FormatMarkdown(canonical, filePath, line, character);
         var structured = FormatStructured(canonical, filePath, line, character);

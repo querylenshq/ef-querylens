@@ -9,9 +9,13 @@ namespace EFQueryLens.Lsp.Parsing;
 
 public static partial class LspSyntaxHelper
 {
-    public static string? TryExtractLinqExpression(string sourceText, int line, int character,
+    public static string? TryExtractLinqExpression(
+        string sourceText,
+        int line,
+        int character,
         out string? contextVariableName,
-        IReadOnlyList<SyntaxNode>? additionalRoots = null)
+        IReadOnlyList<SyntaxNode>? additionalRoots = null,
+        string? sourceFilePath = null)
     {
         contextVariableName = null;
 
@@ -29,6 +33,24 @@ public static partial class LspSyntaxHelper
 
         // Find the node at the cursor position
         var node = root.FindToken(position).Parent;
+
+        // Tier 0: compose helper DbContext query + call-site Expression args before
+        // extracting inner lambda-scoped LINQ fragments (e.g. navigation .Where inside
+        // a Select projection passed to GetApplicationByIdAsync).
+        if (node is not null
+            && TryComposeFromEnclosingCallSite(
+                root,
+                node,
+                position,
+                sourceText,
+                sourceFilePath,
+                additionalRoots,
+                out var composedExpression,
+                out var composedContextVariableName))
+        {
+            contextVariableName = composedContextVariableName;
+            return composedExpression;
+        }
 
         // Walk up until we find an InvocationExpression (like .Where() or .ToList())
         // or a MemberAccessExpression (like db.Orders)
@@ -66,7 +88,15 @@ public static partial class LspSyntaxHelper
                     position,
                     out var synthesizedExpression,
                     out var synthesizedContextVariableName,
-                    additionalRoots))
+                    additionalRoots)
+                || TryExtractFromExpressionParameterHelperCallWithLookup(
+                    root,
+                    finalInvocation,
+                    position,
+                    sourceText,
+                    sourceFilePath,
+                    out synthesizedExpression,
+                    out synthesizedContextVariableName))
             {
                 contextVariableName = synthesizedContextVariableName;
                 return synthesizedExpression;
@@ -117,8 +147,94 @@ public static partial class LspSyntaxHelper
                 .Select(i => i.Identifier.Text)
                 .FirstOrDefault();
 
+        // Tier 2: reject lambda-scoped fragments whose root is not a DbContext variable.
+        // Statement-level indirection (e.g. services.Context.CatalogItems) is still allowed.
+        if (!LooksLikeDbContextRoot(contextVariableName))
+        {
+            if (node is not null
+                && TryComposeFromEnclosingCallSite(
+                    root,
+                    node,
+                    position,
+                    sourceText,
+                    sourceFilePath,
+                    additionalRoots,
+                    out composedExpression,
+                    out composedContextVariableName))
+            {
+                contextVariableName = composedContextVariableName;
+                return composedExpression;
+            }
+
+            if (IsInsideLambda(targetExpression))
+            {
+                contextVariableName = null;
+                return null;
+            }
+        }
+
         return targetExpression.ToString();
     }
+
+    private static bool TryExtractFromExpressionParameterHelperCallWithLookup(
+        SyntaxNode root,
+        InvocationExpressionSyntax invocation,
+        int cursorPosition,
+        string sourceText,
+        string? sourceFilePath,
+        out string expression,
+        out string? contextVariableName)
+    {
+        expression = string.Empty;
+        contextVariableName = null;
+
+        if (string.IsNullOrWhiteSpace(sourceFilePath))
+        {
+            return false;
+        }
+
+        if (!ShouldAttemptCrossFileHelperLookup(invocation, cursorPosition))
+        {
+            return false;
+        }
+
+        var methodName = GetInvokedMethodName(invocation);
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            return false;
+        }
+
+        var receiver = TryExtractReceiverIdentifier(invocation);
+        var receiverType = receiver is not null
+            ? TryResolveDeclaredTypeName(sourceText, receiver, sourceFilePath)
+            : null;
+
+        var helperRoots = ProjectSourceHelper.TryResolveHelperMethodRoots(
+            sourceFilePath,
+            sourceText,
+            methodName,
+            receiverType);
+
+        if (helperRoots.Count == 0)
+        {
+            return false;
+        }
+
+        return TryExtractFromExpressionParameterHelperCall(
+            root,
+            invocation,
+            cursorPosition,
+            out expression,
+            out contextVariableName,
+            helperRoots);
+    }
+
+    private static string? TryExtractReceiverIdentifier(InvocationExpressionSyntax invocation) =>
+        invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Expression.ToString(),
+            _ => null,
+        };
 
     public static SourceUsingContext ExtractUsingContext(string sourceText, string? sourceFilePath = null)
     {

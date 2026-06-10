@@ -13,6 +13,7 @@ namespace EFQueryLens.Lsp.Services;
 /// </summary>
 internal sealed class TranslationPrewarmService
 {
+    private QueryLensStatusTracker? _statusTracker;
     private readonly HoverPreviewService _hoverPreviewService;
     private readonly Func<string, string, IReadOnlyList<LinqChainInfo>, IReadOnlyList<string>>? _resolveChainKeys;
     private readonly Func<string, bool>? _isKeyReady;
@@ -34,6 +35,9 @@ internal sealed class TranslationPrewarmService
             min: 0,
             max: 30_000);
     }
+
+    internal void SetStatusTracker(QueryLensStatusTracker statusTracker)
+        => _statusTracker = statusTracker;
 
     /// <summary>
     /// Immediately fires a background warm for all LINQ chains in the document.
@@ -85,6 +89,7 @@ internal sealed class TranslationPrewarmService
 
     private async Task WarmDocumentAsync(string filePath, string sourceText, CancellationToken ct)
     {
+        using var prewarmScope = _statusTracker?.BeginPrewarm();
         try
         {
             var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);

@@ -8,15 +8,18 @@ internal sealed class TextDocumentSyncHandler
     public DocumentManager DocumentManager { get; }
     private readonly TranslationPrewarmService? _prewarm;
     private readonly AssemblyChangeTracker? _assemblyChangeTracker;
+    private readonly HoverHandler? _hoverHandler;
 
     public TextDocumentSyncHandler(
         DocumentManager documentManager,
         TranslationPrewarmService? prewarm = null,
-        AssemblyChangeTracker? assemblyChangeTracker = null)
+        AssemblyChangeTracker? assemblyChangeTracker = null,
+        HoverHandler? hoverHandler = null)
     {
         DocumentManager = documentManager;
         _prewarm = prewarm;
         _assemblyChangeTracker = assemblyChangeTracker;
+        _hoverHandler = hoverHandler;
     }
 
     public void DidOpen(DidOpenTextDocumentParams request)
@@ -37,7 +40,9 @@ internal sealed class TextDocumentSyncHandler
 
         var uriString = request.TextDocument.Uri.ToString();
         DocumentManager.UpdateDocument(uriString, text);
-        _prewarm?.DebounceWarmDocument(UriToFilePath(uriString), text);
+        var filePath = UriToFilePath(uriString);
+        _hoverHandler?.OnDocumentChanged(filePath);
+        _prewarm?.DebounceWarmDocument(filePath, text);
     }
 
     public void DidClose(DidCloseTextDocumentParams request)

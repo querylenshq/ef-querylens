@@ -31,4 +31,7 @@ export type QueryLensSettings = {
     formatSqlOnShow: boolean;
     sqlDialect: QueryLensSqlDialect;
     debugLogsEnabled: boolean;
+    showStatusBar: boolean;
+    hoverWaitWhenWarmMs: number;
+    notifyWhenSqlReady: boolean;
 };

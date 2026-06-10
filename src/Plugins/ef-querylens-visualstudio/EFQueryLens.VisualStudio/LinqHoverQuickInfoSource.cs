@@ -66,15 +66,15 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         {
             LspStartupStatus.Starting =>
                 (2, // QueryTranslationStatus.Starting
-                 "EF QueryLens is starting up \u2014 hover again in a moment.",
+                 "EF QueryLens \u2014 starting engine\u2026",
                  "Language server is initializing."),
             LspStartupStatus.NotStarted =>
                 (2,
-                 "EF QueryLens is loading \u2014 open a C\u266f file and hover again shortly.",
+                 "EF QueryLens \u2014 starting engine\u2026",
                  "Language server has not activated yet."),
             _ =>
                 (3, // QueryTranslationStatus.DaemonUnavailable
-                 "EF QueryLens is unavailable. Check that the extension installed correctly and try reloading.",
+                 "EF QueryLens \u2014 engine unavailable. Try Restart QueryLens.",
                  "EF QueryLens is unavailable."),
         };
 

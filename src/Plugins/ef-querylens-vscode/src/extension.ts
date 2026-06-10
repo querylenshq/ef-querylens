@@ -19,8 +19,15 @@ import { readSettings } from './config/settings';
 import {
     enableTrustedHoverCommands,
 } from './hover/markdown';
+import {
+    formatHoverQueuedMessage,
+    formatHoverReadyMessage,
+} from './hover/logging';
 import { registerQueryLensCommands } from './commands/registry';
 import { createSqlActionHandlers } from './commands/sqlActions';
+import { createServerLogChannel } from './logging/serverLogChannel';
+import { attachSqlReadyNotifications } from './notifications/sqlReady';
+import { createQueryLensStatusBar, runStartupWarmup } from './status/statusBar';
 import { QueryLensSettings } from './types';
 
 let client: LanguageClient | undefined;
@@ -77,6 +84,10 @@ export function activate(context: ExtensionContext) {
         QUERYLENS_CODELENS_USE_MODEL_FILTER: currentSettings.codeLensUseModelFilter ? '1' : '0',
     };
 
+    if (currentSettings.debugLogsEnabled) {
+        serverEnv.QUERYLENS_DEBUG = '1';
+    }
+
     if (daemonExecutablePath) {
         serverEnv.QUERYLENS_DAEMON_EXE = daemonExecutablePath;
     } else if (currentSettings.debugLogsEnabled) {
@@ -101,15 +112,32 @@ export function activate(context: ExtensionContext) {
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'csharp' }],
         initializationOptions: buildLspInitializationOptions(currentSettings),
-        outputChannel: queryLensOutputChannel,
+        // Route language-server stderr into EF QueryLens with info/warn levels (not all [error]).
+        outputChannel: createServerLogChannel(queryLensOutputChannel),
         middleware: {
             provideCodeLenses: async (_document, _token, _next) => {
                 // VS Code UX choice: use hover + explicit commands, no inline SQL Preview code lenses.
                 return [];
             },
             provideHover: async (document, position, token, next) => {
-                const hover = await next(document, position, token);
-                return enableTrustedHoverCommands(hover as Hover | null, ['efquerylens.copySql', 'efquerylens.showSql', 'efquerylens.openSqlEditor', 'efquerylens.recalculate', 'efquerylens.setup']);
+                try {
+                    const startedAt = performance.now();
+                    const hover = await next(document, position, token);
+                    logHoverResult(
+                        document.uri.fsPath,
+                        position.line,
+                        position.character,
+                        hover as Hover | null,
+                        performance.now() - startedAt,
+                    );
+                    return enableTrustedHoverCommands(
+                        hover as Hover | null,
+                        ['efquerylens.copySql', 'efquerylens.showSql', 'efquerylens.openSqlEditor', 'efquerylens.recalculate', 'efquerylens.setup'],
+                    );
+                } catch (error) {
+                    logOutput(`[EFQueryLens] hover-middleware-error ${String(error)}`);
+                    throw error;
+                }
             }
         },
         synchronize: {
@@ -123,6 +151,7 @@ export function activate(context: ExtensionContext) {
         serverOptions,
         clientOptions
     );
+    attachSqlReadyNotifications(client, () => currentSettings.notifyWhenSqlReady);
 
     const sqlActions = createSqlActionHandlers(() => client);
     const commandDisposables = registerQueryLensCommands({
@@ -133,6 +162,16 @@ export function activate(context: ExtensionContext) {
         logOutput,
     });
     context.subscriptions.push(...commandDisposables);
+
+    let statusBar = createQueryLensStatusBar(
+        context,
+        () => client,
+        {
+            enabled: currentSettings.showStatusBar,
+            outputChannel: queryLensOutputChannel!,
+        },
+    );
+    context.subscriptions.push({ dispose: () => statusBar.dispose() });
 
     context.subscriptions.push(
         workspace.onDidChangeConfiguration(async event => {
@@ -148,6 +187,24 @@ export function activate(context: ExtensionContext) {
 
             await pushLspRuntimeConfiguration(client, currentSettings);
 
+            if (currentSettings.debugLogsEnabled !== previousSettings.debugLogsEnabled) {
+                logOutput(
+                    `[EFQueryLens] verbose server logs ${currentSettings.debugLogsEnabled ? 'enabled' : 'disabled'} — restart language server to apply`
+                );
+            }
+
+            statusBar.dispose();
+            statusBar = createQueryLensStatusBar(
+                context,
+                () => client,
+                {
+                    enabled: currentSettings.showStatusBar,
+                    outputChannel: queryLensOutputChannel!,
+                },
+            );
+            statusBar.attachClientNotifications();
+            await statusBar.refresh();
+
             if (!requiresLanguageServerRestart(previousSettings, currentSettings)) {
                 return;
             }
@@ -162,7 +219,12 @@ export function activate(context: ExtensionContext) {
         })
     );
 
-    client.start();
+    void client.start().then(async () => {
+        logOutput('language-client-ready');
+        statusBar.attachClientNotifications();
+        await statusBar.refresh();
+        await runStartupWarmup(client, logOutput);
+    });
     logOutput('language-client-started');
 }
 
@@ -174,7 +236,55 @@ export function deactivate(): Thenable<void> | undefined {
 }
 
 function logOutput(message: string): void {
-    queryLensOutputChannel?.appendLine(message);
+    queryLensOutputChannel?.info(message);
+}
+
+function logHoverResult(
+    filePath: string,
+    line: number,
+    character: number,
+    hover: Hover | null | undefined,
+    roundTripMs: number,
+): void {
+    if (!hover) {
+        return;
+    }
+
+    const text = extractHoverMarkdown(hover);
+    if (!text.includes('EF QueryLens')) {
+        return;
+    }
+
+    const fileName = path.basename(filePath);
+    if (text.includes('translating query') || text.includes('in queue')) {
+        logOutput(formatHoverQueuedMessage(fileName, line, character, roundTripMs));
+        return;
+    }
+
+    if (text.match(/SQL generation time\s+(\d+)\s*ms/i)) {
+        logOutput(formatHoverReadyMessage(fileName, line, character, roundTripMs, text));
+        return;
+    }
+
+    logOutput(`[EFQueryLens] hover file=${fileName} line=${line} char=${character} roundTripMs=${Math.round(roundTripMs)}`);
+}
+
+function extractHoverMarkdown(hover: Hover): string {
+    const contents = Array.isArray(hover.contents) ? hover.contents : [hover.contents];
+    return contents
+        .map(item => {
+            if (typeof item === 'string') {
+                return item;
+            }
+
+            if (item && typeof item === 'object' && 'value' in item) {
+                const value = (item as { value?: unknown }).value;
+                return typeof value === 'string' ? value : '';
+            }
+
+            return '';
+        })
+        .join('\n');
 }
 
 function requiresLanguageServerRestart(previous: QueryLensSettings, next: QueryLensSettings): boolean {
@@ -193,6 +303,7 @@ function buildLspRuntimeConfiguration(settings: QueryLensSettings): Record<strin
         debugEnabled: settings.debugLogsEnabled,
         enableLspHover: true,
         hoverProgressNotify: false,
+        sqlReadyNotify: settings.notifyWhenSqlReady,
         hoverProgressDelayMs: 350,
         hoverCacheTtlMs: 15_000,
         hoverCancelGraceMs: 1_500,
@@ -200,6 +311,7 @@ function buildLspRuntimeConfiguration(settings: QueryLensSettings): Record<strin
         structuredQueueAdaptiveWaitMs: 200,
         warmupSuccessTtlMs: 60_000,
         warmupFailureCooldownMs: 5_000,
+        hoverWaitWhenWarmMs: settings.hoverWaitWhenWarmMs,
     };
 }
 

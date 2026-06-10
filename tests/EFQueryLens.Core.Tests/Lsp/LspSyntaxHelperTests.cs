@@ -1,3 +1,5 @@
+using EFQueryLens.Core.Contracts;
+using EFQueryLens.Lsp.Handlers;
 using EFQueryLens.Lsp.Parsing;
 
 namespace EFQueryLens.Core.Tests.Lsp;
@@ -585,6 +587,210 @@ public class LspSyntaxHelperTests
     }
 
     [Fact]
+    public void TryExtractLinqExpression_GetApplicationByIdAsync_NestedProjectionLinq_ComposesFullDbContextQuery()
+    {
+        var source = """
+            public class ApplicationService
+            {
+                private readonly MedicsApplicationDbContext dbContext;
+
+                public async Task<TResult?> GetApplicationByIdAsync<TResult>(
+                    Guid applicationId,
+                    Expression<Func<Application, TResult>> expression,
+                    CancellationToken ct)
+                {
+                    return await dbContext.Applications.AsNoTracking()
+                        .Where(w => w.IsNotDeleted && w.ApplicationId == applicationId)
+                        .Select(expression)
+                        .SingleOrDefaultAsync(ct);
+                }
+
+                public async Task Run(Guid applicationId, CancellationToken ct)
+                {
+                    var coreData = await GetApplicationByIdAsync(
+                        applicationId,
+                        a => new
+                        {
+                            a.ApplicationId,
+                            ProductOwners = a.PrProductOwners
+                                .Where(w => w.IsNotDeleted)
+                                .Select(w => w.Id)
+                                .ToList(),
+                        },
+                        ct);
+                }
+            }
+            """;
+
+        var (whereLine, whereCharacter) = FindPosition(source, ".Select(w => w.Id)");
+        var expressionOnWhere = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            whereLine,
+            whereCharacter,
+            out var contextOnWhere);
+
+        Assert.NotNull(expressionOnWhere);
+        Assert.Equal("dbContext", contextOnWhere);
+        Assert.Contains("dbContext.Applications", expressionOnWhere, StringComparison.Ordinal);
+        Assert.Contains("SingleOrDefaultAsync", expressionOnWhere, StringComparison.Ordinal);
+        Assert.Contains("PrProductOwners", expressionOnWhere, StringComparison.Ordinal);
+        Assert.Contains("a => new", expressionOnWhere, StringComparison.Ordinal);
+
+        var (navLine, navCharacter) = FindPosition(source, "PrProductOwners");
+        var expressionOnNav = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            navLine,
+            navCharacter,
+            out var contextOnNav);
+
+        Assert.NotNull(expressionOnNav);
+        Assert.Equal("dbContext", contextOnNav);
+        Assert.Contains("dbContext.Applications", expressionOnNav, StringComparison.Ordinal);
+        Assert.Contains("PrProductOwners", expressionOnNav, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_NestedNavigationLinqInsideStandaloneSelect_ReturnsNullForInnerFragment()
+    {
+        var source = """
+            var query = await dbContext.Parents
+                .Select(p => new
+                {
+                    p.Id,
+                    Kids = p.Children.Where(c => c.Active).ToList()
+                })
+                .ToListAsync(ct);
+            """;
+
+        var (line, character) = FindPosition(source, "c.Active");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName);
+
+        Assert.Null(expression);
+        Assert.Null(contextVariableName);
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_NestedNavigationLinqInsideStandaloneSelect_OuterTerminalStillExtracts()
+    {
+        var source = """
+            var query = await dbContext.Parents
+                .Select(p => new
+                {
+                    p.Id,
+                    Kids = p.Children.Where(c => c.Active).ToList()
+                })
+                .ToListAsync(ct);
+            """;
+
+        var (line, character) = FindPosition(source, "ToListAsync");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName);
+
+        Assert.NotNull(expression);
+        Assert.Equal("dbContext", contextVariableName);
+        Assert.Contains("dbContext.Parents", expression, StringComparison.Ordinal);
+        Assert.Contains("ToListAsync", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_ComposedHelperQuery_SemanticCacheKeyDiffersFromLambdaFragment()
+    {
+        var source = """
+            public class ApplicationService
+            {
+                private readonly MedicsApplicationDbContext dbContext;
+
+                public async Task<TResult?> GetApplicationByIdAsync<TResult>(
+                    Guid applicationId,
+                    Expression<Func<Application, TResult>> expression,
+                    CancellationToken ct)
+                {
+                    return await dbContext.Applications.AsNoTracking()
+                        .Where(w => w.IsNotDeleted && w.ApplicationId == applicationId)
+                        .Select(expression)
+                        .SingleOrDefaultAsync(ct);
+                }
+
+                public async Task Run(Guid applicationId, CancellationToken ct)
+                {
+                    var coreData = await GetApplicationByIdAsync(
+                        applicationId,
+                        a => new
+                        {
+                            ProductOwners = a.PrProductOwners
+                                .Where(w => w.IsNotDeleted)
+                                .ToList(),
+                        },
+                        ct);
+                }
+            }
+            """;
+
+        var (line, character) = FindPosition(source, "PrProductOwners");
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName);
+
+        Assert.NotNull(expression);
+        Assert.Equal("dbContext", contextVariableName);
+
+        var composedRequest = TranslationRequestBuilder.TryBuild(
+            "ApplicationService.cs",
+            source,
+            expression,
+            contextVariableName!,
+            line,
+            character);
+        Assert.NotNull(composedRequest);
+
+        var fragmentRequest = composedRequest with
+        {
+            Expression = "a.PrProductOwners.Where(w => w.IsNotDeleted).ToList()",
+            ContextVariableName = "a",
+        };
+
+        Assert.NotEqual(
+            HoverHandler.BuildSemanticKey(composedRequest),
+            HoverHandler.BuildSemanticKey(fragmentRequest));
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_LambdaScopedFragmentWithoutComposableHelper_ReturnsNull()
+    {
+        var source = """
+            var rows = await dbContext.Applications
+                .Select(a => new
+                {
+                    a.ApplicationId,
+                    Owners = a.PrProductOwners.Where(w => w.IsNotDeleted).ToList()
+                })
+                .ToListAsync(ct);
+            """;
+
+        var (line, character) = FindPosition(source, "PrProductOwners");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName);
+
+        Assert.Null(expression);
+        Assert.Null(contextVariableName);
+    }
+
+    [Fact]
     public void TryExtractLinqExpression_WhereClauseReceivesExpressionVariable_ExtractsChainAndIncludesVariable()
     {
         // Where(filter) / Select(selector) with a pre-built Expression<Func<...>> variable
@@ -888,6 +1094,61 @@ public class LspSyntaxHelperTests
         Assert.Contains("dbContext.Items", expression, StringComparison.Ordinal);
         Assert.Contains("ToListAsync", expression, StringComparison.Ordinal);
         Assert.DoesNotContain("await", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryExtractLinqExpression_DbContextFromFactory_DoesNotInlineAwaitInitializer()
+    {
+        // Regression: inlining "context = await factory.CreateDbContextAsync()" into
+        // "context.ApplicationPrDeviceListings..." caused CS4032 in the sync eval scaffold.
+        var source = """
+            MedicsApplicationDbContext context = await contextFactory.CreateDbContextAsync(ct);
+            var relatedApplications = await context
+                .ApplicationPrDeviceListings.AsNoTracking()
+                .Where(x => x.IsNotDeletedAndLatest)
+                .Where(x => x.Application.IsNotDeleted)
+                .Select(x => x.ApplicationId)
+                .ToListAsync(ct);
+            """;
+
+        var (line, character) = FindPosition(source, "ApplicationPrDeviceListings");
+
+        var expression = LspSyntaxHelper.TryExtractLinqExpression(
+            source,
+            line,
+            character,
+            out var contextVariableName);
+
+        Assert.NotNull(expression);
+        Assert.Equal("context", contextVariableName);
+        Assert.Contains("ApplicationPrDeviceListings", expression, StringComparison.Ordinal);
+        Assert.StartsWith("context", expression.TrimStart(), StringComparison.Ordinal);
+        Assert.Contains("ToListAsync", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("await", expression, StringComparison.Ordinal);
+        Assert.DoesNotContain("contextFactory", expression, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryResolveDbContextTypeName_VarFromFactory_InfersGenericDbContextType()
+    {
+        var source = """
+            public sealed class DashboardService(
+                IDbContextFactory<MedicsInsightsDbContext> contextFactory)
+            {
+                public async Task<int> GetPendingCountAsync(CancellationToken ct)
+                {
+                    var context = await contextFactory.CreateDbContextAsync(ct);
+
+                    return await context
+                        .OfficerActions.Where(oa => oa.IsNotDeleted)
+                        .CountAsync(ct);
+                }
+            }
+            """;
+
+        var typeName = LspSyntaxHelper.TryResolveDbContextTypeName(source, "context");
+
+        Assert.Equal("MedicsInsightsDbContext", typeName);
     }
 
     [Fact]
