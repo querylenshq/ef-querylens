@@ -23,6 +23,14 @@ export function readSettings(): QueryLensSettings {
     const sqlDialect = readSqlDialect(config.get<string>('sql.dialect', 'auto'));
     const codeLensUseModelFilter = config.get<boolean>('codeLens.useModelFilter', false);
     const debugLogsEnabled = config.get<boolean>('debug.enableVerboseLogs', false);
+    const showStatusBar = config.get<boolean>('showStatusBar', true);
+    const hoverWaitWhenWarmMs = clampNumber(
+        config.get<number>('hoverWaitWhenWarmMs', 8000),
+        0,
+        30000,
+        8000
+    );
+    const notifyWhenSqlReady = config.get<boolean>('notifyWhenSqlReady', true);
 
     return {
         maxCodeLensPerDocument,
@@ -31,6 +39,9 @@ export function readSettings(): QueryLensSettings {
         formatSqlOnShow,
         sqlDialect,
         debugLogsEnabled,
+        showStatusBar,
+        hoverWaitWhenWarmMs,
+        notifyWhenSqlReady,
     };
 }
 

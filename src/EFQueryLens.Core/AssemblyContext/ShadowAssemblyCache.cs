@@ -36,7 +36,26 @@ internal sealed partial class ShadowAssemblyCache
             "shadow");
     }
 
-    public string ResolveOrCreateBundle(string sourceAssemblyPath)
+    /// <summary>
+    /// Computes the bundle key for the source output directory without creating a shadow copy.
+    /// </summary>
+    internal string ComputeBundleKeyForSourceAssembly(string sourceAssemblyPath)
+    {
+        var fullSourcePath = Path.GetFullPath(sourceAssemblyPath);
+        var sourceDir = Path.GetDirectoryName(fullSourcePath)
+            ?? throw new InvalidOperationException($"Could not determine source directory for '{fullSourcePath}'.");
+        if (!Directory.Exists(sourceDir))
+        {
+            throw new DirectoryNotFoundException($"Source output directory not found: {sourceDir}");
+        }
+
+        return ComputeBundleKey(sourceDir, BuildManifest(sourceDir));
+    }
+
+    public string ResolveOrCreateBundle(string sourceAssemblyPath) =>
+        ResolveOrCreateBundle(sourceAssemblyPath, attempt: 0);
+
+    private string ResolveOrCreateBundle(string sourceAssemblyPath, int attempt)
     {
         var fullSourcePath = Path.GetFullPath(sourceAssemblyPath);
         var sourceDir = Path.GetDirectoryName(fullSourcePath)
@@ -57,46 +76,32 @@ internal sealed partial class ShadowAssemblyCache
         var bundlePath = Path.Combine(_bundleRoot, bundleKey);
         var bundleAssemblyPath = Path.Combine(bundlePath, Path.GetFileName(fullSourcePath));
 
-        if (File.Exists(bundleAssemblyPath))
+        lock (_gate)
         {
-            // Incomplete bundles can exist if an earlier promotion happened before all
-            // executable artifacts (runtimeconfig/deps) were present. Verify and
-            // re-create when required so ALC loading never fails.
-            var runtimeConfigPath = Path.ChangeExtension(bundleAssemblyPath, ".runtimeconfig.json");
-            var depsPath = Path.ChangeExtension(bundleAssemblyPath, ".deps.json");
-
-            if (File.Exists(runtimeConfigPath) && File.Exists(depsPath))
+            if (TryGetCompleteBundle(bundleAssemblyPath, bundlePath))
             {
-                lock (_gate)
-                {
-                    TouchDirectory(bundlePath);
-                }
-
                 return bundleAssemblyPath;
             }
 
             TryDeleteDirectory(bundlePath);
-        }
 
-        var stagingPath = Path.Combine(_stagingRoot, $"{bundleKey}-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(stagingPath);
+            var stagingPath = Path.Combine(_stagingRoot, $"{bundleKey}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(stagingPath);
 
-        try
-        {
-            foreach (var entry in manifest)
+            try
             {
-                var targetPath = Path.Combine(stagingPath, entry.RelativePath);
-                var targetDir = Path.GetDirectoryName(targetPath);
-                if (!string.IsNullOrWhiteSpace(targetDir))
+                foreach (var entry in FilterCopyManifest(manifest))
                 {
-                    Directory.CreateDirectory(targetDir);
+                    var targetPath = Path.Combine(stagingPath, entry.RelativePath);
+                    var targetDir = Path.GetDirectoryName(targetPath);
+                    if (!string.IsNullOrWhiteSpace(targetDir))
+                    {
+                        Directory.CreateDirectory(targetDir);
+                    }
+
+                    File.Copy(entry.FullPath, targetPath, overwrite: true);
                 }
 
-                File.Copy(entry.FullPath, targetPath, overwrite: true);
-            }
-
-            lock (_gate)
-            {
                 if (!File.Exists(bundleAssemblyPath))
                 {
                     TryAtomicPromote(stagingPath, bundlePath);
@@ -105,12 +110,47 @@ internal sealed partial class ShadowAssemblyCache
 
                 TouchDirectory(bundlePath);
             }
+            finally
+            {
+                TryDeleteDirectory(stagingPath);
+            }
         }
-        finally
+
+        if (!IsCompleteBundle(bundleAssemblyPath))
         {
-            TryDeleteDirectory(stagingPath);
+            if (attempt >= 1)
+            {
+                throw new InvalidOperationException(
+                    $"Shadow bundle for '{Path.GetFileName(fullSourcePath)}' is missing executable artifacts.");
+            }
+
+            TryDeleteDirectory(bundlePath);
+            return ResolveOrCreateBundle(sourceAssemblyPath, attempt + 1);
         }
 
         return bundleAssemblyPath;
+
+        static bool IsCompleteBundle(string assemblyPath)
+        {
+            if (!File.Exists(assemblyPath))
+            {
+                return false;
+            }
+
+            var runtimeConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+            var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
+            return File.Exists(runtimeConfigPath) && File.Exists(depsPath);
+        }
+
+        bool TryGetCompleteBundle(string assemblyPath, string bundleDirectory)
+        {
+            if (!IsCompleteBundle(assemblyPath))
+            {
+                return false;
+            }
+
+            TouchDirectory(bundleDirectory);
+            return true;
+        }
     }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
 
 namespace EFQueryLens.Lsp.Parsing;
@@ -46,8 +47,10 @@ public static partial class AssemblyResolver
 
         try
         {
-            var info = new FileInfo(assemblyPath);
-            return $"{Path.GetFullPath(assemblyPath)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+            var fullPath = Path.GetFullPath(assemblyPath);
+            var info = new FileInfo(fullPath);
+            var bundleKey = AssemblyBundleRevision.TryPeekBundleKey(fullPath) ?? "unknown";
+            return $"{fullPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{bundleKey}";
         }
         catch
         {

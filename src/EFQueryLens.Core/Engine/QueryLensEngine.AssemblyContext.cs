@@ -12,12 +12,15 @@ public sealed partial class QueryLensEngine
         var gate = _alcContextGates.GetOrAdd(sourceAssemblyPath, static _ => new object());
         lock (gate)
         {
-            var sourceFingerprint = BuildSourceFingerprint(sourceAssemblyPath);
+            var bundleKey = AssemblyBundleRevision.TryPeekBundleKey(sourceAssemblyPath)
+                ?? BuildSourceFingerprint(sourceAssemblyPath);
+            var sourceFingerprint = $"{BuildSourceFingerprint(sourceAssemblyPath)}|{bundleKey}";
             var shadowAssemblyPath = ShadowAssemblyContextLoader.ResolveShadowAssemblyPath(sourceAssemblyPath);
 
             if (_alcCache.TryGetValue(sourceAssemblyPath, out var existing))
             {
                 if (string.Equals(existing.SourceFingerprint, sourceFingerprint, StringComparison.Ordinal)
+                    && string.Equals(existing.BundleKey, bundleKey, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(existing.ShadowAssemblyPath, shadowAssemblyPath, StringComparison.OrdinalIgnoreCase)
                     && !ProjectAssemblyContextFactory.IsStale(existing.Context))
                 {
@@ -29,9 +32,17 @@ public sealed partial class QueryLensEngine
             }
 
             var freshContext = ProjectAssemblyContextFactory.Create(shadowAssemblyPath);
+            if (_debugEnabled)
+            {
+                LogDebug(
+                    $"alc-load-stages assembly={Path.GetFileName(sourceAssemblyPath)} " +
+                    $"loadedCount={freshContext.LoadedAssemblyCount} bundleKey={bundleKey}");
+            }
+
             var cachedContext = new CachedAssemblyContext(
                 sourceAssemblyPath,
                 sourceFingerprint,
+                bundleKey,
                 shadowAssemblyPath,
                 freshContext);
 
@@ -88,6 +99,25 @@ public sealed partial class QueryLensEngine
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
         GC.WaitForPendingFinalizers();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
+    }
+
+    private void LogFactoryMissDiagnostics(
+        string sourceAssemblyPath,
+        string shadowAssemblyPath,
+        QueryTranslationResult result)
+    {
+        if (!_debugEnabled
+            || result.Success
+            || string.IsNullOrWhiteSpace(result.ErrorMessage)
+            || !result.ErrorMessage.Contains("IQueryLensDbContextFactory", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        LogDebug(
+            "factory-miss " +
+            $"source={sourceAssemblyPath} shadow={shadowAssemblyPath} " +
+            $"fingerprint={BuildSourceFingerprint(sourceAssemblyPath)}");
     }
 
     private void LogTranslationTiming(string assemblyPath, QueryTranslationResult result)

@@ -1,4 +1,6 @@
 using System.Reflection;
+using EFQueryLens.Core.AssemblyContext;
+using AssemblyReflection = EFQueryLens.Core.AssemblyContext.AssemblyReflection;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Scripting;
 using EFQueryLens.Core.Scripting.DesignTime;
@@ -194,4 +196,38 @@ public class DesignTimeDbContextFactoryTests
         public FakeContextC CreateOfflineContext() =>
             throw new InvalidOperationException("CreateOfflineContext intentionally thrown by ThrowingFactoryC");
     }
+
+    /// <summary>
+    /// Regression for large ASP.NET host DLLs where <see cref="Assembly.GetTypes"/> throws
+    /// <see cref="ReflectionTypeLoadException"/> but factory types remain in
+    /// <see cref="ReflectionTypeLoadException.Types"/>.
+    /// </summary>
+    [Fact]
+    public void TryCreateQueryLensFactory_MedicsApiHostDll_FindsMedicsApplicationFactory()
+    {
+        var sourceDll = Environment.GetEnvironmentVariable("QUERYLENS_TEST_MEDICS_API_DLL")
+            ?? @"D:\tsp\hsa-share\share-medics-applications\src\Share.Medics.Applications.Api\bin\Debug\net8.0\Share.Medics.Applications.Api.dll";
+        if (!File.Exists(sourceDll))
+        {
+            return;
+        }
+
+        using var alcCtx = ProjectAssemblyContextFactory.Create(sourceDll);
+        var dbContextType = alcCtx.LoadedAssemblies
+            .SelectMany(asm => AssemblyReflection.GetCachedLoadableTypes(asm))
+            .FirstOrDefault(t =>
+                t.FullName == "Share.Medics.Applications.Core.Infrastructure.Services.MedicsApplicationDbContext");
+        Assert.NotNull(dbContextType);
+
+        var result = DesignTimeDbContextFactory.TryCreateQueryLensFactory(
+            dbContextType,
+            alcCtx.LoadedAssemblies,
+            sourceDll,
+            out var failureReason);
+
+        Assert.NotNull(result);
+        Assert.IsAssignableFrom(dbContextType, result);
+        Assert.True(string.IsNullOrWhiteSpace(failureReason));
+    }
+
 }

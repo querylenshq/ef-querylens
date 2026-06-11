@@ -7,6 +7,90 @@ namespace EFQueryLens.Lsp.Parsing;
 
 public static partial class LspSyntaxHelper
 {
+    /// <summary>
+    /// Tier 0: walk ancestor invocations and compose the helper's DbContext query with
+    /// call-site Expression arguments before any inner LINQ fragment is extracted.
+    /// </summary>
+    private static bool TryComposeFromEnclosingCallSite(
+        SyntaxNode root,
+        SyntaxNode cursorNode,
+        int cursorPosition,
+        string sourceText,
+        string? sourceFilePath,
+        IReadOnlyList<SyntaxNode>? additionalRoots,
+        out string expression,
+        out string? contextVariableName)
+    {
+        expression = string.Empty;
+        contextVariableName = null;
+
+        foreach (var ancestorInvocation in cursorNode.AncestorsAndSelf().OfType<InvocationExpressionSyntax>())
+        {
+            if (TryExtractFromExpressionParameterHelperCall(
+                    root,
+                    ancestorInvocation,
+                    cursorPosition,
+                    out expression,
+                    out contextVariableName,
+                    additionalRoots))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(sourceFilePath)
+                && TryExtractFromExpressionParameterHelperCallWithLookup(
+                    root,
+                    ancestorInvocation,
+                    cursorPosition,
+                    sourceText,
+                    sourceFilePath,
+                    out expression,
+                    out contextVariableName))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Cross-file helper synthesis is only for custom service methods with an
+    /// <c>Expression&lt;&gt;</c> lambda argument — not LINQ operators like
+    /// <c>.Where()</c> / <c>.Select()</c> on an existing query chain.
+    /// </summary>
+    private static bool ShouldAttemptCrossFileHelperLookup(
+        InvocationExpressionSyntax invocation,
+        int cursorPosition)
+    {
+        if (IsLikelyQueryChain(invocation))
+        {
+            return false;
+        }
+
+        return IsCursorInsideLambdaArgument(invocation, cursorPosition);
+    }
+
+    private static bool IsCursorInsideLambdaArgument(
+        InvocationExpressionSyntax invocation,
+        int cursorPosition)
+    {
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            if (!argument.Span.Contains(cursorPosition))
+            {
+                continue;
+            }
+
+            if (argument.Expression is LambdaExpressionSyntax or SimpleLambdaExpressionSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool TryExtractFromExpressionParameterHelperCall(
         SyntaxNode root,
         InvocationExpressionSyntax invocation,

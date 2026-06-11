@@ -16,6 +16,11 @@ internal sealed partial class WarmupHandler
             {
                 return true;
             }
+
+            if (current.Message.Contains("Multiple DbContext types found", StringComparison.Ordinal))
+            {
+                return true;
+            }
         }
 
         return false;

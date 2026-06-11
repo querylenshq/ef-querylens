@@ -20,8 +20,7 @@ internal static class QueryLensLogOpener
 
     private static Timer? tailTimer;
     private static IVsOutputWindowPane? outputPane;
-    private static string? activeLogPath;
-    private static long lastReadPosition;
+    private static readonly Dictionary<string, long> activeLogPositions = new(StringComparer.OrdinalIgnoreCase);
     private static bool paneInitialized;
 
     internal static async Task InitializeOutputPaneAsync(AsyncPackage package, CancellationToken cancellationToken)
@@ -48,6 +47,31 @@ internal static class QueryLensLogOpener
         pane.OutputString($"EF QueryLens output initialized ({DateTime.UtcNow:O}){Environment.NewLine}");
     }
 
+    internal static void WriteClientDiagnosticLine(string message)
+    {
+        IVsOutputWindowPane? pane;
+        lock (tailSync)
+        {
+            pane = outputPane;
+        }
+
+        if (pane is null || string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        try
+        {
+#pragma warning disable VSTHRD010
+            pane.OutputStringThreadSafe($"[VS-Client] {message}{Environment.NewLine}");
+#pragma warning restore VSTHRD010
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
     internal static async Task<(bool Success, string Message)> StartTailInOutputWindowAsync(AsyncPackage package, CancellationToken cancellationToken)
     {
         var candidates = QueryLensLanguageClient.GetLogFilePaths()
@@ -60,8 +84,10 @@ internal static class QueryLensLogOpener
             return (false, "No QueryLens log file path is available yet. Trigger a hover first.");
         }
 
-        var selectedPath = candidates.FirstOrDefault(File.Exists) ?? candidates[0];
-        EnsureFileExists(selectedPath);
+        foreach (var path in candidates)
+        {
+            EnsureFileExists(path);
+        }
 
         var pane = await EnsureOutputPaneAsync(package, cancellationToken);
         if (pane is null)
@@ -72,21 +98,28 @@ internal static class QueryLensLogOpener
         await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         pane.Activate();
         pane.OutputString($"{Environment.NewLine}=== EF QueryLens log tail started ({DateTime.UtcNow:O}) ==={Environment.NewLine}");
-        pane.OutputString($"Source: {selectedPath}{Environment.NewLine}");
-
-        var snapshot = ReadLastLines(selectedPath, maxLines: 120);
-        if (!string.IsNullOrWhiteSpace(snapshot))
-        {
-            pane.OutputString($"--- Last 120 lines ---{Environment.NewLine}");
-            pane.OutputString(snapshot + Environment.NewLine);
-            pane.OutputString("--- Live tail ---" + Environment.NewLine);
-        }
 
         lock (tailSync)
         {
-            activeLogPath = selectedPath;
-            lastReadPosition = GetFileLength(selectedPath);
+            activeLogPositions.Clear();
             outputPane = pane;
+
+            foreach (var path in candidates)
+            {
+                var label = ResolveLogLabel(path);
+                pane.OutputString($"{Environment.NewLine}--- {label}: {path} ---{Environment.NewLine}");
+
+                var snapshot = ReadLastLines(path, maxLines: 80);
+                if (!string.IsNullOrWhiteSpace(snapshot))
+                {
+                    pane.OutputString($"--- Last 80 lines ---{Environment.NewLine}");
+                    pane.OutputString(snapshot + Environment.NewLine);
+                }
+
+                activeLogPositions[path] = GetFileLength(path);
+            }
+
+            pane.OutputString("--- Live tail ---" + Environment.NewLine);
 
             if (tailTimer is null)
             {
@@ -98,7 +131,8 @@ internal static class QueryLensLogOpener
             }
         }
 
-        return (true, selectedPath);
+        var summary = string.Join(", ", candidates.Select(ResolveLogLabel));
+        return (true, $"Tailing: {summary}");
     }
 
     internal static void StopTail()
@@ -128,9 +162,24 @@ internal static class QueryLensLogOpener
                 tailTimer = null;
             }
 
-            activeLogPath = null;
-            lastReadPosition = 0;
+            activeLogPositions.Clear();
         }
+    }
+
+    private static string ResolveLogLabel(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (fileName.Equals("EFQueryLens.VisualStudio.log", StringComparison.OrdinalIgnoreCase))
+        {
+            return "VS Client";
+        }
+
+        if (fileName.StartsWith("lsp-", StringComparison.OrdinalIgnoreCase))
+        {
+            return "LSP";
+        }
+
+        return fileName;
     }
 
     private static void EnsureFileExists(string path)
@@ -165,61 +214,72 @@ internal static class QueryLensLogOpener
 
     private static void TailTick()
     {
-        string? path;
-        long position;
+        Dictionary<string, long> paths;
         IVsOutputWindowPane? pane;
 
         lock (tailSync)
         {
-            path = activeLogPath;
-            position = lastReadPosition;
+            paths = new Dictionary<string, long>(activeLogPositions, StringComparer.OrdinalIgnoreCase);
             pane = outputPane;
         }
 
-        if (string.IsNullOrWhiteSpace(path) || pane is null || !File.Exists(path))
+        if (pane is null || paths.Count == 0)
         {
             return;
         }
 
-        try
+        foreach (var entry in paths)
         {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length < position)
+            var path = entry.Key;
+            var position = entry.Value;
+            if (!File.Exists(path))
             {
-                position = 0;
-#pragma warning disable VSTHRD010 // OutputStringThreadSafe is safe from background threads.
-                pane.OutputStringThreadSafe($"{Environment.NewLine}--- Log rotated/truncated, continuing from beginning ---{Environment.NewLine}");
-#pragma warning restore VSTHRD010
+                continue;
             }
 
-            if (stream.Length == position)
+            try
             {
-                return;
-            }
-
-            stream.Seek(position, SeekOrigin.Begin);
-            using var reader = new StreamReader(stream);
-            var appended = reader.ReadToEnd();
-            var nextPosition = stream.Position;
-
-            if (!string.IsNullOrEmpty(appended))
-            {
-#pragma warning disable VSTHRD010 // OutputStringThreadSafe is safe from background threads.
-                pane.OutputStringThreadSafe(appended);
-#pragma warning restore VSTHRD010
-            }
-
-            lock (tailSync)
-            {
-                if (string.Equals(activeLogPath, path, StringComparison.OrdinalIgnoreCase))
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var readPosition = position;
+                if (stream.Length < readPosition)
                 {
-                    lastReadPosition = nextPosition;
+                    readPosition = 0;
+                    var label = ResolveLogLabel(path);
+#pragma warning disable VSTHRD010
+                    pane.OutputStringThreadSafe($"{Environment.NewLine}--- {label} log rotated/truncated ---{Environment.NewLine}");
+#pragma warning restore VSTHRD010
+                }
+
+                if (stream.Length == readPosition)
+                {
+                    continue;
+                }
+
+                stream.Seek(readPosition, SeekOrigin.Begin);
+                using var reader = new StreamReader(stream);
+                var appended = reader.ReadToEnd();
+                var nextPosition = stream.Position;
+
+                if (!string.IsNullOrEmpty(appended))
+                {
+                    var label = ResolveLogLabel(path);
+#pragma warning disable VSTHRD010
+                    pane.OutputStringThreadSafe($"[{label}] {appended}");
+#pragma warning restore VSTHRD010
+                }
+
+                lock (tailSync)
+                {
+                    if (activeLogPositions.ContainsKey(path))
+                    {
+                        activeLogPositions[path] = nextPosition;
+                    }
                 }
             }
-        }
-        catch
-        {
-            // Best effort tailing.
+            catch
+            {
+                // Best effort tailing.
+            }
         }
     }
 

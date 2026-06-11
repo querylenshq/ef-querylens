@@ -176,11 +176,22 @@ internal sealed partial class HoverPreviewService
         string statusText,
         double avgTranslationMs)
     {
-        _ = status;
-        _ = avgTranslationMs;
-        var normalizedStatusText = string.IsNullOrWhiteSpace(statusText)
-            ? "EF QueryLens - in queue"
-            : statusText;
-        return $"{normalizedStatusText}\n\n";
+        var headline = status switch
+        {
+            QueryTranslationStatus.InQueue => "**EF QueryLens** \u2014 translating query\u2026 hover again shortly.",
+            QueryTranslationStatus.Starting => "**EF QueryLens** \u2014 starting engine\u2026",
+            QueryTranslationStatus.DaemonUnavailable =>
+                "**EF QueryLens** \u2014 engine unavailable. Try *Restart QueryLens*.",
+            _ => string.IsNullOrWhiteSpace(statusText)
+                ? "**EF QueryLens** \u2014 translating query\u2026 hover again shortly."
+                : $"**EF QueryLens** \u2014 {statusText.Trim()}",
+        };
+
+        if (avgTranslationMs > 0 && status is QueryTranslationStatus.InQueue or QueryTranslationStatus.Starting)
+        {
+            headline += $"\n\n_Avg translation: {avgTranslationMs:0.#} ms_";
+        }
+
+        return $"{headline}\n\n";
     }
 }

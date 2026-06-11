@@ -45,7 +45,7 @@ class EFQueryLensLogToolWindowFactory :
     ) {
         val contentPanel = JPanel(BorderLayout())
         val toolbar = JPanel()
-        val statusLabel = JLabel("Initializing EF QueryLens logs...")
+        val statusLabel = JLabel("${EFQueryLensHostStatus.statusText} | Initializing EF QueryLens logs...")
         val textArea =
             JTextArea().apply {
                 isEditable = false
@@ -92,7 +92,8 @@ class EFQueryLensLogToolWindowFactory :
             val logText = readLogTail(logFile, maxLines = 800)
             val status =
                 buildString {
-                    append("Workspace: ")
+                    append(EFQueryLensHostStatus.statusText)
+                    append(" | Workspace: ")
                     append(identity.workspacePath.absolutePathString())
                     append(" | Hash: ")
                     append(identity.hash)

@@ -63,7 +63,13 @@ public static class TranslationCacheKey
         try
         {
             var info = new FileInfo(assemblyPath);
-            return info.Exists ? $"{info.Length}|{info.LastWriteTimeUtc.Ticks}" : "missing";
+            if (!info.Exists)
+            {
+                return "missing";
+            }
+
+            var bundleKey = AssemblyBundleRevision.TryPeekBundleKey(assemblyPath) ?? "unknown";
+            return $"{bundleKey}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
         }
         catch
         {

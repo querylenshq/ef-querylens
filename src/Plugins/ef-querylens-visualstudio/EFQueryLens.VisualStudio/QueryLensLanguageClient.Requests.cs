@@ -205,7 +205,9 @@ internal sealed partial class QueryLensLanguageClient
         string filePath,
         int line,
         int character,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool refreshStatus = true,
+        bool startSqlReadyWatch = true)
     {
         var client = Current;
         if (client is null) return null;
@@ -214,7 +216,8 @@ internal sealed partial class QueryLensLanguageClient
 
         try
         {
-            Log($"structured-hover-request-start file={Path.GetFileName(filePath)} line={line} char={character}");
+            QueryLensLogOpener.WriteClientDiagnosticLine(
+                $"structured-hover-request-start file={Path.GetFileName(filePath)} line={line} char={character}");
             var uri = new Uri(filePath).AbsoluteUri;
             var response = await languageServerRpc.InvokeWithParameterObjectAsync<JToken?>(
                 "efquerylens/hover",
@@ -231,12 +234,24 @@ internal sealed partial class QueryLensLanguageClient
 
             if (response is null || response.Type == JTokenType.Null)
             {
-                Log($"structured-hover-request-null file={Path.GetFileName(filePath)} line={line} char={character}");
+                QueryLensLogOpener.WriteClientDiagnosticLine(
+                    $"structured-hover-request-null file={Path.GetFileName(filePath)} line={line} char={character}");
                 return null;
             }
 
             var result = response.ToObject<QueryLensStructuredHoverResponse>();
-            Log($"structured-hover-request-success file={Path.GetFileName(filePath)} line={line} char={character} success={result?.Success}");
+            QueryLensLogOpener.WriteClientDiagnosticLine(
+                $"structured-hover-request-success file={Path.GetFileName(filePath)} line={line} char={character} success={result?.Success}");
+            if (startSqlReadyWatch && result is not null)
+            {
+                SqlReadyHoverWatcher.WatchIfQueued(filePath, line, character, result.Status);
+            }
+
+            if (refreshStatus && result?.Success == true)
+            {
+                _ = RefreshStatusAsync(cancellationToken);
+            }
+
             return result;
         }
         catch (Exception ex)

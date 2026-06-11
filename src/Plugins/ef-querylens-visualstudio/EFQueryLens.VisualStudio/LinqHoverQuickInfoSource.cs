@@ -66,15 +66,15 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         {
             LspStartupStatus.Starting =>
                 (2, // QueryTranslationStatus.Starting
-                 "EF QueryLens is starting up \u2014 hover again in a moment.",
+                 "EF QueryLens \u2014 starting engine\u2026",
                  "Language server is initializing."),
             LspStartupStatus.NotStarted =>
                 (2,
-                 "EF QueryLens is loading \u2014 open a C\u266f file and hover again shortly.",
+                 "EF QueryLens \u2014 starting engine\u2026",
                  "Language server has not activated yet."),
             _ =>
                 (3, // QueryTranslationStatus.DaemonUnavailable
-                 "EF QueryLens is unavailable. Check that the extension installed correctly and try reloading.",
+                 "EF QueryLens \u2014 engine unavailable. Try Restart QueryLens.",
                  "EF QueryLens is unavailable."),
         };
 
@@ -127,7 +127,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
             var attempt = attempts[i];
             Log($"Structured hover attempt {i + 1}/{attempts.Count} ({attempt.Label}) line={attempt.Line} char={attempt.Character}");
 
-            var response = await QueryLensLanguageClient.TryGetStructuredHoverAsync(
+            var response = await PollStructuredHoverAsync(
                 document.FilePath,
                 attempt.Line,
                 attempt.Character,
@@ -135,7 +135,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
 
             if (response is not null)
             {
-                Log($"Structured hover resolved on attempt {i + 1} ({attempt.Label}), success={response.Success}");
+                Log($"Structured hover resolved on attempt {i + 1} ({attempt.Label}), success={response.Success}, status={response.Status}");
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
                 return LinqHoverMarkdownRenderer.CreateFromStructured(response, uri, attempt.Line, attempt.Character);
             }
@@ -149,6 +149,63 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         Log("Structured hover returned null for all attempts.");
         return null;
     }
+
+    private const int StructuredHoverPollIntervalMs = 200;
+    private const int TranslationStatusReady = 0;
+
+    private static async Task<QueryLensStructuredHoverResponse?> PollStructuredHoverAsync(
+        string filePath,
+        int line,
+        int character,
+        CancellationToken cancellationToken)
+    {
+        var waitBudgetMs = Math.Max(500, QueryLensOptionsPage.Current?.HoverWaitWhenWarmMs ?? 8000);
+        var deadline = DateTime.UtcNow.AddMilliseconds(waitBudgetMs);
+        QueryLensStructuredHoverResponse? last = null;
+        var isFirstPoll = true;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var response = await QueryLensLanguageClient.TryGetStructuredHoverAsync(
+                filePath,
+                line,
+                character,
+                cancellationToken,
+                refreshStatus: false,
+                startSqlReadyWatch: isFirstPoll);
+            isFirstPoll = false;
+
+            if (response is null)
+            {
+                return last;
+            }
+
+            last = response;
+
+            if (IsTerminalHoverStatus(response.Status))
+            {
+                if (response.Success)
+                {
+                    _ = QueryLensLanguageClient.RefreshStatusAsync(cancellationToken);
+                }
+
+                return response;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                Log($"Structured hover poll timeout after {waitBudgetMs}ms, status={last.Status}");
+                return last;
+            }
+
+            await Task.Delay(StructuredHoverPollIntervalMs, cancellationToken);
+        }
+    }
+
+    private static bool IsTerminalHoverStatus(int status) =>
+        status is TranslationStatusReady or 3; // Ready or DaemonUnavailable
 
     private static Span BuildApplicableSpan(ITextSnapshot snapshot, int position)
     {

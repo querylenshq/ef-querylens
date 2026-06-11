@@ -18,6 +18,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
     private sealed record CachedAssemblyContext(
         string SourceAssemblyPath,
         string SourceFingerprint,
+        string BundleKey,
         string ShadowAssemblyPath,
         ProjectAssemblyContext Context);
 
@@ -116,6 +117,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         var alcCtx = GetOrRefreshContext(fullPath);
         var result = await _evaluator.EvaluateAsync(alcCtx, request, ct, this, fullPath);
         LogTranslationTiming(fullPath, result);
+        LogFactoryMissDiagnostics(fullPath, alcCtx.AssemblyPath, result);
 
         if (!NeedsDbContextDiscoveryRetry(result))
             return result;
@@ -129,6 +131,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
         var freshCtx = GetOrRefreshContext(fullPath);
         var retryResult = await _evaluator.EvaluateAsync(freshCtx, request, ct, this, fullPath);
         LogTranslationTiming(fullPath, retryResult);
+        LogFactoryMissDiagnostics(fullPath, freshCtx.AssemblyPath, retryResult);
         return retryResult;
     }
 
@@ -146,6 +149,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
             {
                 var assemblyPath = Path.GetFullPath(request.AssemblyPath);
                 var alcCtx = GetOrRefreshContext(assemblyPath);
+                alcCtx.EnsureDomainClosureLoaded(request.DbContextTypeName);
                 Type dbContextType;
                 try
                 {
@@ -156,6 +160,7 @@ public sealed partial class QueryLensEngine : IQueryLensEngine, IDbContextPoolPr
                     QueryEvaluator.TryLoadSiblingAssemblies(alcCtx);
                     dbContextType = alcCtx.FindDbContextType(request.DbContextTypeName);
                 }
+
                 var dbInstance = CreateDbContextForInspection(dbContextType, alcCtx);
 
                 var snapshot = BuildModelSnapshot(dbInstance, dbContextType);

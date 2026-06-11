@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Core.Engine;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -125,9 +126,24 @@ internal static class Program
         app.MapPost("/inspect-model", async (ModelInspectionRequest request) =>
         {
             lastActivity = DateTime.UtcNow;
-            var snapshot = await engine.InspectModelAsync(request, CancellationToken.None);
-            lastActivity = DateTime.UtcNow;
-            return Results.Ok(snapshot);
+            try
+            {
+                var snapshot = await engine.InspectModelAsync(request, CancellationToken.None);
+                lastActivity = DateTime.UtcNow;
+                return Results.Ok(snapshot);
+            }
+            catch (DbContextDiscoveryException ex)
+            {
+                lastActivity = DateTime.UtcNow;
+                return Results.Json(
+                    new EngineErrorResponse
+                    {
+                        ErrorType = nameof(DbContextDiscoveryException),
+                        FailureKind = ex.FailureKind.ToString(),
+                        Message = ex.Message,
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
         });
 
         // POST /setup — generate the offline DbContext factory for a project (auto-detect provider

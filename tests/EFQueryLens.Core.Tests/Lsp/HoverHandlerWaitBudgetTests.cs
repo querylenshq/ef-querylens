@@ -1,4 +1,3 @@
-using System.Reflection;
 using EFQueryLens.Core;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
@@ -41,14 +40,14 @@ public sealed class HoverHandlerWaitBudgetTests
         var hover = await handler.HandleAsync(request, CancellationToken.None);
 
         Assert.NotNull(hover);
-        Assert.Contains("computing", Markdown(hover!), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("translating", Markdown(hover!), StringComparison.OrdinalIgnoreCase);
     }
 
     private static (HoverHandler handler, TextDocumentPositionParams request) Setup(int waitBudgetMs)
     {
         var documentManager = new DocumentManager();
         var handler = new HoverHandler(documentManager, new HoverPreviewService(new NoOpQueryLensEngine()));
-        SetField(handler, "_hoverWaitBudgetMs", waitBudgetMs);
+        handler.ConfigureCachesForTests(hoverCacheTtlMs: 15_000, inQueueCacheTtlMs: 3_000, hoverWaitBudgetMs: waitBudgetMs);
 
         // Use a real, existing directory so the assembly resolver's directory walk doesn't throw;
         // the .cs file itself need not exist (the source is served from the DocumentManager).
@@ -66,12 +65,6 @@ public sealed class HoverHandlerWaitBudgetTests
 
     private static string Markdown(Hover hover)
         => ((MarkupContent)hover.Contents.Value!).Value;
-
-    private static void SetField(HoverHandler handler, string fieldName, object value)
-    {
-        var field = typeof(HoverHandler).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance)!;
-        field.SetValue(handler, value);
-    }
 
     private sealed class NoOpQueryLensEngine : IQueryLensEngine
     {

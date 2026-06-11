@@ -2,9 +2,6 @@ import {
     commands,
     env,
     Position,
-    Range,
-    Selection,
-    TextEditorRevealType,
     Uri,
     ViewColumn,
     WebviewPanel,
@@ -17,7 +14,8 @@ import { LanguageClient, State } from 'vscode-languageclient/node';
 import { formatSql } from '../sql/formatting';
 import { QueryLensSqlDialect, QueryLensStructuredHoverResponse } from '../types';
 import { formatUserMessage } from '../utils/errors';
-import { clamp, coerceNonNegativeInt, parseUri } from '../utils/parsing';
+import { coerceNonNegativeInt, parseUri } from '../utils/parsing';
+import { revealQuerySource } from '../utils/revealQuerySource';
 
 export type SqlActionHandlers = {
     showSqlPopupFromLens(uriInput: unknown, lineInput: unknown, characterInput: unknown): Promise<void>;
@@ -46,29 +44,12 @@ export function createSqlActionHandlers(getClient: () => LanguageClient | undefi
         lineInput: unknown,
         characterInput: unknown
     ): Promise<void> {
-        const uri = parseUri(uriInput);
-        if (!uri) {
+        if (typeof uriInput !== 'string') {
             window.showWarningMessage(formatUserMessage('QL1002_INVALID_URI', 'Unable to resolve document URI for SQL preview.'));
             return;
         }
 
-        const document = await workspace.openTextDocument(uri);
-        const editor = await window.showTextDocument(document, {
-            preview: false,
-            preserveFocus: false,
-        });
-
-        const requestedLine = coerceNonNegativeInt(lineInput, 0);
-        const requestedCharacter = coerceNonNegativeInt(characterInput, 0);
-        const line = clamp(requestedLine, 0, Math.max(document.lineCount - 1, 0));
-        const lineText = document.lineAt(line).text;
-        const character = clamp(requestedCharacter, 0, lineText.length);
-        const position = new Position(line, character);
-
-        editor.selection = new Selection(position, position);
-        editor.revealRange(new Range(position, position), TextEditorRevealType.InCenterIfOutsideViewport);
-
-        await commands.executeCommand('editor.action.showHover');
+        await revealQuerySource(uriInput, lineInput, characterInput, { showHover: true });
     }
 
     async function recalculatePreviewFromLens(

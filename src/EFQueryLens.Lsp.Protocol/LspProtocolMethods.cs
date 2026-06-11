@@ -1,0 +1,20 @@
+namespace EFQueryLens.Lsp.Protocol;
+
+/// <summary>Stable LSP method and notification names shared by all IDE clients.</summary>
+public static class LspProtocolMethods
+{
+    public const string StatusRequest = "efquerylens/status";
+    public const string WarmupRequest = "efquerylens/warmup";
+    public const string HoverRequest = "efquerylens/hover";
+    public const string DaemonRestartRequest = "efquerylens/daemon/restart";
+    public const string PreviewRecalculateRequest = "efquerylens/preview/recalculate";
+    public const string SetupDetectRequest = "efquerylens/setup/detect";
+    public const string SetupApplyRequest = "efquerylens/setup/apply";
+    public const string SetupRequest = "efquerylens/setup";
+
+    public const string SqlReadyNotification = "efquerylens/sqlReady";
+    public const string StatusChangedNotification = "efquerylens/statusChanged";
+    public const string ShowSqlPreviewNotification = "efquerylens/showSqlPreview";
+    public const string ShowSqlPopupNotification = "efquerylens/showSqlPopup";
+    public const string CopySqlToClipboardNotification = "efquerylens/copySqlToClipboard";
+}

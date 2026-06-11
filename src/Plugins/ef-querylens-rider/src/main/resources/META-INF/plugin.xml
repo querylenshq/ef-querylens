@@ -5,10 +5,14 @@
     <description>EF QueryLens translates EF Core LINQ into SQL directly in JetBrains Rider and provides quick previews, logs, and copy actions.</description>
 
     <depends>com.intellij.modules.rider</depends>
+    <depends>com.intellij.modules.lsp</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <platform.lsp.serverSupportProvider implementation="efquerylens.EFQueryLensLspServerSupportProvider" />
+        <projectService serviceImplementation="efquerylens.EFQueryLensSettingsService" />
+        <projectConfigurable provider="efquerylens.EFQueryLensSettingsConfigurableProvider" />
         <toolWindow id="EF QueryLens" factoryClass="efquerylens.EFQueryLensLogToolWindowFactory" anchor="bottom" />
+        <statusBarWidgetFactory implementation="efquerylens.EFQueryLensStatusBarWidgetFactory" id="EFQueryLensStatusBar" order="last" />
         <notificationGroup id="EF QueryLens" displayType="BALLOON" isLogByDefault="false" />
         <intentionAction>
             <className>efquerylens.EFQueryLensCopySqlIntentionAction</className>
@@ -44,6 +48,12 @@
                 class="efquerylens.EFQueryLensSetupAction"
                 text="Set up QueryLens"
                 description="Generate the offline DbContext factory for this project">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action id="efquerylens.RestartDaemon"
+                class="efquerylens.EFQueryLensRestartDaemonAction"
+                text="Restart QueryLens Daemon"
+                description="Restart the EF QueryLens background translation daemon">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
     </actions>

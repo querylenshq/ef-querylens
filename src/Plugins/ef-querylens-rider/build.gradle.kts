@@ -27,6 +27,11 @@ dependencies {
     }
     // CommonMark spec-compliant Markdown to HTML (replaces custom regex conversion)
     implementation("org.commonmark:commonmark:0.27.1")
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 val bundledRuntimeOutputDir = layout.buildDirectory.dir("generated/querylens-runtime")

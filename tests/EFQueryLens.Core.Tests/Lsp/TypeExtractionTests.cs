@@ -308,6 +308,22 @@ public class TypeExtractionTests
     }
 
     [Fact]
+    public void ExtractLocalVariableTypes_NullableGuidParameter_IsFound()
+    {
+        var source = """
+            void M(System.Guid? draftId)
+            {
+                _ = draftId;
+            }
+            """;
+
+        var types = Extract(source, "_ = draftId;");
+
+        Assert.True(types.TryGetValue("draftId", out var draftIdType));
+        Assert.Equal("System.Guid?", draftIdType);
+    }
+
+    [Fact]
     public void ExtractLocalVariableTypes_LocalFunctionParameter_IsFound()
     {
         var source = """

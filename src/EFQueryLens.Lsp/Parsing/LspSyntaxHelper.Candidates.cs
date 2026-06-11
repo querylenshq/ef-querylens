@@ -63,16 +63,14 @@ public static partial class LspSyntaxHelper
         var root = tree.GetRoot();
 
         var results = new List<LinqChainInfo>();
-        // Deduplicate by containing statement: for each statement, keep only the
-        // single largest outermost invocation chain. This prevents one big fluent
-        // chain (Include->ThenInclude->Include->ThenInclude...) from producing multiple
-        // badges because each ThenInclude subtree resolves to a different "outermost".
-        var bestPerStatement = new Dictionary<int, (InvocationExpressionSyntax Invocation, int Span)>(capacity: 32);
+        // Deduplicate by outermost chain span start so nested ThenInclude subtrees do not
+        // produce duplicate badges, while still allowing multiple chains per statement
+        // (e.g. ternary branches with separate queries).
+        var seenChainStarts = new HashSet<int>();
+        var outermostInvocations = new List<InvocationExpressionSyntax>();
 
         foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            // Ignore nested queries inside lambda selectors/predicates. The outer query
-            // already captures the SQL that EF Core will generate.
             if (IsInsideLambda(invocation))
             {
                 continue;
@@ -84,23 +82,15 @@ public static partial class LspSyntaxHelper
                 continue;
             }
 
-            // Key by the start position of the containing statement so we get one
-            // chain per statement, keeping the one with the largest span.
-            var containingStmt = outermostInvocation.Ancestors()
-                .FirstOrDefault(a => a is StatementSyntax) as StatementSyntax;
-            var stmtKey = containingStmt?.Span.Start ?? outermostInvocation.Span.Start;
-            var invocationSpan = outermostInvocation.Span.Length;
-
-            if (bestPerStatement.TryGetValue(stmtKey, out var existing))
+            if (!seenChainStarts.Add(outermostInvocation.Span.Start))
             {
-                if (invocationSpan <= existing.Span)
-                    continue;
+                continue;
             }
 
-            bestPerStatement[stmtKey] = (outermostInvocation, invocationSpan);
+            outermostInvocations.Add(outermostInvocation);
         }
 
-        foreach (var (_, (outermostInvocation, _)) in bestPerStatement)
+        foreach (var outermostInvocation in outermostInvocations)
         {
             // Pass the full expression including any terminal call (Count, ToList, etc.)
             // so the engine sees exactly what the app executes and produces accurate SQL.

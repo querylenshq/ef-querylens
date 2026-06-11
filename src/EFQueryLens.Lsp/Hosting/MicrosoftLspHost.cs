@@ -14,20 +14,35 @@ internal static class MicrosoftLspHost
         if (debugEnabled)
             Console.Error.WriteLine("[QL-LSP] host-run debug=true");
 
+        var statusTracker = new QueryLensStatusTracker();
+        statusTracker.SetDaemonReady(ready: true);
+
+        var sqlReadyNotifier = new HoverReadyNotifier();
+
         var documentManager = new DocumentManager();
         var hoverPreviewService = new HoverPreviewService(engine, debugEnabled);
+        var warmupHandler = new WarmupHandler(documentManager, engine);
+        warmupHandler.SetStatusTracker(statusTracker);
+
         var hoverHandler = new HoverHandler(documentManager, hoverPreviewService, engine);
+        hoverHandler.SetWarmupHandler(warmupHandler);
+        hoverHandler.SetStatusTracker(statusTracker);
+        hoverHandler.SetSqlReadyNotifier(sqlReadyNotifier);
+
         var assemblyChangeTracker = new AssemblyChangeTracker(hoverHandler);
+        hoverHandler.SetAssemblyChangeTracker(assemblyChangeTracker);
+        warmupHandler.SetAssemblyChangeTracker(assemblyChangeTracker);
         var prewarm = new TranslationPrewarmService(
             hoverPreviewService,
             hoverHandler.BuildChainSemanticKeys,
             hoverHandler.IsSemanticKeyReady);
+        prewarm.SetStatusTracker(statusTracker);
 
         var lspHandler = new LanguageServerHandler(
             hover: hoverHandler,
-            warmup: new WarmupHandler(documentManager, engine),
+            warmup: warmupHandler,
             daemonControl: new DaemonControlHandler(engine),
-            textSync: new TextDocumentSyncHandler(documentManager, prewarm, assemblyChangeTracker),
+            textSync: new TextDocumentSyncHandler(documentManager, prewarm, assemblyChangeTracker, hoverHandler),
             debugEnabled: debugEnabled);
 
         using var stdin = Console.OpenStandardInput();
@@ -37,6 +52,8 @@ internal static class MicrosoftLspHost
         var msgHandler = new HeaderDelimitedMessageHandler(stdout, stdin, formatter);
         var rpc = new JsonRpc(msgHandler, lspHandler);
         lspHandler.JsonRpc = rpc;
+        lspHandler.SetStatusTracker(statusTracker);
+        lspHandler.SetSqlReadyNotifier(sqlReadyNotifier);
 
         rpc.StartListening();
         if (debugEnabled)

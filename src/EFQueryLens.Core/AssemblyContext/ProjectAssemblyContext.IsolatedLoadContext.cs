@@ -174,5 +174,69 @@ public sealed partial class ProjectAssemblyContext
                 ? LoadUnmanagedDllFromPath(resolved)
                 : IntPtr.Zero;
         }
+
+        /// <summary>
+        /// Preloads a referenced assembly into this ALC when resolvable from deps.json or bin.
+        /// </summary>
+        internal bool TryLoadReferencedAssembly(AssemblyName assemblyName, out Assembly? loaded)
+        {
+            loaded = null;
+            if (string.IsNullOrWhiteSpace(assemblyName.Name))
+                return false;
+
+            if (ShouldPreferDefaultLoadContext(assemblyName.Name))
+                return false;
+
+            try
+            {
+                loaded = Load(assemblyName);
+                if (loaded is not null)
+                    return true;
+
+                var path = ResolveAssemblyPath(assemblyName);
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    return false;
+
+                path = NormalizeAssemblyPathForLoad(path);
+                loaded = LoadFromAssemblyPath(path);
+                return loaded is not null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string? ResolveAssemblyPath(AssemblyName assemblyName)
+        {
+            if (!string.IsNullOrWhiteSpace(assemblyName.Name))
+            {
+                var ridRuntimeCandidate = TryResolveRidRuntimeAssemblyPath(assemblyName.Name);
+                if (!string.IsNullOrWhiteSpace(ridRuntimeCandidate))
+                    return ridRuntimeCandidate;
+
+                var localCandidate = Path.Combine(_assemblyDirectory, assemblyName.Name + ".dll");
+                if (File.Exists(localCandidate))
+                    return localCandidate;
+            }
+
+            var resolved = _resolver.ResolveAssemblyToPath(assemblyName);
+            if (resolved is not null)
+            {
+                if (!LooksLikeReferenceAssemblyPath(resolved))
+                    return resolved;
+
+                if (!string.IsNullOrWhiteSpace(assemblyName.Name))
+                {
+                    var runtimeCandidate = TryResolveRuntimeAssemblyPathFromReference(
+                        resolved,
+                        assemblyName.Name);
+                    if (!string.IsNullOrWhiteSpace(runtimeCandidate))
+                        return runtimeCandidate;
+                }
+            }
+
+            return null;
+        }
     }
 }

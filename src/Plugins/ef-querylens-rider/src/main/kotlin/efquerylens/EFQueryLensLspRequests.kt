@@ -1,5 +1,6 @@
 package efquerylens
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.platform.lsp.api.LspServerManager
 
@@ -26,6 +27,30 @@ internal data class SetupApplyResult(
 
 internal object EFQueryLensLspRequests {
     private const val REQUEST_TIMEOUT_MS: Int = 30_000
+
+    internal fun refreshStatus(project: Project) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val response = sendCustomRequest(project, "efquerylens/status", emptyMap()) ?: return@executeOnPooledThread
+            EFQueryLensHostStatus.updateFromSnapshot(response)
+        }
+    }
+
+    internal fun requestWarmup(
+        project: Project,
+        fileUri: String,
+        line: Int,
+        character: Int,
+    ) {
+        val payload =
+            mapOf(
+                "textDocument" to mapOf("uri" to fileUri),
+                "position" to mapOf("line" to line, "character" to character),
+            )
+        sendCustomRequest(project, "efquerylens/warmup", payload)
+    }
+
+    internal fun requestDaemonRestart(project: Project): Map<String, Any?>? =
+        sendCustomRequest(project, "efquerylens/daemon/restart", emptyMap())
 
     internal fun requestSetupDetect(
         project: Project,
@@ -82,6 +107,21 @@ internal object EFQueryLensLspRequests {
 
         val response =
             when (method) {
+                "efquerylens/status" ->
+                    server.sendRequestSync(REQUEST_TIMEOUT_MS) { languageServer ->
+                        (languageServer as EFQueryLensLspServer).status(payload)
+                    }
+
+                "efquerylens/warmup" ->
+                    server.sendRequestSync(REQUEST_TIMEOUT_MS) { languageServer ->
+                        (languageServer as EFQueryLensLspServer).warmup(payload)
+                    }
+
+                "efquerylens/daemon/restart" ->
+                    server.sendRequestSync(REQUEST_TIMEOUT_MS) { languageServer ->
+                        (languageServer as EFQueryLensLspServer).daemonRestart(payload)
+                    }
+
                 "efquerylens/setup/detect" ->
                     server.sendRequestSync(REQUEST_TIMEOUT_MS) { languageServer ->
                         (languageServer as EFQueryLensLspServer).setupDetect(payload)

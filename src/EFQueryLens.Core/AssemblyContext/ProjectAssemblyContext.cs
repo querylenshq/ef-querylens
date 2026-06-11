@@ -49,38 +49,7 @@ public sealed partial class ProjectAssemblyContext : IDisposable
         _ctx = new IsolatedLoadContext(AssemblyPath);
         _ctx.LoadFromAssemblyPath(AssemblyPath);
 
-        EagerLoadBinDirAssemblies();
-    }
-
-
-    /// <summary>
-    /// Eagerly loads every <c>.dll</c> found in the same directory as the primary
-    /// assembly into the user's isolated ALC. This ensures that lazy-loaded transitive
-    /// dependencies are present in <see cref="LoadedAssemblies"/>
-    /// so that DbContext subclasses in separate class libraries are discoverable,
-    /// and Roslyn sees the full set of extension methods at script-compilation time.
-    /// </summary>
-    private void EagerLoadBinDirAssemblies()
-    {
-        var binDir = Path.GetDirectoryName(AssemblyPath);
-        if (string.IsNullOrEmpty(binDir) || !Directory.Exists(binDir))
-            return;
-
-        foreach (var dll in Directory.EnumerateFiles(binDir, "*.dll", SearchOption.TopDirectoryOnly))
-        {
-            var assemblyName = Path.GetFileNameWithoutExtension(dll);
-            if (ShouldPreferDefaultLoadContext(assemblyName))
-                continue;
-
-            try
-            {
-                LoadAdditionalAssembly(dll);
-            }
-            catch
-            {
-                // Best-effort: some dlls may be native or otherwise unloadable — skip them.
-            }
-        }
+        LoadDomainClosure();
     }
 
     // ─── Public API ──────────────────────────────────────────────────────────

@@ -17,7 +17,10 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.JBPopupListener
 import com.intellij.openapi.ui.popup.LightweightWindowEvent
+import com.intellij.openapi.editor.ScrollType
+import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerManager
 import org.eclipse.lsp4j.ExecuteCommandParams
 import java.awt.Dimension
@@ -181,6 +184,28 @@ class EFQueryLensUrlOpener : UrlOpener() {
         }
     }
 
+    fun openFileAtPosition(
+        project: Project,
+        virtualFile: VirtualFile,
+        line: Int,
+        character: Int,
+    ) {
+        ApplicationManager.getApplication().invokeLater {
+            FileEditorManager.getInstance(project).openFile(virtualFile, true)
+            val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@invokeLater
+            val position = LogicalPosition(line.coerceAtLeast(0), character.coerceAtLeast(0))
+            editor.caretModel.moveToLogicalPosition(position)
+            editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
+        }
+    }
+
+    internal fun requestStructuredHoverPreview(
+        project: Project,
+        fileUri: String,
+        line: Int,
+        character: Int,
+    ): StructuredSqlPreview? = buildStructuredPreview(project, fileUri, line, character)
+
     internal fun buildStructuredPreview(
         project: Project,
         fileUri: String,
@@ -336,9 +361,9 @@ class EFQueryLensUrlOpener : UrlOpener() {
 
     private fun fallbackStatusMessage(statusCode: Int): String =
         when (statusCode) {
-            3 -> "EF QueryLens services are unavailable and cannot communicate right now."
-            2 -> "EF QueryLens is starting up and warming translation services."
-            else -> "EF QueryLens queued this query and is still processing it."
+            3 -> "EF QueryLens — engine unavailable. Try Restart QueryLens."
+            2 -> "EF QueryLens — starting engine…"
+            else -> "EF QueryLens — translating query… hover again shortly."
         }
 
     internal fun showStatusMessage(

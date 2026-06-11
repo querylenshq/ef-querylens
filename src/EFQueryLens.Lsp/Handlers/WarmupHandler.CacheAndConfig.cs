@@ -1,7 +1,17 @@
+using EFQueryLens.Lsp.Services;
+
 namespace EFQueryLens.Lsp.Handlers;
 
 internal sealed partial class WarmupHandler
 {
+    private QueryLensStatusTracker? _statusTracker;
+
+    internal void SetStatusTracker(QueryLensStatusTracker statusTracker)
+        => _statusTracker = statusTracker;
+
+    internal bool IsAssemblyReady(string assemblyPath)
+        => TryGetCachedWarmup(assemblyPath, out var cached) && cached.Success;
+
     private bool TryGetCachedWarmup(string assemblyPath, out CachedWarmup cached)
     {
         cached = default!;

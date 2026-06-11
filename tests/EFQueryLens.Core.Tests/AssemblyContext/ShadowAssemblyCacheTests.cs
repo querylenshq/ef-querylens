@@ -25,6 +25,7 @@ public class ShadowAssemblyCacheTests : IDisposable
 
         _prevEnvValue = Environment.GetEnvironmentVariable("QUERYLENS_SHADOW_ROOT") ?? string.Empty;
         Environment.SetEnvironmentVariable("QUERYLENS_SHADOW_ROOT", _shadowRoot);
+        ShadowAssemblyContextLoader.ResetSharedCacheForTests();
     }
 
     public void Dispose()
@@ -189,20 +190,26 @@ public class ShadowAssemblyCacheTests : IDisposable
     }
 
     [Fact]
-    public void ResolveOrCreateBundle_CopiesAllFilesFromSourceDir()
+    public void ResolveOrCreateBundle_CopiesTopLevelFilesButSkipsNestedSidecars()
     {
         var (sourceDir, assemblyPath) = CreateFakeSourceDir();
         File.WriteAllText(Path.Combine(sourceDir, "extra.json"), "{\"key\":\"value\"}");
+        var nestedDir = Path.Combine(sourceDir, "docs");
+        Directory.CreateDirectory(nestedDir);
+        File.WriteAllText(Path.Combine(nestedDir, "readme.txt"), "docs");
         try
         {
             var cache = new ShadowAssemblyCache(debugEnabled: false);
             var shadowAssemblyPath = cache.ResolveOrCreateBundle(assemblyPath);
             var bundleDir = Path.GetDirectoryName(shadowAssemblyPath)!;
 
-            // The extra.json should have been copied into the bundle.
-            Assert.True(
-                File.Exists(Path.Combine(bundleDir, "extra.json")),
-                "extra.json should be present in the shadow bundle");
+            Assert.True(File.Exists(Path.Combine(bundleDir, "FakeApp.dll")));
+            Assert.True(File.Exists(Path.Combine(bundleDir, "FakeApp.deps.json")));
+            Assert.True(File.Exists(Path.Combine(bundleDir, "FakeApp.runtimeconfig.json")));
+            Assert.True(File.Exists(Path.Combine(bundleDir, "extra.json")));
+            Assert.False(
+                File.Exists(Path.Combine(bundleDir, "docs", "readme.txt")),
+                "nested non-runtime files should not be copied into the shadow bundle");
         }
         finally
         {
@@ -211,7 +218,7 @@ public class ShadowAssemblyCacheTests : IDisposable
     }
 
     [Fact]
-    public void ResolveOrCreateBundle_ChangedFileContent_CreatesNewBundle()
+    public void ResolveOrCreateBundle_ChangedFileContent_RefreshesShadowPathForEngineFingerprint()
     {
         var (sourceDir, assemblyPath) = CreateFakeSourceDir();
         try
@@ -219,17 +226,14 @@ public class ShadowAssemblyCacheTests : IDisposable
             var cache = new ShadowAssemblyCache(debugEnabled: false);
 
             var first = cache.ResolveOrCreateBundle(assemblyPath);
+            var firstInfo = new FileInfo(first);
 
-            // Simulate a rebuild: overwrite the DLL with different content.
             File.WriteAllBytes(assemblyPath, [0x4D, 0x5A, 0x00, 0x01, 0x02]);
 
             var second = cache.ResolveOrCreateBundle(assemblyPath);
 
-            // Different file content → different bundle key → different directory.
-            Assert.NotEqual(
-                Path.GetDirectoryName(first),
-                Path.GetDirectoryName(second),
-                StringComparer.OrdinalIgnoreCase);
+            Assert.NotEqual(Path.GetDirectoryName(first), Path.GetDirectoryName(second), StringComparer.OrdinalIgnoreCase);
+            Assert.True(new FileInfo(second).LastWriteTimeUtc >= firstInfo.LastWriteTimeUtc);
         }
         finally
         {

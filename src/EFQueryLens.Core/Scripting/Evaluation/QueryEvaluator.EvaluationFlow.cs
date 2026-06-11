@@ -24,6 +24,8 @@ public sealed partial class QueryEvaluator
 
         try
         {
+            alcCtx.EnsureDomainClosureLoaded(request.DbContextTypeName);
+
             // 1. Resolve the DbContext type from the user's ALC.
             Type dbContextType;
             var contextResolutionWatch = Stopwatch.StartNew();
@@ -67,7 +69,8 @@ public sealed partial class QueryEvaluator
                 var created = CreateDbContextInstance(
                     dbContextType,
                     alcCtx.LoadedAssemblies,
-                    alcCtx.AssemblyPath);
+                    alcCtx.AssemblyPath,
+                    alcCtx);
                 dbInstance = created.Instance;
                 creationStrategy = created.Strategy;
             }
@@ -90,10 +93,10 @@ public sealed partial class QueryEvaluator
             }
 
             // 3. Build compilation assembly set and compute eval-runner cache key.
+            var userAssembliesList = GetClosureAssemblies(alcCtx);
             var compilationAssemblies = BuildCompilationAssemblySet(alcCtx);
-            var extensionDiscoveryAssemblies = BuildExtensionDiscoveryAssemblySet(alcCtx, compilationAssemblies);
-            var asmSetHash = ComputeAssemblySetHash(
-                compilationAssemblies);
+            var asmSetHash = ComputeAssemblySetHash(compilationAssemblies);
+            var userAsmSetHash = ComputeAssemblySetHash(userAssembliesList);
             var evalCacheKey =
                 $"{alcCtx.AssemblyPath}|{alcCtx.AssemblyTimestamp.Ticks}|{asmSetHash}|{dbContextType.FullName}|{ComputeRequestHash(request)}";
 
@@ -122,8 +125,8 @@ public sealed partial class QueryEvaluator
 
                 // 5. Build known namespace/type index for import filtering (cached by assemblySetHash).
                 var (knownNamespaces, knownTypes) = GetOrBuildNamespaceTypeIndex(
-                    asmSetHash,
-                    compilationAssemblies);
+                    userAsmSetHash,
+                    userAssembliesList);
 
                 // 6. Compile -> emit -> load into user ALC -> invoke Run.
                 // Retry with auto-stub declarations on CS0103 (missing local variables).
@@ -142,14 +145,6 @@ public sealed partial class QueryEvaluator
                     ct.ThrowIfCancellationRequested();
 
                     var workingRequest = request with { Expression = workingExpression };
-
-                    foreach (var import in InferExtensionStaticImportsProactively(
-                                 workingExpression,
-                                 dbContextType,
-                                 extensionDiscoveryAssemblies))
-                    {
-                        synthesizedUsingStaticTypes.Add(import);
-                    }
 
                     var src = BuildEvalSource(
                         dbContextType,
@@ -203,7 +198,7 @@ public sealed partial class QueryEvaluator
                         if (stubs.Any(s => s.Contains($" {n} ") || s.Contains($" {n};")))
                             continue;
 
-                        stubs.Add(BuildStubDeclaration(n!, rootId, workingRequest, dbContextType));
+                        stubs.Add(BuildStubDeclaration(n!, rootId, workingRequest, dbContextType, alcCtx));
                         changed = true;
                     }
 
@@ -246,19 +241,31 @@ public sealed partial class QueryEvaluator
                         .Where(n => !string.IsNullOrWhiteSpace(n))
                         .Distinct(StringComparer.Ordinal))
                     {
+                        var resolvedFromIndex = false;
                         foreach (var parent in FindNamespacesForSimpleName(typeName!, knownTypes))
                         {
                             if (IsResolvableNamespace(parent, knownNamespaces))
                             {
                                 if (synthesizedUsingNamespaces.Add(parent))
+                                {
                                     changed = true;
+                                    resolvedFromIndex = true;
+                                }
                             }
                             else if (IsResolvableType(parent, knownTypes))
                             {
-                                // Nested type — bring it into scope with "using static EnclosingType"
                                 if (synthesizedUsingStaticTypes.Add(parent))
+                                {
                                     changed = true;
+                                    resolvedFromIndex = true;
+                                }
                             }
+                        }
+
+                        if (!resolvedFromIndex
+                            && TryResolveMissingTypeOnDemand(alcCtx, typeName!, ref knownNamespaces, ref knownTypes))
+                        {
+                            changed = true;
                         }
                     }
 
@@ -327,7 +334,7 @@ public sealed partial class QueryEvaluator
                     foreach (var import in InferMissingExtensionStaticImports(
                                  errors,
                                  compilation,
-                                 extensionDiscoveryAssemblies,
+                                 userAssembliesList,
                                  dbContextType))
                     {
                         if (synthesizedUsingStaticTypes.Add(import))

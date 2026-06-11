@@ -8,6 +8,8 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import com.google.gson.Gson
+import com.google.gson.JsonElement
 import com.intellij.platform.lsp.api.Lsp4jClient
 import com.intellij.platform.lsp.api.LspServerNotificationsHandler
 import com.intellij.platform.lsp.api.LspServerSupportProvider
@@ -76,6 +78,9 @@ private class EFQueryLensServerDescriptor(
         get() = EFQueryLensLspServer::class.java
 
     override fun createLsp4jClient(handler: LspServerNotificationsHandler): Lsp4jClient = EFQueryLensClient(handler, hostProject)
+
+    override fun createInitializationOptions(): JsonElement? =
+        Gson().toJsonTree(EFQueryLensLspConfiguration.buildInitializationOptions(hostProject))
 
     override fun createCommandLine(): GeneralCommandLine {
         val projectBasePath =
@@ -169,10 +174,6 @@ private class EFQueryLensServerDescriptor(
     ): GeneralCommandLine {
         withEnvironment("QUERYLENS_CLIENT", "rider")
         withEnvironment("QUERYLENS_DEBUG", "1")
-        withEnvironment("QUERYLENS_MARKDOWN_QUEUE_ADAPTIVE_WAIT_MS", "0")
-        withEnvironment("QUERYLENS_STRUCTURED_QUEUE_ADAPTIVE_WAIT_MS", "0")
-        withEnvironment("QUERYLENS_HOVER_PROGRESS_NOTIFY", "1")
-        withEnvironment("QUERYLENS_HOVER_PROGRESS_DELAY_MS", "350")
         withEnvironment("QUERYLENS_DAEMON_START_TIMEOUT_MS", "30000")
         withEnvironment("QUERYLENS_DAEMON_CONNECT_TIMEOUT_MS", "10000")
         withEnvironment("QUERYLENS_DAEMON_SHUTDOWN_ON_DISPOSE", "1")
@@ -278,6 +279,18 @@ private class EFQueryLensClient(
     handler: LspServerNotificationsHandler,
     private val project: Project,
 ) : Lsp4jClient(handler) {
+    private val lifecycleStarted = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun ensureLifecycleStarted() {
+        if (!lifecycleStarted.compareAndSet(false, true)) {
+            return
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            EFQueryLensLspLifecycle.onServerInitialized(project)
+        }
+    }
+
     @JsonNotification("efquerylens/showSqlPreview")
     @Suppress("UNCHECKED_CAST")
     fun showSqlPreview(payload: Any?) {
@@ -303,6 +316,24 @@ private class EFQueryLensClient(
         opener.showSqlPopup(project, preview)
     }
 
+    @JsonNotification("efquerylens/sqlReady")
+    fun sqlReady(payload: Any?) {
+        val root = payload as? Map<*, *>
+        if (root == null) {
+            thisLogger().warn("[EFQueryLens] sqlReady ignored: payload is not a map (${payload?.javaClass?.name})")
+            return
+        }
+
+        thisLogger().info("[EFQueryLens] sqlReady notification received")
+        EFQueryLensSqlReadyHandler.handle(project, root)
+    }
+
+    @JsonNotification("efquerylens/statusChanged")
+    fun statusChanged(payload: Any?) {
+        EFQueryLensHostStatus.updateFromSnapshot(payload)
+        ensureLifecycleStarted()
+    }
+
     @JsonNotification("efquerylens/copySqlToClipboard")
     @Suppress("UNCHECKED_CAST")
     fun copySqlToClipboard(payload: Any?) {
@@ -314,6 +345,7 @@ private class EFQueryLensClient(
                 .getInstance()
                 .getNotificationGroup("EF QueryLens")
                 .createNotification("SQL copied to clipboard", NotificationType.INFORMATION)
+                .setImportant(true)
                 .notify(project)
         }
     }

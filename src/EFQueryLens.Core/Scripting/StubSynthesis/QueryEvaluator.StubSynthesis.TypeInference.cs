@@ -1,3 +1,5 @@
+using EFQueryLens.Core.AssemblyContext;
+using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis.CSharp;
@@ -95,7 +97,11 @@ public sealed partial class QueryEvaluator
             ? prop.PropertyType.GetGenericArguments().FirstOrDefault() : null;
     }
 
-    private static Type? InferMethodArgumentType(string variableName, string expression, Type dbContextType)
+    private static Type? InferMethodArgumentType(
+        string variableName,
+        string expression,
+        Type dbContextType,
+        ProjectAssemblyContext? alcCtx = null)
     {
         ExpressionSyntax parsed;
         try
@@ -245,7 +251,9 @@ public sealed partial class QueryEvaluator
     }
 
     private static Type? TryInferTypeFromMethodSignature(
-        string methodName, int argumentIndex, Type dbContextType)
+        string methodName,
+        int argumentIndex,
+        Type dbContextType)
     {
         var alc = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(dbContextType.Assembly);
         var assemblies = (IEnumerable<System.Reflection.Assembly>?)alc?.Assemblies
@@ -258,13 +266,26 @@ public sealed partial class QueryEvaluator
             if (IsRuntimeOrFrameworkAssembly(asm))
                 continue;
 
-            foreach (var type in SafeGetTypes(asm))
+            if (AssemblyReflection.ShouldSkipOptionalReflectionScan(asm))
+                continue;
+
+            foreach (var type in AssemblyReflection.GetCachedLoadableTypes(asm))
             {
-                foreach (var method in type.GetMethods(
-                    System.Reflection.BindingFlags.Public
-                    | System.Reflection.BindingFlags.Static
-                    | System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.DeclaredOnly))
+                System.Reflection.MethodInfo[] methods;
+                try
+                {
+                    methods = type.GetMethods(
+                        System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.Static
+                        | System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.DeclaredOnly);
+                }
+                catch (Exception ex) when (AssemblyReflection.IsIgnorableReflectionFailure(ex))
+                {
+                    continue;
+                }
+
+                foreach (var method in methods)
                 {
                     if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
                         continue;
@@ -298,15 +319,6 @@ public sealed partial class QueryEvaluator
             || name == "Microsoft.CSharp";
     }
 
-    private static IEnumerable<Type> SafeGetTypes(System.Reflection.Assembly asm)
-    {
-        try { return asm.GetTypes(); }
-        catch (System.Reflection.ReflectionTypeLoadException e)
-        {
-            return e.Types.Where(t => t is not null).Select(t => t!);
-        }
-        catch { return []; }
-    }
 
     private static bool LooksLikeStringExpression(ExpressionSyntax expression, Type dbContextType)
     {

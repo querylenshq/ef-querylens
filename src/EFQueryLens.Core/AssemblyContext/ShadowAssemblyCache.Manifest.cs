@@ -37,6 +37,16 @@ internal sealed partial class ShadowAssemblyCache
 
     private static void TryAtomicPromote(string stagingPath, string finalPath)
     {
+        if (!Directory.Exists(stagingPath))
+        {
+            if (Directory.Exists(finalPath))
+            {
+                return;
+            }
+
+            throw new DirectoryNotFoundException($"Shadow staging directory not found: {stagingPath}");
+        }
+
         for (var i = 0; i < 5; i++)
         {
             try
@@ -57,6 +67,24 @@ internal sealed partial class ShadowAssemblyCache
                 }
 
                 Thread.Sleep(50 * (i + 1));
+            }
+        }
+    }
+
+    private static IEnumerable<ManifestEntry> FilterCopyManifest(IReadOnlyList<ManifestEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            var relative = entry.RelativePath.Replace('\\', '/');
+            if (!relative.Contains('/'))
+            {
+                yield return entry;
+                continue;
+            }
+
+            if (relative.StartsWith("runtimes/", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return entry;
             }
         }
     }

@@ -217,6 +217,8 @@ internal static partial class LinqHoverMarkdownRenderer
         }
     }
 
+    internal static void TryOpenSqlInEditorPublic(string content) => TryOpenSqlInEditor(content);
+
     private static void TryOpenSqlInEditor(string content)
     {
         ThreadHelper.ThrowIfNotOnUIThread();

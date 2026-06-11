@@ -42,6 +42,12 @@ public static class ShadowAssemblyContextLoader
     public static string ResolveShadowAssemblyPath(string sourceAssemblyPath) =>
         SharedCache.Value.ResolveOrCreateBundle(Path.GetFullPath(sourceAssemblyPath));
 
+    /// <summary>
+    /// Returns the bundle key for a source assembly output directory without creating a shadow copy.
+    /// </summary>
+    public static string ComputeBundleKey(string sourceAssemblyPath) =>
+        SharedCache.Value.ComputeBundleKeyForSourceAssembly(Path.GetFullPath(sourceAssemblyPath));
+
     private static ShadowAssemblyCache CreateSharedCache()
     {
         var debugEnabled = EnvironmentVariableParser.ReadBool("QUERYLENS_DEBUG", fallback: false);
