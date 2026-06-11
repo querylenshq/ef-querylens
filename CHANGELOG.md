@@ -6,6 +6,22 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.22] - 2026-06-12
+
+### Added
+- SQL-ready notifications across VS Code, Rider, and Visual Studio (`efquerylens/sqlReady` push with Go to Query / Open SQL actions).
+- Shared `EFQueryLens.Lsp.Protocol` project for host state, init options, and notification DTOs.
+- VS extension: InfoBar notifier, background SQL-ready watcher fallback, status bar, and options page.
+- Rider: SQL-ready handler, status bar widget, settings page, and daemon restart action.
+
+### Changed
+- Refactored LSP hover into `HoverRequestCoordinator` with region resolution, semantic span cache, inflight deduplication, and bounded sync wait.
+- Improved assembly loading (EF domain closure, deps.json index, host-bin catalog) and design-time DbContext factory resolution.
+
+### Fixed
+- Hover polling architecture: non-LINQ positions no longer return false `InQueue` status or spin 60s background watches.
+- Translation reliability: `var`/factory DbContext resolution, await-inlining guards, nullable stub synthesis, and failed-translation cache invalidation.
+
 ## [1.0.21] - 2026-06-08
 
 ### Fixed
