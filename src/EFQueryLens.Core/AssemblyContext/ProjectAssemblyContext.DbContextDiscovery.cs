@@ -26,26 +26,9 @@ public sealed partial class ProjectAssemblyContext
         // discovered correctly after LoadAdditionalAssembly() is called.
         foreach (var asm in LoadedAssemblies)
         {
-            IEnumerable<Type> candidates;
-            try
-            {
-                candidates = asm.GetExportedTypes();
-            }
-            catch (ReflectionTypeLoadException rtle)
-            {
-                // Some types in the assembly couldn't be loaded (e.g. a factory
-                // class that references a design-time interface whose assembly is
-                // not in the probe paths). The successfully loaded types are still
-                // in rtle.Types - use them so that DbContext types aren't missed.
-                candidates = rtle.Types.Where(t => t is not null)!;
-            }
-            catch
-            {
-                // Truly broken assembly - skip entirely.
-                continue;
-            }
-
-            foreach (var type in candidates)
+            foreach (var type in AssemblyReflection.GetCachedLoadableTypes(
+                         asm,
+                         new AssemblyReflection.ScanOptions { PublicOnly = true }))
             {
                 try
                 {

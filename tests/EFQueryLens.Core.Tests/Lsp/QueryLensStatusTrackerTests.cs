@@ -1,3 +1,4 @@
+using EFQueryLens.Lsp.Protocol;
 using EFQueryLens.Lsp.Services;
 
 namespace EFQueryLens.Core.Tests.Lsp;

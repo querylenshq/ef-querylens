@@ -1,9 +1,10 @@
 using System.Reflection;
+using EFQueryLens.Core;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Handlers;
-using EFQueryLens.Lsp.HoverPipeline;
 using EFQueryLens.Lsp.Parsing;
+using EFQueryLens.Lsp.Protocol;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 
@@ -37,6 +38,51 @@ public sealed class HoverSqlReadyNotificationTests
     }
 
     [Fact]
+    public async Task HandleAsync_FastBackgroundCompletion_StillNotifiesAfterInQueue()
+    {
+        var notifications = new CapturingSqlReadyNotifier();
+        var (handler, request, sampleFile) = Setup(
+            waitBudgetMs: 0,
+            engine: new DelayedTranslationEngine(delayMs: 5, success: true));
+
+        handler.SetSqlReadyNotifierForTests(notifications);
+
+        var hover = await handler.HandleAsync(request, CancellationToken.None);
+        Assert.NotNull(hover);
+        Assert.Contains("translating", Markdown(hover!), StringComparison.OrdinalIgnoreCase);
+
+        var notified = await WaitForNotificationsAsync(notifications, expectedCount: 1, timeoutMs: 5_000);
+        Assert.True(notified);
+
+        var payload = Assert.Single(notifications.Notifications);
+        Assert.Equal(Path.GetFileName(sampleFile), payload.FileName);
+        Assert.True(payload.CommandCount > 0);
+    }
+
+    [Fact]
+    public async Task HandleStructuredAsync_InQueueThenBackgroundSuccess_NotifiesOnce()
+    {
+        var notifications = new CapturingSqlReadyNotifier();
+        var (handler, request, sampleFile) = Setup(
+            waitBudgetMs: 0,
+            engine: new DelayedTranslationEngine(delayMs: 400, success: true));
+
+        handler.SetSqlReadyNotifierForTests(notifications);
+
+        var structured = await handler.HandleStructuredAsync(request, CancellationToken.None);
+        Assert.NotNull(structured);
+        Assert.Equal(QueryTranslationStatus.InQueue, structured.Status);
+
+        var notified = await WaitForNotificationsAsync(notifications, expectedCount: 1, timeoutMs: 5_000);
+        Assert.True(notified);
+
+        var payload = Assert.Single(notifications.Notifications);
+        Assert.Equal(Path.GetFileName(sampleFile), payload.FileName);
+        Assert.True(payload.CommandCount > 0);
+        Assert.False(string.IsNullOrWhiteSpace(payload.FileUri));
+    }
+
+    [Fact]
     public async Task HandleAsync_SyncReady_DoesNotNotify()
     {
         var notifications = new CapturingSqlReadyNotifier();
@@ -52,6 +98,27 @@ public sealed class HoverSqlReadyNotificationTests
         Assert.DoesNotContain("translating", Markdown(hover!), StringComparison.OrdinalIgnoreCase);
 
         await Task.Delay(300);
+        Assert.Empty(notifications.Notifications);
+    }
+
+    [Fact]
+    public async Task HandleAsync_InQueueThenBackgroundFactoryMissing_DoesNotNotify()
+    {
+        var notifications = new CapturingSqlReadyNotifier();
+        var factoryMessage =
+            "No IQueryLensDbContextFactory<SqliteAppDbContext> found. " +
+            "Add an IQueryLensDbContextFactory<T> implementation to your executable project (API / Worker / Console), not in a class library.";
+        var (handler, request, _) = Setup(
+            waitBudgetMs: 0,
+            engine: new DelayedTranslationEngine(delayMs: 200, success: false, errorMessage: factoryMessage));
+
+        handler.SetSqlReadyNotifierForTests(notifications);
+
+        var hover = await handler.HandleAsync(request, CancellationToken.None);
+        Assert.NotNull(hover);
+        Assert.Contains("translating", Markdown(hover!), StringComparison.OrdinalIgnoreCase);
+
+        await Task.Delay(1_500);
         Assert.Empty(notifications.Notifications);
     }
 

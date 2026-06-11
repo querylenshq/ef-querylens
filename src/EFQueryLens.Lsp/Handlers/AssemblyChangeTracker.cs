@@ -15,7 +15,11 @@ internal sealed class AssemblyChangeTracker
 
     public AssemblyChangeTracker(HoverHandler hover) => _hover = hover;
 
-    public void CheckOnSave(string filePath)
+    /// <summary>
+    /// Compares the compiled host DLL fingerprint and invalidates caches when it changes.
+    /// Called on save and before hover/warmup so terminal rebuilds are picked up without a save.
+    /// </summary>
+    public void CheckAndInvalidateIfChanged(string filePath)
     {
         var fingerprint = AssemblyResolver.TryGetAssemblyFingerprint(filePath);
         if (string.IsNullOrWhiteSpace(fingerprint))
@@ -46,4 +50,6 @@ internal sealed class AssemblyChangeTracker
             _hover.OnAssemblyChanged();
         }
     }
+
+    public void CheckOnSave(string filePath) => CheckAndInvalidateIfChanged(filePath);
 }

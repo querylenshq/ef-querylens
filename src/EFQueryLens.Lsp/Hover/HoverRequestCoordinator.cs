@@ -3,6 +3,7 @@ using EFQueryLens.Core;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Parsing;
+using EFQueryLens.Lsp.Protocol;
 using EFQueryLens.Lsp.Services;
 
 namespace EFQueryLens.Lsp.HoverPipeline;
@@ -20,6 +21,10 @@ internal sealed class HoverRequestCoordinator
     private readonly ConcurrentDictionary<string, Lazy<Task<HoverResult>>> _pipelineInflight =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _pendingSqlReadyNotify =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SqlReadyNotification> _completedAwaitingSqlReady =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _suppressedSqlReadyNotify =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Action<string>? _log;
     private readonly Action<string, int, int, QueryTranslationStatus, bool, bool>? _logOperation;
@@ -92,6 +97,8 @@ internal sealed class HoverRequestCoordinator
         _chainCache.Clear();
         _pipelineInflight.Clear();
         _pendingSqlReadyNotify.Clear();
+        _completedAwaitingSqlReady.Clear();
+        _suppressedSqlReadyNotify.Clear();
     }
 
     public void StorePrewarmed(
@@ -169,7 +176,7 @@ internal sealed class HoverRequestCoordinator
             if (finished == pipeline)
             {
                 var waited = await pipeline.ConfigureAwait(false);
-                if (waited.Markdown is not null)
+                if (HoverFormatting.IsResolvedForSync(waited))
                 {
                     _log?.Invoke($"hover-wait-resolved line={line} char={character} status={waited.Status}");
                     ClearPendingSqlReady(regionKey);
@@ -181,7 +188,7 @@ internal sealed class HoverRequestCoordinator
         else if (!isOwner)
         {
             var joined = await pipeline.ConfigureAwait(false);
-            if (joined.Markdown is not null)
+            if (HoverFormatting.IsResolvedForSync(joined))
             {
                 ClearPendingSqlReady(regionKey);
                 LogOperation(filePath, line, character, joined.Status, cached: true);
@@ -244,6 +251,7 @@ internal sealed class HoverRequestCoordinator
                 var region = resolve.Region.WithRequestPosition(line, character);
                 if (_cache.TryGetReady(region.AssemblyFingerprint, region.SemanticKey, out var cached))
                 {
+                    ClearPendingSqlReady(regionKey);
                     return cached!;
                 }
 
@@ -259,12 +267,14 @@ internal sealed class HoverRequestCoordinator
 
             var fallback = await ComputeImmediateAsync(filePath, sourceText, line, character, CancellationToken.None)
                 .ConfigureAwait(false);
+            ClearPendingSqlReady(regionKey);
             _log?.Invoke($"hover-pipeline-finished line={line} char={character} status={fallback.Status} source=no-region");
             LogOperation(filePath, line, character, fallback.Status, cached: false, background: true);
             return fallback;
         }
         catch (Exception ex)
         {
+            ClearPendingSqlReady(regionKey);
             _log?.Invoke($"hover-pipeline-failed line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
             QueryLensOperationalLog.Info(
                 $"hover-failed file={Path.GetFileName(filePath)} line={line} char={character} error={ex.GetType().Name}");
@@ -403,10 +413,21 @@ internal sealed class HoverRequestCoordinator
     }
 
     private void MarkPendingSqlReady(string regionKey)
-        => _pendingSqlReadyNotify.TryAdd(regionKey, 0);
+    {
+        _suppressedSqlReadyNotify.TryRemove(regionKey, out _);
+        _pendingSqlReadyNotify.TryAdd(regionKey, 0);
+        if (_completedAwaitingSqlReady.TryRemove(regionKey, out var completed))
+        {
+            DispatchSqlReadyNotification(completed);
+        }
+    }
 
     private void ClearPendingSqlReady(string regionKey)
-        => _pendingSqlReadyNotify.TryRemove(regionKey, out _);
+    {
+        _pendingSqlReadyNotify.TryRemove(regionKey, out _);
+        _completedAwaitingSqlReady.TryRemove(regionKey, out _);
+        _suppressedSqlReadyNotify.TryAdd(regionKey, 0);
+    }
 
     private void TryNotifySqlReady(
         string filePath,
@@ -416,11 +437,6 @@ internal sealed class HoverRequestCoordinator
     {
         var notifier = _sqlReadyNotifier;
         if (notifier is null || !notifier.IsEnabled)
-        {
-            return;
-        }
-
-        if (!_pendingSqlReadyNotify.TryRemove(regionKey, out _))
         {
             return;
         }
@@ -437,6 +453,36 @@ internal sealed class HoverRequestCoordinator
             region.AnchorCharacter,
             Path.GetFileName(filePath),
             commandCount);
+
+        if (!SqlReadyNotificationLogic.ShouldNotify(payload))
+        {
+            return;
+        }
+
+        if (_pendingSqlReadyNotify.TryRemove(regionKey, out _))
+        {
+            DispatchSqlReadyNotification(payload);
+            return;
+        }
+
+        if (_suppressedSqlReadyNotify.ContainsKey(regionKey))
+        {
+            return;
+        }
+
+        // Pipeline finished before the hover returned InQueue — hold until MarkPendingSqlReady runs.
+        _completedAwaitingSqlReady[regionKey] = payload;
+        _log?.Invoke(
+            $"sql-ready-awaiting-pending file={payload.FileName} line={payload.Line} char={payload.Character}");
+    }
+
+    private void DispatchSqlReadyNotification(SqlReadyNotification payload)
+    {
+        var notifier = _sqlReadyNotifier;
+        if (notifier is null || !notifier.IsEnabled)
+        {
+            return;
+        }
 
         _ = notifier.NotifyAsync(payload);
         _log?.Invoke(

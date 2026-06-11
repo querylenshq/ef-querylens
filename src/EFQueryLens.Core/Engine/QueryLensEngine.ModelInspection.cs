@@ -14,13 +14,20 @@ public sealed partial class QueryLensEngine
         var created = QueryEvaluator.CreateDbContextInstance(
             dbContextType,
             alcCtx.LoadedAssemblies,
-            alcCtx.AssemblyPath);
+            alcCtx.AssemblyPath,
+            alcCtx);
         return created.Instance;
     }
 
     // Model snapshot building
     private static ModelSnapshot BuildModelSnapshot(object dbInstance, Type dbContextType)
     {
+        var runtimeDbContextType = dbInstance.GetType();
+        if (!dbContextType.IsAssignableFrom(runtimeDbContextType))
+        {
+            dbContextType = runtimeDbContextType;
+        }
+
         var dbSetProperties = dbContextType
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(IsDbSetProperty)

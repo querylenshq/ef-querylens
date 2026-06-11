@@ -1,4 +1,4 @@
-using EFQueryLens.Lsp.HoverPipeline;
+using EFQueryLens.Lsp.Protocol;
 using StreamJsonRpc;
 
 namespace EFQueryLens.Lsp.Services;
@@ -34,21 +34,18 @@ internal sealed class HoverReadyNotifier : IHoverReadyNotifier
         var rpc = _rpc;
         if (rpc is null)
         {
+            Console.Error.WriteLine("[QL-LSP] sql-ready-notify skipped: JsonRpc not attached");
             return;
         }
 
         try
         {
+            Console.Error.WriteLine(
+                $"[QL-LSP] sql-ready-notify sending file={notification.FileName} " +
+                $"line={notification.Line} char={notification.Character} commands={notification.CommandCount}");
             await rpc.NotifyAsync(
-                "efquerylens/sqlReady",
-                new
-                {
-                    fileUri = notification.FileUri,
-                    line = notification.Line,
-                    character = notification.Character,
-                    fileName = notification.FileName,
-                    commandCount = notification.CommandCount,
-                },
+                LspProtocolMethods.SqlReadyNotification,
+                notification,
                 cancellationToken);
         }
         catch

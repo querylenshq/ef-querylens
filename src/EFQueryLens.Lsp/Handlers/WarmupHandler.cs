@@ -14,6 +14,7 @@ internal sealed partial class WarmupHandler
 {
     private readonly DocumentManager _documentManager;
     private readonly IQueryLensEngine _engine;
+    private AssemblyChangeTracker? _assemblyChangeTracker;
     private bool _debugEnabled;
     private int _successTtlMs;
     private int _failureCooldownMs;
@@ -41,6 +42,9 @@ internal sealed partial class WarmupHandler
             max: 120_000);
     }
 
+    internal void SetAssemblyChangeTracker(AssemblyChangeTracker assemblyChangeTracker)
+        => _assemblyChangeTracker = assemblyChangeTracker;
+
     public void ApplyClientConfiguration(LspClientConfiguration configuration)
     {
         if (configuration.DebugEnabled.HasValue)
@@ -62,6 +66,7 @@ internal sealed partial class WarmupHandler
     public async Task<WarmupResponse> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
     {
         var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
+        _assemblyChangeTracker?.CheckAndInvalidateIfChanged(filePath);
         var documentUri = request.TextDocument.Uri.ToString();
 
         var sourceText = await GetSourceTextAsync(documentUri, filePath, cancellationToken);

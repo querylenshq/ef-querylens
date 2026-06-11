@@ -14,6 +14,7 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.8" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -25,8 +26,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\Plugins\ef-querylens-visualstudio\EFQueryLens.VisualStudio\Host\Contracts\**\*.cs"
+             Link="VisualStudio\Host\Contracts\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\EFQueryLens.Core\EFQueryLens.Core.csproj" />
     <ProjectReference Include="..\..\src\EFQueryLens.Daemon\EFQueryLens.Daemon.csproj" />
+    <ProjectReference Include="..\..\src\EFQueryLens.Lsp.Protocol\EFQueryLens.Lsp.Protocol.csproj" />
     <ProjectReference Include="..\..\src\EFQueryLens.Lsp\EFQueryLens.Lsp.csproj" />
   </ItemGroup>
 

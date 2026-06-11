@@ -29,10 +29,23 @@ suite('SQL ready notifications', () => {
             line: 1,
             character: 2,
             fileName: 'Orders.cs',
+            commandCount: 1,
         };
 
         assert.strictEqual(shouldShowSqlReadyNotification(payload, false), false);
         assert.strictEqual(shouldShowSqlReadyNotification(payload, true), true);
+    });
+
+    test('shouldShowSqlReadyNotification ignores zero commandCount', () => {
+        const payload = {
+            fileUri: 'file:///tmp/Orders.cs',
+            line: 1,
+            character: 2,
+            fileName: 'Orders.cs',
+            commandCount: 0,
+        };
+
+        assert.strictEqual(shouldShowSqlReadyNotification(payload, true), false);
     });
 
     test('sql ready toast action titles are stable', () => {
@@ -46,6 +59,7 @@ suite('SQL ready notifications', () => {
             line: 1,
             character: 2,
             fileName: 'Orders.cs',
+            commandCount: 1,
         };
         const now = 1_000_000;
 

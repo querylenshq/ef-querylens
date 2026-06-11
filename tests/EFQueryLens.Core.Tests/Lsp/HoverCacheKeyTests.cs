@@ -16,18 +16,22 @@ public class HoverCacheKeyTests
     }
 
     [Fact]
-    public void TryGetAssemblyFingerprint_ExistingAssembly_ReturnsThreePartKey()
+    public void TryGetAssemblyFingerprint_ExistingAssembly_ReturnsFourPartKeyWithBundleKey()
     {
         using var tempAssembly = new TempFile(".dll");
         File.WriteAllBytes(tempAssembly.Path, [0x4D, 0x5A]);
 
-        var fingerprint = BuildFingerprintForFile(tempAssembly.Path);
-        Assert.NotNull(fingerprint);
-        var parts = fingerprint!.Split('|');
-        Assert.Equal(3, parts.Length);
+        var fingerprint = AssemblyResolver.TryGetAssemblyFingerprint(tempAssembly.Path + ".cs");
+        Assert.Null(fingerprint);
+
+        var direct = BuildFingerprintForFile(tempAssembly.Path);
+        Assert.NotNull(direct);
+        var parts = direct!.Split('|');
+        Assert.Equal(4, parts.Length);
         Assert.Equal(Path.GetFullPath(tempAssembly.Path), parts[0], StringComparer.OrdinalIgnoreCase);
         Assert.True(long.TryParse(parts[1], out _));
         Assert.True(long.TryParse(parts[2], out var ticks) && ticks > 0);
+        Assert.False(string.IsNullOrWhiteSpace(parts[3]));
     }
 
     [Fact]
@@ -65,8 +69,10 @@ public class HoverCacheKeyTests
     private static string? BuildFingerprintForFile(string path)
     {
         if (!File.Exists(path)) return null;
-        var info = new FileInfo(path);
-        return $"{Path.GetFullPath(path)}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+        var fullPath = Path.GetFullPath(path);
+        var info = new FileInfo(fullPath);
+        var bundleKey = AssemblyBundleRevision.TryPeekBundleKey(fullPath) ?? "unknown";
+        return $"{fullPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{bundleKey}";
     }
 
     private sealed class TempFile(string extension) : IDisposable

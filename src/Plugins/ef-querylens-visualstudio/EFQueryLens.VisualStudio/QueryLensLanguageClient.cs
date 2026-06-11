@@ -91,15 +91,13 @@ internal sealed partial class QueryLensLanguageClient : ILanguageClient, ILangua
 
     public IEnumerable<string> ConfigurationSections => [];
 
-    public object? InitializationOptions => BuildInitializationOptions();
-
     public IEnumerable<string> FilesToWatch => [];
 
     public bool ShowNotificationOnInitializeFailed => true;
 
-    public object CustomMessageTarget => null!;
+    public object CustomMessageTarget => NotificationTarget;
 
-    public object MiddleLayer => null!;
+    public object MiddleLayer => QueryLensLanguageClientMiddleLayer.Instance;
 
 #pragma warning disable CS0067
     public event AsyncEventHandler<EventArgs>? StartAsync;
@@ -185,6 +183,11 @@ internal sealed partial class QueryLensLanguageClient : ILanguageClient, ILangua
     public Task OnServerInitializedAsync()
     {
         Log("language-server-initialized");
+        _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await RefreshStatusAsync();
+            await RunStartupWarmupAsync();
+        });
         return Task.CompletedTask;
     }
 
@@ -198,6 +201,17 @@ internal sealed partial class QueryLensLanguageClient : ILanguageClient, ILangua
     {
         this.rpc = rpc;
         Log("custom-message-rpc-attached");
+
+        try
+        {
+            rpc.AddLocalRpcTarget(NotificationTarget);
+            Log("custom-message-add-local-rpc-target-success");
+        }
+        catch (Exception ex)
+        {
+            Log($"custom-message-add-local-rpc-target-failed type={ex.GetType().Name} message={ex.Message}");
+        }
+
         return Task.CompletedTask;
     }
 }

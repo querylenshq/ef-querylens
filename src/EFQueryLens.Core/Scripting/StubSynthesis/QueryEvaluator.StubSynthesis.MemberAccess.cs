@@ -1,3 +1,4 @@
+using EFQueryLens.Core.AssemblyContext;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.RegularExpressions;
@@ -171,24 +172,15 @@ public sealed partial class QueryEvaluator
         {
             try
             {
-                var matched = asm.GetTypes().FirstOrDefault(t =>
+                var matched = AssemblyReflection.GetCachedLoadableTypes(asm).FirstOrDefault(t =>
                     string.Equals(t.Name, simpleName, StringComparison.Ordinal)
                     || string.Equals(t.FullName, expanded, StringComparison.Ordinal));
                 if (matched is not null)
                     return matched;
             }
-            catch (ReflectionTypeLoadException rtle)
-            {
-                var matched = rtle.Types
-                    .Where(t => t is not null)
-                    .FirstOrDefault(t =>
-                        string.Equals(t!.Name, simpleName, StringComparison.Ordinal)
-                        || string.Equals(t.FullName, expanded, StringComparison.Ordinal));
-                if (matched is not null)
-                    return matched!;
-            }
             catch
             {
+                // Best-effort type lookup in partially loadable assemblies.
             }
         }
 

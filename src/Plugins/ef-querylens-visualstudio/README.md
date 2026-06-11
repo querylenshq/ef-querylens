@@ -27,9 +27,14 @@ EF QueryLens for Visual Studio provides hover-based SQL preview and quick SQL ac
 
 ## Local Build
 
+The VS extension is strong-named with `build/sgKey.snk` (required for local/CI VSIX builds). The in-proc host uses wire DTOs under `Host/Contracts/` and does **not** reference `EFQueryLens.Lsp.Protocol`; the LSP server bundle under `server/` still includes Protocol for the out-of-proc process.
+
 ```bash
+dotnet clean src/Plugins/ef-querylens-visualstudio/EFQueryLens.VisualStudio/EFQueryLens.VisualStudio.csproj
 dotnet build src/Plugins/ef-querylens-visualstudio/EFQueryLens.VisualStudio/EFQueryLens.VisualStudio.csproj -c Debug
 ```
+
+For F5 debugging, use **Debug → Reset the Visual Studio Experimental Instance** after large host changes so stale extension files are not reused.
 
 ## More
 

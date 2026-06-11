@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using StreamJsonRpc;
 
+using EFQueryLens.Lsp.Protocol;
+
 namespace EFQueryLens.Lsp.Services;
 
 /// <summary>
@@ -150,7 +152,7 @@ internal sealed class QueryLensStatusTracker
                 "Ready",
                 _assemblyPath,
                 _inflightComputes,
-                Warmed: true);
+                warmed: true);
         }
 
         // Daemon is up but the target assembly has not been inspected yet — first hover
@@ -183,7 +185,7 @@ internal sealed class QueryLensStatusTracker
 
         try
         {
-            await rpc.NotifyAsync("efquerylens/statusChanged", snapshot);
+            await rpc.NotifyAsync(LspProtocolMethods.StatusChangedNotification, snapshot);
         }
         catch
         {

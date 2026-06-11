@@ -32,8 +32,11 @@ public sealed partial class QueryEvaluator
     {
         foreach (var import in request.AdditionalImports)
         {
-            if (IsValidUsingName(import))
+            if (IsValidUsingName(import)
+                && IsImportResolvable(import, knownNamespaces, knownTypes))
+            {
                 sb.AppendLine($"using {import};");
+            }
         }
 
         foreach (var ns in synthesizedUsingNamespaces
@@ -45,7 +48,9 @@ public sealed partial class QueryEvaluator
         }
 
         foreach (var kvp in request.UsingAliases
-                     .Where(kvp => IsValidAliasName(kvp.Key) && IsValidUsingName(kvp.Value))
+                     .Where(kvp => IsValidAliasName(kvp.Key)
+                                   && IsValidUsingName(kvp.Value)
+                                   && IsImportResolvable(kvp.Value, knownNamespaces, knownTypes))
                      .OrderBy(kvp => kvp.Key, StringComparer.Ordinal))
         {
             sb.AppendLine($"using {kvp.Key} = {kvp.Value};");

@@ -13,3 +13,4 @@
 
 | Impldoc | Status | Summary |
 | ------- | ------ | ------- |
+| vs-startup-protocol-decoupling-r4 | planned | Decouple Visual Studio package startup from protocol assembly types while preserving LSP wire compatibility. |

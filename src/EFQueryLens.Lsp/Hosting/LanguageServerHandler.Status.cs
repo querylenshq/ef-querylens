@@ -1,6 +1,8 @@
 using EFQueryLens.Lsp.Services;
 using StreamJsonRpc;
 
+using EFQueryLens.Lsp.Protocol;
+
 namespace EFQueryLens.Lsp.Hosting;
 
 internal sealed partial class LanguageServerHandler

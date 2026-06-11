@@ -1,4 +1,5 @@
 using System.Reflection;
+using EFQueryLens.Core.AssemblyContext;
 
 namespace EFQueryLens.Core.Scripting.DesignTime;
 
@@ -52,47 +53,31 @@ internal static partial class DesignTimeDbContextFactory
     {
         failureReason = null;
         var normalizedRequiredPath = NormalizeAssemblyPath(requiredFactoryAssemblyPath);
+        var discoveryAssemblies = SelectFactoryDiscoveryAssemblies(assemblies, normalizedRequiredPath).ToList();
+        if (!string.IsNullOrWhiteSpace(normalizedRequiredPath) && discoveryAssemblies.Count == 0)
+        {
+            failureReason =
+                $"No QueryLens factory found in required executable assembly '{Path.GetFileName(normalizedRequiredPath)}'.";
+            return null;
+        }
 
-        foreach (var asm in assemblies)
+        foreach (var asm in discoveryAssemblies)
         {
             Type? factoryType;
             try
             {
-                factoryType = asm.GetTypes().FirstOrDefault(t =>
-                    !t.IsAbstract && !t.IsInterface &&
-                    t.GetInterfaces().Any(i =>
-                        i.IsGenericType &&
-                        IsQueryLensFactoryInterface(i.GetGenericTypeDefinition()) &&
-                        i.GetGenericArguments()[0].FullName == dbContextType.FullName));
-
-                // Compatibility fallback: accept "duck-typed" factories that expose
-                // a public parameterless CreateOfflineContext() returning the target
-                // DbContext type, even when the generic interface identity doesn't match
-                // (e.g., copied interface definition in user code).
-                factoryType ??= asm.GetTypes().FirstOrDefault(t =>
-                    !t.IsAbstract && !t.IsInterface &&
-                    t.GetConstructor(Type.EmptyTypes) is not null &&
-                    t.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                        .Any(m =>
-                            m.Name == "CreateOfflineContext" &&
-                            m.GetParameters().Length == 0 &&
-                            m.ReturnType.FullName == dbContextType.FullName));
+                factoryType = TryFindFactoryTypeInAssembly(asm, dbContextType, ref failureReason);
             }
-            catch (ReflectionTypeLoadException rtle)
+            catch (Exception ex) when (AssemblyReflection.IsIgnorableReflectionFailure(ex))
             {
-                // Surface which dependencies were missing so callers can diagnose the failure
-                // rather than silently skipping the assembly and reporting "No factory found".
-                var loaderMessages = (rtle.LoaderExceptions ?? [])
-                    .Where(e => e is not null)
-                    .Select(e => e!.Message)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Take(3);
-                var loaderDetail = string.Join("; ", loaderMessages);
-                failureReason ??= $"Could not scan '{asm.GetName().Name}' for QueryLens factory" +
-                    (string.IsNullOrWhiteSpace(loaderDetail) ? "." : $": {loaderDetail}");
+                if (!TryRecordFactoryScanFailure(asm, [ex], ref failureReason))
+                {
+                    continue;
+                }
+
                 continue;
             }
-            catch { continue; } // Native or otherwise unscannable assemblies
+            catch { continue; }
 
             if (factoryType is null) continue;
 
@@ -115,22 +100,11 @@ internal static partial class DesignTimeDbContextFactory
                     && i.GetGenericArguments()[0].FullName == dbContextType.FullName);
 
                 var method = matchingInterface?.GetMethod("CreateOfflineContext")
-                             ?? factoryType.GetMethod("CreateOfflineContext")
-                             ?? factoryType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                                 .FirstOrDefault(m =>
-                                     m.Name == "CreateOfflineContext"
-                                     && m.GetParameters().Length == 0
-                                     && m.ReturnType.FullName == dbContextType.FullName)
-                             ?? factoryType.GetInterfaces()
-                                 .SelectMany(i => i.GetMethods())
-                                 .FirstOrDefault(m =>
-                                     m.Name == "CreateOfflineContext"
-                                     && m.GetParameters().Length == 0
-                                     && m.ReturnType.FullName == dbContextType.FullName);
+                             ?? factoryType.GetMethod("CreateOfflineContext");
 
                 if (method is null) continue;
 
-                return method.Invoke(factory, null); // CreateOfflineContext takes no args
+                return method.Invoke(factory, null);
             }
             catch (Exception ex)
             {
@@ -141,5 +115,80 @@ internal static partial class DesignTimeDbContextFactory
         }
 
         return null;
+    }
+
+    private static IEnumerable<Assembly> SelectFactoryDiscoveryAssemblies(
+        IEnumerable<Assembly> assemblies,
+        string? normalizedRequiredPath)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedRequiredPath))
+            return assemblies;
+
+        return assemblies.Where(asm =>
+        {
+            var location = NormalizeAssemblyPath(asm.Location);
+            return !string.IsNullOrWhiteSpace(location)
+                && string.Equals(location, normalizedRequiredPath, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private static Type? TryFindFactoryTypeInAssembly(Assembly asm, Type dbContextType, ref string? failureReason)
+    {
+        foreach (var t in GetLoadableTypes(asm, ref failureReason))
+        {
+            try
+            {
+                if (t.IsAbstract || t.IsInterface)
+                    continue;
+
+                if (ImplementsQueryLensFactoryInterface(t, dbContextType))
+                    return t;
+            }
+            catch (Exception ex) when (AssemblyReflection.IsIgnorableReflectionFailure(ex))
+            {
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ImplementsQueryLensFactoryInterface(Type type, Type dbContextType)
+    {
+        foreach (var iface in type.GetInterfaces())
+        {
+            if (!iface.IsGenericType)
+                continue;
+
+            if (!IsQueryLensFactoryInterface(iface.GetGenericTypeDefinition()))
+                continue;
+
+            if (iface.GetGenericArguments()[0].FullName == dbContextType.FullName)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryRecordFactoryScanFailure(
+        Assembly asm,
+        Exception?[]? loaderExceptions,
+        ref string? failureReason)
+    {
+        var loaderMessages = (loaderExceptions ?? [])
+            .Where(e => e is not null && !AssemblyReflection.IsIgnorableReflectionFailure(e!))
+            .Select(e => e!.Message)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
+
+        if (loaderMessages.Count == 0)
+        {
+            return false;
+        }
+
+        var loaderDetail = string.Join("; ", loaderMessages);
+        failureReason ??= $"Could not scan '{asm.GetName().Name}' for QueryLens factory: {loaderDetail}";
+        return true;
     }
 }

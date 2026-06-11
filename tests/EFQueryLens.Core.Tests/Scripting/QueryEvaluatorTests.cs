@@ -1424,7 +1424,7 @@ public sealed class C
 
         var stub = method!.Invoke(
             null,
-            [missingName, "db", request, dbContextType]) as string;
+            [missingName, "db", request, dbContextType, null]) as string;
 
         Assert.False(string.IsNullOrWhiteSpace(stub));
         return stub!;

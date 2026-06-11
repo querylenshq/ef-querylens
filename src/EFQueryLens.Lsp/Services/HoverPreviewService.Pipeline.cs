@@ -157,8 +157,22 @@ internal sealed partial class HoverPreviewService
 
             if (!translation.Success)
             {
-                log($"translate-error line={line} char={character} message={translation.ErrorMessage}");
-                return Fail(translation.ErrorMessage ?? "Translation failed.", sourceLine);
+                var errorMessage = translation.ErrorMessage ?? "Translation failed.";
+                if (IsNoFactoryError(errorMessage))
+                {
+                    var factoryHint = AssemblyResolver.HostProjectHasQueryLensFactorySource(filePath)
+                        ? "rebuild-needed"
+                        : "setup-needed";
+                    log(
+                        $"translate-error line={line} char={character} factoryHint={factoryHint} " +
+                        $"message={errorMessage}");
+                }
+                else
+                {
+                    log($"translate-error line={line} char={character} message={errorMessage}");
+                }
+
+                return Fail(errorMessage, sourceLine);
             }
 
             var commands = translation.Commands.Count > 0

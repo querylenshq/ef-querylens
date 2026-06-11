@@ -30,6 +30,8 @@ internal static class MicrosoftLspHost
         hoverHandler.SetSqlReadyNotifier(sqlReadyNotifier);
 
         var assemblyChangeTracker = new AssemblyChangeTracker(hoverHandler);
+        hoverHandler.SetAssemblyChangeTracker(assemblyChangeTracker);
+        warmupHandler.SetAssemblyChangeTracker(assemblyChangeTracker);
         var prewarm = new TranslationPrewarmService(
             hoverPreviewService,
             hoverHandler.BuildChainSemanticKeys,

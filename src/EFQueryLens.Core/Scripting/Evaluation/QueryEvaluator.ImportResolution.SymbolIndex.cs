@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using EFQueryLens.Core.AssemblyContext;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -26,21 +27,7 @@ public sealed partial class QueryEvaluator
             if (!seen.Add(key))
                 continue;
 
-            Type[] all;
-            try
-            {
-                all = asm.GetTypes();
-            }
-            catch (ReflectionTypeLoadException rtle)
-            {
-                all = rtle.Types.Where(t => t is not null).Cast<Type>().ToArray();
-            }
-            catch
-            {
-                continue;
-            }
-
-            foreach (var t in all)
+            foreach (var t in AssemblyReflection.GetCachedLoadableTypes(asm))
             {
                 if (!string.IsNullOrWhiteSpace(t.FullName))
                     types.Add(t.FullName.Replace('+', '.'));
@@ -168,6 +155,36 @@ public sealed partial class QueryEvaluator
     private static bool IsResolvableNamespace(string n, IReadOnlySet<string> ns) => ns.Contains(n);
 
     private static bool IsResolvableType(string n, IReadOnlySet<string> types) => types.Contains(n);
+
+    /// <summary>
+    /// True when a source <c>using</c> or alias target is backed by the loaded closure index.
+    /// Skips host-only imports (e.g. ASP.NET) that are irrelevant to EF translation.
+    /// </summary>
+    internal static bool IsImportResolvable(
+        string import,
+        IReadOnlySet<string> knownNamespaces,
+        IReadOnlySet<string> knownTypes)
+    {
+        if (IsFrameworkImport(import))
+            return true;
+
+        if (IsResolvableNamespace(import, knownNamespaces) || IsResolvableType(import, knownTypes))
+            return true;
+
+        var prefix = import + ".";
+        return knownNamespaces.Any(ns => ns.StartsWith(prefix, StringComparison.Ordinal))
+            || knownTypes.Any(t => t.StartsWith(prefix, StringComparison.Ordinal));
+    }
+
+    private static bool IsFrameworkImport(string import)
+    {
+        if (string.IsNullOrWhiteSpace(import))
+            return false;
+
+        return import.Equals("System", StringComparison.Ordinal)
+            || import.StartsWith("System.", StringComparison.Ordinal)
+            || import.StartsWith("global::System.", StringComparison.Ordinal);
+    }
 
     private static bool IsResolvableTypeOrNamespace(
         string n,

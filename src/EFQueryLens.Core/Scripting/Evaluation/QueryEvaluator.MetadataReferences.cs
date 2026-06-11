@@ -13,14 +13,16 @@ public sealed partial class QueryEvaluator
         List<Assembly> compilationAssemblies,
         string assemblySetHash)
     {
-        var cacheKey = $"{Path.GetFullPath(alcCtx.AssemblyPath)}|{alcCtx.AssemblyTimestamp.Ticks}|{assemblySetHash}";
+        var binFingerprint = HostBinAssemblyCatalog.ComputeBinFingerprint(alcCtx.AssemblyPath);
+        var cacheKey =
+            $"{Path.GetFullPath(alcCtx.AssemblyPath)}|{alcCtx.AssemblyTimestamp.Ticks}|{assemblySetHash}|{binFingerprint}";
         if (_refCache.TryGetValue(cacheKey, out var entry))
         {
             TouchMetadataRefCacheEntry(cacheKey, entry);
             return entry.Refs;
         }
 
-        var refs = CollectMetadataReferences(compilationAssemblies).ToArray();
+        var refs = CollectMetadataReferences(alcCtx, compilationAssemblies).ToArray();
         _refCache[cacheKey] = new QueryEvaluator.MetadataRefEntry(
             refs,
             QueryEvaluator.GetUtcNowTicks());
@@ -28,7 +30,9 @@ public sealed partial class QueryEvaluator
         return refs;
     }
 
-    private static IEnumerable<MetadataReference> CollectMetadataReferences(IEnumerable<Assembly> assemblies)
+    private static IEnumerable<MetadataReference> CollectMetadataReferences(
+        ProjectAssemblyContext alcCtx,
+        IEnumerable<Assembly> assemblies)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
@@ -83,7 +87,44 @@ public sealed partial class QueryEvaluator
             }
         }
 
+        AddHostBinMetadataReferences(alcCtx.AssemblyPath, seen, seenNames, refs);
+
         return refs;
+    }
+
+    /// <summary>
+    /// Layer A: metadata refs for every runtime DLL in the host output directory.
+    /// Roslyn compiles against copy-local build output; no Assembly.Load or reflection.
+    /// </summary>
+    private static void AddHostBinMetadataReferences(
+        string hostAssemblyPath,
+        HashSet<string> seenPaths,
+        HashSet<string> seenNames,
+        List<MetadataReference> refs)
+    {
+        foreach (var dll in HostBinAssemblyCatalog.EnumerateHostBinDllPaths(hostAssemblyPath))
+        {
+            var simpleName = Path.GetFileNameWithoutExtension(dll);
+            if (string.IsNullOrWhiteSpace(simpleName)
+                || seenNames.Contains(simpleName)
+                || ProjectAssemblyContext.ShouldPreferDefaultLoadContext(simpleName))
+            {
+                continue;
+            }
+
+            if (!seenPaths.Add(dll))
+                continue;
+
+            try
+            {
+                refs.Add(MetadataReference.CreateFromFile(dll));
+                seenNames.Add(simpleName);
+            }
+            catch
+            {
+                // Skip non-managed or corrupt PE files in output directory.
+            }
+        }
     }
 
     private static string ComputeAssemblySetHash(List<Assembly> assemblies)

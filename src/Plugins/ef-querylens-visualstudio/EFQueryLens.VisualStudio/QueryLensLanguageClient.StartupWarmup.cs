@@ -3,27 +3,29 @@
 
 namespace EFQueryLens.VisualStudio;
 
-using System;
+using EFQueryLens.VisualStudio.Host.Contracts;
 
 internal sealed partial class QueryLensLanguageClient
 {
-    private static object BuildInitializationOptions()
+    public object? InitializationOptions =>
+        QueryLensHostInitializationOptions.WrapForInitialize(BuildRuntimeOptions());
+
+    private static QueryLensHostInitializationOptions BuildRuntimeOptions()
     {
-        return new
+        var options = QueryLensOptionsPage.Current;
+        return new QueryLensHostInitializationOptions
         {
-            queryLens = new
-            {
-                debugEnabled = true,
-                enableLspHover = false,
-                hoverProgressNotify = false,
-                hoverProgressDelayMs = 350,
-                hoverCacheTtlMs = 15000,
-                hoverCancelGraceMs = 1200,
-                markdownQueueAdaptiveWaitMs = 200,
-                structuredQueueAdaptiveWaitMs = 200,
-                warmupSuccessTtlMs = 60_000,
-                warmupFailureCooldownMs = 5_000,
-            }
+            DebugEnabled = true,
+            EnableLspHover = false,
+            HoverProgressNotify = false,
+            SqlReadyNotify = options?.NotifyWhenSqlReady ?? true,
+            HoverProgressDelayMs = 350,
+            HoverCacheTtlMs = 15_000,
+            MarkdownQueueAdaptiveWaitMs = 200,
+            StructuredQueueAdaptiveWaitMs = 200,
+            WarmupSuccessTtlMs = 60_000,
+            WarmupFailureCooldownMs = 5_000,
+            HoverWaitWhenWarmMs = options?.HoverWaitWhenWarmMs ?? 8000,
         };
     }
 }

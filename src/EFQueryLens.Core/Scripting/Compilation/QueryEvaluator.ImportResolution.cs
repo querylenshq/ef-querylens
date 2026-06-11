@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using EFQueryLens.Core.AssemblyContext;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -160,7 +161,7 @@ public sealed partial class QueryEvaluator
 
             foreach (var asm in assemblies)
             {
-                foreach (var type in GetLoadableTypes(asm))
+                foreach (var type in AssemblyReflection.GetCachedLoadableTypes(asm))
                 {
                     if (type.IsGenericTypeDefinition)
                         continue;
@@ -214,26 +215,6 @@ public sealed partial class QueryEvaluator
         }
 
         return imports.ToArray();
-    }
-
-    private static IEnumerable<Type> GetLoadableTypes(Assembly assembly)
-    {
-        Type[] allTypes;
-        try
-        {
-            allTypes = assembly.GetTypes();
-        }
-        catch (ReflectionTypeLoadException rtle)
-        {
-            allTypes = rtle.Types.Where(t => t is not null).Cast<Type>().ToArray();
-        }
-        catch
-        {
-            yield break;
-        }
-
-        foreach (var type in allTypes)
-            yield return type;
     }
 
     private static IReadOnlyList<Type> CollectDbContextEntityTypes(Type dbContextType)

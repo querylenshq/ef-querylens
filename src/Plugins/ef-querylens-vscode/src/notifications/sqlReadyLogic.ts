@@ -21,6 +21,11 @@ export function shouldShowSqlReadyNotification(
         return false;
     }
 
+    const commandCount = payload.commandCount ?? 0;
+    if (commandCount <= 0) {
+        return false;
+    }
+
     if (!payload.fileUri?.trim()) {
         return false;
     }

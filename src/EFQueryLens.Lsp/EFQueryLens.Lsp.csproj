@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EFQueryLens.Core\EFQueryLens.Core.csproj" />
+    <ProjectReference Include="..\EFQueryLens.Lsp.Protocol\EFQueryLens.Lsp.Protocol.csproj" />
   </ItemGroup>
 
   <ItemGroup>

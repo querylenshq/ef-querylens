@@ -38,6 +38,15 @@ internal static class HoverFormatting
            && result.Markdown is not null
            && result.Structured?.Success != false;
 
+    /// <summary>
+    /// True when a completed pipeline result can be returned to the caller instead of an InQueue placeholder.
+    /// Includes terminal no-LINQ outcomes where markdown and structured are intentionally null.
+    /// </summary>
+    public static bool IsResolvedForSync(HoverResult result)
+        => result.Markdown is not null
+           || result.Structured is not null
+           || result.Status is QueryTranslationStatus.Ready or QueryTranslationStatus.DaemonUnavailable;
+
     public static HoverResult InQueuePlaceholder()
         => new(
             QueryTranslationStatus.InQueue,

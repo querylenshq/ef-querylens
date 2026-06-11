@@ -1,5 +1,6 @@
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
+using EFQueryLens.Lsp.Parsing;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 
@@ -26,6 +27,16 @@ internal sealed partial class HoverHandler
             request.Position.Line,
             request.Position.Character,
             cancellationToken);
+
+        if (result.Status is QueryTranslationStatus.Ready
+            && result.Structured is not null)
+        {
+            var assemblyPath = AssemblyResolver.TryGetTargetAssembly(filePath);
+            if (!string.IsNullOrWhiteSpace(assemblyPath))
+            {
+                _statusTracker?.SetAssemblyWarmed(warmed: true, assemblyPath);
+            }
+        }
 
         return result.Structured;
     }

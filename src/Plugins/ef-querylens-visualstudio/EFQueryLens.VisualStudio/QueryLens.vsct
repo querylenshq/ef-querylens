@@ -48,6 +48,14 @@
           <LocCanonicalName>SetupQueryLens</LocCanonicalName>
         </Strings>
       </Button>
+
+      <Button guid="guidQueryLensCmdSet" id="cmdidTestSqlReadyNotify" priority="0x0130" type="Button">
+        <Parent guid="guidQueryLensCmdSet" id="QueryLensToolsGroup" />
+        <Strings>
+          <ButtonText>Test SQL Ready Notification</ButtonText>
+          <LocCanonicalName>TestSqlReadyNotify</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -61,6 +69,7 @@
       <IDSymbol name="cmdidRestartDaemon" value="0x0100" />
       <IDSymbol name="cmdidOpenLogs" value="0x0101" />
       <IDSymbol name="cmdidSetupQueryLens" value="0x0102" />
+      <IDSymbol name="cmdidTestSqlReadyNotify" value="0x0103" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

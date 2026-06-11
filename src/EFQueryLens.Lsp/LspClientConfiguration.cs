@@ -49,7 +49,7 @@ internal sealed record LspClientConfiguration(
             StructuredQueueAdaptiveWaitMs: ReadInt(config, "structuredQueueAdaptiveWaitMs", min: 0, max: 2_000),
             WarmupSuccessTtlMs: ReadInt(config, "warmupSuccessTtlMs", min: 0, max: 600_000),
             WarmupFailureCooldownMs: ReadInt(config, "warmupFailureCooldownMs", min: 0, max: 120_000),
-            HoverWaitWhenWarmMs: ReadInt(config, "hoverWaitWhenWarmMs", min: 0, max: 5_000));
+            HoverWaitWhenWarmMs: ReadInt(config, "hoverWaitWhenWarmMs", min: 0, max: 30_000));
     }
 
     private static bool? ReadBool(JObject config, string propertyName)

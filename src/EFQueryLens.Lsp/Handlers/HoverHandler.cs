@@ -16,6 +16,7 @@ internal sealed partial class HoverHandler
     private readonly HoverRequestCoordinator _coordinator;
     private WarmupHandler? _warmupHandler;
     private QueryLensStatusTracker? _statusTracker;
+    private AssemblyChangeTracker? _assemblyChangeTracker;
     private IHoverReadyNotifier? _sqlReadyNotifier;
     private bool _debugEnabled;
 
@@ -57,6 +58,9 @@ internal sealed partial class HoverHandler
             !string.IsNullOrWhiteSpace(assemblyPath)
             && _warmupHandler?.IsAssemblyReady(assemblyPath) == true);
     }
+
+    internal void SetAssemblyChangeTracker(AssemblyChangeTracker assemblyChangeTracker)
+        => _assemblyChangeTracker = assemblyChangeTracker;
 
     internal void SetStatusTracker(QueryLensStatusTracker statusTracker)
         => _statusTracker = statusTracker;

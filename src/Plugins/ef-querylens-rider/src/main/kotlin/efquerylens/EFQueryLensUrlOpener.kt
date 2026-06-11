@@ -17,7 +17,10 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.JBPopupListener
 import com.intellij.openapi.ui.popup.LightweightWindowEvent
+import com.intellij.openapi.editor.ScrollType
+import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerManager
 import org.eclipse.lsp4j.ExecuteCommandParams
 import java.awt.Dimension
@@ -180,6 +183,28 @@ class EFQueryLensUrlOpener : UrlOpener() {
             }
         }
     }
+
+    fun openFileAtPosition(
+        project: Project,
+        virtualFile: VirtualFile,
+        line: Int,
+        character: Int,
+    ) {
+        ApplicationManager.getApplication().invokeLater {
+            FileEditorManager.getInstance(project).openFile(virtualFile, true)
+            val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return@invokeLater
+            val position = LogicalPosition(line.coerceAtLeast(0), character.coerceAtLeast(0))
+            editor.caretModel.moveToLogicalPosition(position)
+            editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
+        }
+    }
+
+    internal fun requestStructuredHoverPreview(
+        project: Project,
+        fileUri: String,
+        line: Int,
+        character: Int,
+    ): StructuredSqlPreview? = buildStructuredPreview(project, fileUri, line, character)
 
     internal fun buildStructuredPreview(
         project: Project,

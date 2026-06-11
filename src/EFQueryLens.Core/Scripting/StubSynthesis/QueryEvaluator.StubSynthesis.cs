@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.Loader;
+using EFQueryLens.Core.AssemblyContext;
 using EFQueryLens.Core.Contracts;
 
 namespace EFQueryLens.Core.Scripting.Evaluation;
@@ -11,7 +12,11 @@ public sealed partial class QueryEvaluator
     // to keep EvaluateAsync flow readable.
 
     private static string BuildStubDeclaration(
-        string name, string? rootId, TranslationRequest request, Type dbContextType)
+        string name,
+        string? rootId,
+        TranslationRequest request,
+        Type dbContextType,
+        ProjectAssemblyContext? alcCtx = null)
     {
         if (!string.IsNullOrWhiteSpace(rootId)
             && string.Equals(name, rootId, StringComparison.Ordinal)
@@ -59,7 +64,7 @@ public sealed partial class QueryEvaluator
         }
 
         var inferred = InferVariableType(name, request.Expression, dbContextType);
-        inferred ??= InferMethodArgumentType(name, request.Expression, dbContextType);
+        inferred ??= InferMethodArgumentType(name, request.Expression, dbContextType, alcCtx);
         inferred ??= InferComparisonOperandType(name, request.Expression, dbContextType);
         if (inferred is not null)
         {
