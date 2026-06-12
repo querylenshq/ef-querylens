@@ -20,8 +20,9 @@ internal static class SqlReadyTestNotificationBuilder
                 commandCount: 1);
         }
 
-        var fileUri = new Uri(Path.GetFullPath(filePath)).AbsoluteUri;
-        var fileName = Path.GetFileName(filePath);
+        var normalizedPath = filePath.Replace('\\', Path.DirectorySeparatorChar);
+        var fileUri = new Uri(Path.GetFullPath(normalizedPath)).AbsoluteUri;
+        var fileName = Path.GetFileName(normalizedPath);
         if (string.IsNullOrWhiteSpace(fileName))
         {
             fileName = FallbackFileName;

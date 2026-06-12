@@ -82,6 +82,14 @@ public class QueryEvaluatorTests : IClassFixture<QueryEvaluatorFixture>
         return Path.Combine(testOutputDir, dllName);
     }
 
+    private static MetadataReference[] GetLoadedAssemblyMetadataReferences()
+        => AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => !a.IsDynamic && !string.IsNullOrWhiteSpace(a.Location) && File.Exists(a.Location))
+            .Select(a => a.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => MetadataReference.CreateFromFile(path))
+            .ToArray();
+
     private Task<QueryTranslationResult> TranslateAsync(
         string expression,
         string? dbContextTypeName = null,
@@ -1060,12 +1068,7 @@ public sealed class Runner
 }
 """;
 
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrWhiteSpace(a.Location))
-            .Select(a => a.Location)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(path => MetadataReference.CreateFromFile(path))
-            .ToArray();
+        var references = GetLoadedAssemblyMetadataReferences();
 
         var compilation = CSharpCompilation.Create(
             assemblyName: "ExtensionImportInferenceCs1061",
@@ -1102,12 +1105,7 @@ public sealed class C
 }
 """;
 
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrWhiteSpace(a.Location))
-            .Select(a => a.Location)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(path => MetadataReference.CreateFromFile(path))
-            .ToArray();
+        var references = GetLoadedAssemblyMetadataReferences();
 
         var compilation = CSharpCompilation.Create(
             assemblyName: "ExtensionImportInferenceCs7036",

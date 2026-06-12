@@ -101,7 +101,10 @@ public static class SolutionFileResolver
                      RegexOptions.Multiline,
                      TimeSpan.FromSeconds(5)))
         {
-            var projectPath = Path.GetFullPath(Path.Combine(slnDir, match.Groups[1].Value));
+            var relativePath = match.Groups[1].Value
+                .Replace('\\', Path.DirectorySeparatorChar)
+                .Replace('/', Path.DirectorySeparatorChar);
+            var projectPath = Path.GetFullPath(Path.Combine(slnDir, relativePath));
             if (File.Exists(projectPath))
             {
                 projects.Add(projectPath);
