@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
-using StreamJsonRpc;
-
 using EFQueryLens.Lsp.Protocol;
+using StreamJsonRpc;
 
 namespace EFQueryLens.Lsp.Services;
 
@@ -11,7 +10,10 @@ namespace EFQueryLens.Lsp.Services;
 internal sealed class QueryLensStatusTracker
 {
     private readonly object _gate = new();
-    private QueryLensStatusSnapshot _snapshot = new(QueryLensHostState.Starting, "Starting QueryLens…");
+    private QueryLensStatusSnapshot _snapshot = new(
+        QueryLensHostState.Starting,
+        "Starting QueryLens…"
+    );
     private int _inflightComputes;
     private int _inflightWarmups;
     private int _inflightPrewarms;
@@ -19,6 +21,9 @@ internal sealed class QueryLensStatusTracker
     private bool _daemonConfigured;
     private bool _assemblyWarmed;
     private string? _assemblyPath;
+    private readonly ConcurrentDictionary<string, bool> _assemblyWarmState = new(
+        StringComparer.OrdinalIgnoreCase
+    );
     private JsonRpc? _rpc;
 
     public void AttachRpc(JsonRpc? rpc)
@@ -46,27 +51,88 @@ internal sealed class QueryLensStatusTracker
     {
         lock (_gate)
         {
-            _assemblyWarmed = warmed;
             if (!string.IsNullOrWhiteSpace(assemblyPath))
             {
                 _assemblyPath = assemblyPath;
+                _assemblyWarmState[assemblyPath] = warmed;
             }
+
+            _assemblyWarmed = IsCurrentAssemblyWarmedLocked();
         }
 
         PublishIfChanged();
     }
 
-    public IDisposable BeginCompute() => BeginWork(
-        () => { lock (_gate) _inflightComputes++; },
-        () => { lock (_gate) if (_inflightComputes > 0) _inflightComputes--; });
+    public void SetAssemblyWarming(string? assemblyPath)
+    {
+        if (string.IsNullOrWhiteSpace(assemblyPath))
+        {
+            return;
+        }
 
-    public IDisposable BeginWarmup() => BeginWork(
-        () => { lock (_gate) _inflightWarmups++; },
-        () => { lock (_gate) if (_inflightWarmups > 0) _inflightWarmups--; });
+        lock (_gate)
+        {
+            _assemblyPath = assemblyPath;
+            _assemblyWarmed = IsCurrentAssemblyWarmedLocked();
+        }
 
-    public IDisposable BeginPrewarm() => BeginWork(
-        () => { lock (_gate) _inflightPrewarms++; },
-        () => { lock (_gate) if (_inflightPrewarms > 0) _inflightPrewarms--; });
+        PublishIfChanged();
+    }
+
+    public bool IsAssemblyWarmed(string? assemblyPath)
+    {
+        if (string.IsNullOrWhiteSpace(assemblyPath))
+        {
+            return false;
+        }
+
+        return _assemblyWarmState.TryGetValue(assemblyPath, out var warmed) && warmed;
+    }
+
+    public IDisposable BeginCompute() =>
+        BeginWork(
+            () =>
+            {
+                lock (_gate)
+                    _inflightComputes++;
+            },
+            () =>
+            {
+                lock (_gate)
+                    if (_inflightComputes > 0)
+                        _inflightComputes--;
+            }
+        );
+
+    public IDisposable BeginWarmup() =>
+        BeginWork(
+            () =>
+            {
+                lock (_gate)
+                    _inflightWarmups++;
+            },
+            () =>
+            {
+                lock (_gate)
+                    if (_inflightWarmups > 0)
+                        _inflightWarmups--;
+            }
+        );
+
+    public IDisposable BeginPrewarm() =>
+        BeginWork(
+            () =>
+            {
+                lock (_gate)
+                    _inflightPrewarms++;
+            },
+            () =>
+            {
+                lock (_gate)
+                    if (_inflightPrewarms > 0)
+                        _inflightPrewarms--;
+            }
+        );
 
     public QueryLensStatusSnapshot GetSnapshot()
     {
@@ -117,7 +183,8 @@ internal sealed class QueryLensStatusTracker
                 "Starting QueryLens…",
                 _assemblyPath,
                 _inflightComputes,
-                _assemblyWarmed);
+                _assemblyWarmed
+            );
         }
 
         if (!_daemonReady)
@@ -127,7 +194,8 @@ internal sealed class QueryLensStatusTracker
                 "QueryLens engine is unavailable.",
                 _assemblyPath,
                 _inflightComputes,
-                _assemblyWarmed);
+                _assemblyWarmed
+            );
         }
 
         if (_inflightComputes > 0)
@@ -137,7 +205,8 @@ internal sealed class QueryLensStatusTracker
                 "Translating LINQ to SQL…",
                 _assemblyPath,
                 _inflightComputes,
-                _assemblyWarmed);
+                _assemblyWarmed
+            );
         }
 
         if (_inflightWarmups > 0 || _inflightPrewarms > 0)
@@ -152,7 +221,8 @@ internal sealed class QueryLensStatusTracker
                 "Ready",
                 _assemblyPath,
                 _inflightComputes,
-                warmed: true);
+                warmed: true
+            );
         }
 
         // Daemon is up but the target assembly has not been inspected yet — first hover
@@ -165,8 +235,14 @@ internal sealed class QueryLensStatusTracker
                 message,
                 _assemblyPath,
                 _inflightComputes,
-                _assemblyWarmed);
+                _assemblyWarmed
+            );
     }
+
+    private bool IsCurrentAssemblyWarmedLocked() =>
+        !string.IsNullOrWhiteSpace(_assemblyPath)
+        && _assemblyWarmState.TryGetValue(_assemblyPath, out var warmed)
+        && warmed;
 
     private static bool SnapshotEquals(QueryLensStatusSnapshot a, QueryLensStatusSnapshot b) =>
         a.State == b.State

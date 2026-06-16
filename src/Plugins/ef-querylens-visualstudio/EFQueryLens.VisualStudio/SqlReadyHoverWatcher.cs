@@ -14,9 +14,16 @@ internal static class SqlReadyHoverWatcher
     private static readonly SqlReadyHoverWatcherCore Core = new(
         new LanguageClientHoverPoller(),
         new LanguageClientNotificationSink(),
-        () => SqlReadyWatchBudget.ComputeNotificationWaitMs(QueryLensOptionsPage.Current?.HoverWaitWhenWarmMs ?? 8000),
+        () =>
+            SqlReadyWatchBudget.ComputeNotificationWaitMs(
+                QueryLensOptionsPage.Current?.HoverWaitWhenWarmMs ?? 0
+            ),
         static (delay, cancellationToken) => Task.Delay(delay, cancellationToken),
-        LogWatchEvent);
+        LogWatchEvent
+    );
+
+    internal static void CancelSqlReadyWatch(string filePath, int line, int character) =>
+        Core.Cancel(filePath, line, character);
 
     internal static void WatchIfQueued(string filePath, int line, int character, int status)
     {
@@ -40,7 +47,8 @@ internal static class SqlReadyHoverWatcher
             string filePath,
             int line,
             int character,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var response = await QueryLensLanguageClient.TryGetStructuredHoverAsync(
                 filePath,
@@ -48,7 +56,8 @@ internal static class SqlReadyHoverWatcher
                 character,
                 cancellationToken,
                 refreshStatus: false,
-                startSqlReadyWatch: false);
+                startSqlReadyWatch: false
+            );
 
             if (response is null)
             {
@@ -66,8 +75,10 @@ internal static class SqlReadyHoverWatcher
 
     private static void LogWatchEvent(string message)
     {
-        if (message.IndexOf("sql-ready-watch-coalesced", StringComparison.Ordinal) >= 0
-            || message.IndexOf("sql-ready-watch-exit", StringComparison.Ordinal) >= 0)
+        if (
+            message.IndexOf("sql-ready-watch-coalesced", StringComparison.Ordinal) >= 0
+            || message.IndexOf("sql-ready-watch-exit", StringComparison.Ordinal) >= 0
+        )
         {
             QueryLensLogOpener.WriteClientDiagnosticLine(message);
             return;
@@ -78,7 +89,12 @@ internal static class SqlReadyHoverWatcher
 
     private sealed class LanguageClientNotificationSink : ISqlReadyNotificationSink
     {
-        public void RaiseFromWatch(string filePath, int line, int character, QueryLensHostHoverPollResult response)
+        public void RaiseFromWatch(
+            string filePath,
+            int line,
+            int character,
+            QueryLensHostHoverPollResult response
+        )
         {
             QueryLensLanguageClient.TryRaiseSqlReadyFromHover(
                 filePath,
@@ -89,7 +105,8 @@ internal static class SqlReadyHoverWatcher
                     Success = response.Success,
                     CommandCount = response.CommandCount,
                     Status = response.Status,
-                });
+                }
+            );
         }
     }
 }

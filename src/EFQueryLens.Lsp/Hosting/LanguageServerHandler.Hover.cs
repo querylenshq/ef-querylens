@@ -1,3 +1,4 @@
+using EFQueryLens.Lsp.Protocol;
 using EFQueryLens.Lsp.Services;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Newtonsoft.Json.Linq;
@@ -8,10 +9,8 @@ namespace EFQueryLens.Lsp.Hosting;
 internal sealed partial class LanguageServerHandler
 {
     [JsonRpcMethod("textDocument/hover", UseSingleObjectParameterDeserialization = true)]
-    public async Task<Hover?> HoverAsync(TextDocumentPositionParams request, CancellationToken ct)
+    public async Task<Hover?> HoverAsync(HoverRequestParams request, CancellationToken ct)
     {
-        if (_debugEnabled) Console.Error.WriteLine("[QL-LSP] request method=textDocument/hover");
-
         if (!_hoverProgressEnabled || JsonRpc is null)
         {
             return await _hover.HandleAsync(request, ct);
@@ -51,11 +50,8 @@ internal sealed partial class LanguageServerHandler
     }
 
     [JsonRpcMethod("efquerylens/hover", UseSingleObjectParameterDeserialization = true)]
-    public Task<QueryLensStructuredHoverResult?> StructuredHoverAsync(TextDocumentPositionParams request, CancellationToken ct)
-    {
-        if (_debugEnabled) Console.Error.WriteLine("[QL-LSP] request method=efquerylens/hover");
-        return _hover.HandleStructuredAsync(request, ct);
-    }
+    public Task<QueryLensStructuredHoverResult?> StructuredHoverAsync(HoverRequestParams request, CancellationToken ct)
+        => _hover.HandleStructuredAsync(request, ct);
 
     private async Task<bool> TryStartHoverProgressAsync(string progressToken)
     {

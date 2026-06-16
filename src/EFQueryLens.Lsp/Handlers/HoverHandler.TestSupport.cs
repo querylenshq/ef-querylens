@@ -6,11 +6,11 @@ namespace EFQueryLens.Lsp.Handlers;
 
 internal sealed partial class HoverHandler
 {
-    internal static string BuildSemanticKey(TranslationRequest request)
-        => QueryRegionResolver.BuildSemanticKey(request);
+    internal static string BuildSemanticKey(TranslationRequest request) =>
+        QueryRegionResolver.BuildSemanticKey(request);
 
-    internal static QueryLensStructuredHoverResult BuildInQueueStructured()
-        => HoverFormatting.BuildInQueueStructured();
+    internal static QueryLensStructuredHoverResult BuildInQueueStructured() =>
+        HoverFormatting.BuildInQueueStructured();
 
     internal HoverResultCache ResultCache => _coordinator.Cache;
 
@@ -19,11 +19,19 @@ internal sealed partial class HoverHandler
     internal void ConfigureCachesForTests(
         int hoverCacheTtlMs,
         int inQueueCacheTtlMs,
-        int hoverWaitBudgetMs = 8_000)
+        int hoverWaitBudgetMs = 0,
+        int foregroundResolveBudgetMs = 75,
+        bool fastProbeEnabled = true
+    )
     {
-        _coordinator.Configure(hoverCacheTtlMs, inQueueCacheTtlMs, hoverWaitBudgetMs, 200, 200);
+        _coordinator.Configure(
+            hoverCacheTtlMs,
+            inQueueCacheTtlMs,
+            hoverWaitBudgetMs,
+            foregroundResolveBudgetMs,
+            fastProbeEnabled,
+            200,
+            200
+        );
     }
-
-    internal void SetSqlReadyNotifierForTests(IHoverReadyNotifier notifier)
-        => SetSqlReadyNotifier(notifier);
 }

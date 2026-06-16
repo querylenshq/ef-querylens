@@ -8,13 +8,6 @@ using StreamJsonRpc;
 
 internal sealed class QueryLensLspNotificationTarget
 {
-    [JsonRpcMethod(QueryLensHostLspMethods.SqlReadyNotification, UseSingleObjectParameterDeserialization = true)]
-    public void OnSqlReady(QueryLensHostSqlReadyNotification notification)
-    {
-        QueryLensLanguageClient.LogSqlReadyDiagnostic("sql-ready-jsonrpc-dispatch");
-        QueryLensLanguageClient.HandleSqlReadyNotification(notification);
-    }
-
     [JsonRpcMethod(QueryLensHostLspMethods.StatusChangedNotification, UseSingleObjectParameterDeserialization = true)]
     public void OnStatusChanged(QueryLensHostStatusSnapshot snapshot)
     {

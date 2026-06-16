@@ -26,7 +26,7 @@ import {
 import { registerQueryLensCommands } from './commands/registry';
 import { createSqlActionHandlers } from './commands/sqlActions';
 import { createServerLogChannel } from './logging/serverLogChannel';
-import { attachSqlReadyNotifications } from './notifications/sqlReady';
+import { cancelSqlReadyWatch, watchSqlReadyIfQueued } from './notifications/sqlReadyHoverWatcher';
 import { createQueryLensStatusBar, runStartupWarmup } from './status/statusBar';
 import { QueryLensSettings } from './types';
 
@@ -129,6 +129,7 @@ export function activate(context: ExtensionContext) {
                         position.character,
                         hover as Hover | null,
                         performance.now() - startedAt,
+                        () => currentSettings,
                     );
                     return enableTrustedHoverCommands(
                         hover as Hover | null,
@@ -151,8 +152,6 @@ export function activate(context: ExtensionContext) {
         serverOptions,
         clientOptions
     );
-    attachSqlReadyNotifications(client, () => currentSettings.notifyWhenSqlReady);
-
     const sqlActions = createSqlActionHandlers(() => client);
     const commandDisposables = registerQueryLensCommands({
         getSettings: () => currentSettings,
@@ -245,6 +244,7 @@ function logHoverResult(
     character: number,
     hover: Hover | null | undefined,
     roundTripMs: number,
+    getSettings: () => QueryLensSettings,
 ): void {
     if (!hover) {
         return;
@@ -256,17 +256,46 @@ function logHoverResult(
     }
 
     const fileName = path.basename(filePath);
+    const fileUri = pathToFileUri(filePath);
     if (text.includes('translating query') || text.includes('in queue')) {
+        if (client?.isRunning()) {
+            watchSqlReadyIfQueued(
+                client,
+                fileUri,
+                filePath,
+                line,
+                character,
+                1,
+                getSettings,
+                logOutput,
+            );
+        }
         logOutput(formatHoverQueuedMessage(fileName, line, character, roundTripMs));
         return;
     }
 
     if (text.match(/SQL generation time\s+(\d+)\s*ms/i)) {
+        cancelSqlReadyWatch(fileUri, line, character);
         logOutput(formatHoverReadyMessage(fileName, line, character, roundTripMs, text));
         return;
     }
 
+    if (text.includes('QueryLens Error')) {
+        cancelSqlReadyWatch(fileUri, line, character);
+        logOutput(`[EFQueryLens] hover-error file=${fileName} line=${line} char=${character} roundTripMs=${Math.round(roundTripMs)}`);
+        return;
+    }
+
     logOutput(`[EFQueryLens] hover file=${fileName} line=${line} char=${character} roundTripMs=${Math.round(roundTripMs)}`);
+}
+
+function pathToFileUri(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/');
+    if (/^[a-zA-Z]:\//.test(normalized)) {
+        return `file:///${normalized}`;
+    }
+
+    return `file://${normalized.startsWith('/') ? '' : '/'}${normalized}`;
 }
 
 function extractHoverMarkdown(hover: Hover): string {
@@ -302,7 +331,7 @@ function buildLspRuntimeConfiguration(settings: QueryLensSettings): Record<strin
     return {
         debugEnabled: settings.debugLogsEnabled,
         enableLspHover: true,
-        hoverProgressNotify: false,
+        hoverProgressNotify: settings.hoverProgressNotify,
         sqlReadyNotify: settings.notifyWhenSqlReady,
         hoverProgressDelayMs: 350,
         hoverCacheTtlMs: 15_000,
@@ -312,6 +341,8 @@ function buildLspRuntimeConfiguration(settings: QueryLensSettings): Record<strin
         warmupSuccessTtlMs: 60_000,
         warmupFailureCooldownMs: 5_000,
         hoverWaitWhenWarmMs: settings.hoverWaitWhenWarmMs,
+        hoverForegroundResolveBudgetMs: 75,
+        hoverFastProbeEnabled: true,
     };
 }
 

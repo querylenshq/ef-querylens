@@ -49,6 +49,16 @@ internal static class QueryLensLogOpener
 
     internal static void WriteClientDiagnosticLine(string message)
     {
+        WriteOutputLine($"[VS-Client] {message}");
+    }
+
+    internal static void WriteUserNotificationLine(string message)
+    {
+        WriteOutputLine(message);
+    }
+
+    private static void WriteOutputLine(string message)
+    {
         IVsOutputWindowPane? pane;
         lock (tailSync)
         {
@@ -63,7 +73,7 @@ internal static class QueryLensLogOpener
         try
         {
 #pragma warning disable VSTHRD010
-            pane.OutputStringThreadSafe($"[VS-Client] {message}{Environment.NewLine}");
+            pane.OutputStringThreadSafe($"{message}{Environment.NewLine}");
 #pragma warning restore VSTHRD010
         }
         catch

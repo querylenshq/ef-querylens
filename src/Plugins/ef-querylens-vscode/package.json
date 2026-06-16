@@ -4,7 +4,7 @@
   "description": "Preview your EF Core SQL in real time, without leaving your IDE.",
   "icon": "icon.png",
   "preview": false,
-  "version": "1.0.21",
+  "version": "1.0.22",
   "publisher": "EFQueryLens",
   "license": "MIT",
   "repository": {
@@ -122,10 +122,10 @@
         },
         "efquerylens.hoverWaitWhenWarmMs": {
           "type": "number",
-          "default": 8000,
+          "default": 0,
           "minimum": 0,
           "maximum": 30000,
-          "description": "Milliseconds to wait on the first hover when the assembly is already warm. Complex composed queries may need 8–15s on first compile. 0 disables synchronous wait."
+          "description": "Milliseconds to wait on the first hover when the assembly is already warm. 0 returns a processing hover immediately and shows a SQL-ready toast when background translation finishes."
         },
         "efquerylens.hoverProgressNotify": {
           "type": "boolean",

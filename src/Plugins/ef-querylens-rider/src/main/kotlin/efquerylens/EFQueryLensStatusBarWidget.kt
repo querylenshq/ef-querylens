@@ -6,15 +6,30 @@ import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.WindowManager
-import com.intellij.openapi.wm.impl.status.widget.StatusBarWidgetsManager
 import com.intellij.util.Consumer
 import java.awt.event.MouseEvent
 
 internal class EFQueryLensStatusBarWidget(
     private val project: Project,
-) : StatusBarWidget,
-    StatusBarWidget.TextPresentation {
+) : StatusBarWidget {
     private val refreshListener = Runnable { refreshWidget() }
+
+    private val presentation =
+        object : StatusBarWidget.TextPresentation {
+            override fun getText(): String = EFQueryLensHostStatus.displayText
+
+            override fun getTooltipText(): String = EFQueryLensHostStatus.tooltipText
+
+            override fun getAlignment(): Float = 0f
+
+            override fun getClickConsumer(): Consumer<MouseEvent> =
+                Consumer {
+                    ToolWindowManager
+                        .getInstance(project)
+                        .getToolWindow(EFQueryLensLogToolWindowFactory.TOOL_WINDOW_ID)
+                        ?.activate(null)
+                }
+        }
 
     override fun ID(): String = WIDGET_ID
 
@@ -28,21 +43,7 @@ internal class EFQueryLensStatusBarWidget(
         EFQueryLensHostStatus.removeListener(refreshListener)
     }
 
-    override fun getPresentation(): StatusBarWidget.WidgetPresentation = this
-
-    override fun getAlignment(): Float = 0f
-
-    override fun getText(): String = EFQueryLensHostStatus.statusText
-
-    override fun getTooltipText(): String = EFQueryLensHostStatus.tooltipText
-
-    override fun getClickConsumer(): Consumer<MouseEvent> =
-        Consumer {
-            ToolWindowManager
-                .getInstance(project)
-                .getToolWindow(EFQueryLensLogToolWindowFactory.TOOL_WINDOW_ID)
-                ?.activate(null)
-        }
+    override fun getPresentation(): StatusBarWidget.WidgetPresentation = presentation
 
     private fun refreshWidget() {
         if (project.isDisposed) {
@@ -60,8 +61,6 @@ internal class EFQueryLensStatusBarWidget(
                 return
             }
 
-            val factory = EFQueryLensStatusBarWidgetFactory()
-            project.getService(StatusBarWidgetsManager::class.java)?.updateWidget(factory)
             WindowManager.getInstance().getStatusBar(project)?.updateWidget(WIDGET_ID)
         }
     }

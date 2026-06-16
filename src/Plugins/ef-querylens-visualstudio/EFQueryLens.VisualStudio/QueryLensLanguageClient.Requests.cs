@@ -228,7 +228,7 @@ internal sealed partial class QueryLensLanguageClient
                     {
                         ["line"] = Math.Max(0, line),
                         ["character"] = Math.Max(0, character),
-                    }
+                    },
                 },
                 cancellationToken);
 

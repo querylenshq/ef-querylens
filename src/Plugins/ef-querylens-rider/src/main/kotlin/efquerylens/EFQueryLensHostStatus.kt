@@ -8,6 +8,14 @@ object EFQueryLensHostStatus {
         private set
 
     @Volatile
+    var displayText: String = "[S] QueryLens"
+        private set
+
+    @Volatile
+    var stateKind: StateKind = StateKind.Starting
+        private set
+
+    @Volatile
     var tooltipText: String = "Starting QueryLens…"
         private set
 
@@ -24,7 +32,18 @@ object EFQueryLensHostStatus {
     fun updateFromSnapshot(payload: Any?) {
         val root = payload as? Map<*, *> ?: return
         val mapped = mapSnapshot(root)
+        if (
+            statusText == mapped.text &&
+            displayText == mapped.displayText &&
+            stateKind == mapped.stateKind &&
+            tooltipText == mapped.tooltip
+        ) {
+            return
+        }
+
         statusText = mapped.text
+        displayText = mapped.displayText
+        stateKind = mapped.stateKind
         tooltipText = mapped.tooltip
         listeners.forEach(Runnable::run)
     }
@@ -56,7 +75,9 @@ object EFQueryLensHostStatus {
                 else -> "QueryLens: Starting…"
             }
 
-        val tooltipParts = mutableListOf(message)
+        val displayState = state.toStateKind()
+        val displayText = "${displayState.marker} QueryLens"
+        val tooltipParts = mutableListOf("State: $text", message)
         if (!assembly.isNullOrBlank()) {
             tooltipParts.add("Assembly: $assembly")
         }
@@ -65,13 +86,30 @@ object EFQueryLensHostStatus {
         }
         tooltipParts.add("Click to open EF QueryLens output")
 
-        return MappedStatus(text, tooltipParts.joinToString("\n"))
+        return MappedStatus(
+            text = text,
+            displayText = displayText,
+            stateKind = displayState,
+            tooltip = tooltipParts.joinToString("\n"),
+        )
     }
 
     internal data class MappedStatus(
         val text: String,
+        val displayText: String,
+        val stateKind: StateKind,
         val tooltip: String,
     )
+
+    enum class StateKind(
+        val marker: String,
+    ) {
+        Starting("[S]"),
+        Warming("[W]"),
+        Ready("[R]"),
+        Computing("[C]"),
+        Unavailable("[!]"),
+    }
 
     private enum class HostState {
         Starting,
@@ -80,6 +118,15 @@ object EFQueryLensHostStatus {
         Computing,
         Unavailable,
     }
+
+    private fun HostState.toStateKind(): StateKind =
+        when (this) {
+            HostState.Starting -> StateKind.Starting
+            HostState.Warming -> StateKind.Warming
+            HostState.Ready -> StateKind.Ready
+            HostState.Computing -> StateKind.Computing
+            HostState.Unavailable -> StateKind.Unavailable
+        }
 
     private fun readStateField(payload: Map<*, *>): HostState {
         val raw = payload["state"] ?: payload["State"] ?: return HostState.Starting

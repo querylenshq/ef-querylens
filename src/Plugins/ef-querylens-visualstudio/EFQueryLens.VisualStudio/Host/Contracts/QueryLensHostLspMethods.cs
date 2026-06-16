@@ -12,6 +12,8 @@ internal static class QueryLensHostLspMethods
     public const string SetupApplyRequest = "efquerylens/setup/apply";
     public const string SetupRequest = "efquerylens/setup";
 
+    /// <summary>Deprecated: clients poll <see cref="HoverRequest"/> until Ready instead.</summary>
+    [Obsolete("SQL-ready push is deprecated; clients poll efquerylens/hover until Ready.")]
     public const string SqlReadyNotification = "efquerylens/sqlReady";
     public const string StatusChangedNotification = "efquerylens/statusChanged";
     public const string ShowSqlPreviewNotification = "efquerylens/showSqlPreview";

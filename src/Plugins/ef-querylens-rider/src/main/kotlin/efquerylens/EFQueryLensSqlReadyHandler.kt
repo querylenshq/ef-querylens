@@ -44,11 +44,12 @@ internal object EFQueryLensSqlReadyHandler {
             return
         }
 
-        val key = "$fileUri|$line|$character"
+        val normalizedFileUri = EFQueryLensHoverProbe.normalizeFileUri(fileUri)
+        val key = buildDedupeKey(normalizedFileUri, line)
         val now = System.currentTimeMillis()
         val lastShown = recentNotifications[key]
         if (lastShown != null && now - lastShown < DEDUPE_WINDOW_MS) {
-            thisLogger().info("[EFQueryLens] sqlReady deduped file=$fileName line=${line + 1}")
+            thisLogger().info("[EFQueryLens] sqlReady deduped file=$fileName line=${line + 1} key=$key")
             return
         }
         recentNotifications[key] = now
@@ -63,9 +64,14 @@ internal object EFQueryLensSqlReadyHandler {
                 return@invokeLater
             }
 
-            showSqlReadyNotification(project, title, message, fileUri, line, character)
+            showSqlReadyNotification(project, title, message, normalizedFileUri, line, character)
         }
     }
+
+    internal fun buildDedupeKey(
+        fileUri: String,
+        line: Int,
+    ): String = "${EFQueryLensHoverProbe.normalizeFileUri(fileUri)}|${line.coerceAtLeast(0)}"
 
     private fun showSqlReadyNotification(
         project: Project,

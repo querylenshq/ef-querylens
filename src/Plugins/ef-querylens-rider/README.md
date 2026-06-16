@@ -6,7 +6,7 @@ EF QueryLens for Rider integrates with the QueryLens LSP backend and gives you S
 
 ## Features
 
-- Hover SQL preview for LINQ/EF queries (Quick Documentation, Ctrl+Q)
+- Hover SQL preview for LINQ/EF queries (Quick Documentation on mouse hover or Ctrl+Q)
 - Copy SQL action from hover
 - Open SQL action in a dedicated preview dialog
 - Refresh analysis action
@@ -20,22 +20,23 @@ Open **Settings → EF QueryLens** (or search “EF QueryLens” in Rider settin
 
 | Setting | VS Code | Rider default | Notes |
 |---------|---------|---------------|-------|
-| Notify when SQL is ready | `efquerylens.notifyWhenSqlReady` | **on** | Same LSP `efquerylens/sqlReady` notification |
-| Hover wait when warm (ms) | `efquerylens.hoverWaitWhenWarmMs` | **8000** | How long sync hover waits for SQL before returning InQueue |
+| Notify when SQL is ready | `efquerylens.notifyWhenSqlReady` | **on** | Client-polled SQL-ready popup, matching VS Code |
+| Hover wait when warm (ms) | `efquerylens.hoverWaitWhenWarmMs` | **0** | How long sync hover waits for SQL before returning InQueue |
 | Show status in status bar | `efquerylens.showStatusBar` | **on** | Right-side status text; click opens EF QueryLens tool window |
 
 ### When the SQL-ready popup appears
 
 The notification is **not** shown on every successful hover — same as VS Code:
 
-1. **Cold / slow hover:** Quick Doc shows “InQueue” → translation runs in background → dialog appears with **Go to Query** / **Open SQL**.
-2. **Warm hover within wait budget:** SQL appears in Quick Doc on first hover → **no** popup (sync path clears pending notification).
+1. **Cold / slow Quick Documentation:** Mouse hover or Ctrl+Q returns “InQueue” → Rider arms a background watch → dialog appears with **Go to Query** / **Open SQL** when SQL is ready.
+2. **Cold / slow SQL Preview click:** Clicking the SQL Preview inlay while SQL is not cached shows a translating message, arms the same watch, then shows the dialog when SQL is ready.
+3. **Cached hover or SQL Preview click:** SQL appears immediately → **no** ready popup.
 
-To see SQL in Quick Doc on first hover more often, increase **Hover wait when warm** (e.g. keep at 8000 ms or higher). Set to **0** to always use the InQueue + background-dialog pattern.
+To wait for SQL in Quick Doc on first hover, increase **Hover wait when warm**. The default **0** always uses the InQueue + background-dialog pattern for uncached queries.
 
 ### Rider vs VS Code presentation
 
-- **SQL preview:** Rider uses Quick Documentation; VS Code uses the editor hover tooltip. Same LSP markdown, different surface.
+- **SQL preview:** Rider uses Quick Documentation and SQL Preview inlays; VS Code uses the editor hover tooltip. Same LSP backend, different surface.
 - **SQL ready:** Rider uses a choose dialog; VS Code uses a bottom information message. Same actions and labels.
 - **CodeLens:** VS Code disables inline SQL badges (`QUERYLENS_MAX_CODELENS_PER_DOCUMENT=0`). Rider may still show LSP CodeLens if the server advertises them.
 
@@ -78,6 +79,8 @@ Useful log entries:
 
 - `[EFQueryLens] URL opener command=... uri=...` for action-link dispatch.
 - `[EFQueryLens] URL opener failed for command=...` for command handling failures.
+- `[EFQueryLens] sql-ready-watch-started ...` when Rider arms a background notification watch.
+- `[EFQueryLens] sql-ready-watch-ready ...` when a queued query completes and the dialog is shown.
 - `[EFQueryLens] applyHighlights: N entries` for hover highlight coverage.
 
 ## Troubleshooting file lock warnings

@@ -19,4 +19,7 @@ interface EFQueryLensLspServer : LanguageServer {
 
     @JsonRequest("efquerylens/setup/apply")
     fun setupApply(params: Map<String, Any?>): CompletableFuture<Any?>
+
+    @JsonRequest("efquerylens/hover")
+    fun structuredHover(params: Map<String, Any?>): CompletableFuture<Any?>
 }

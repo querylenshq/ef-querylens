@@ -7,6 +7,8 @@ import com.intellij.openapi.vfs.VirtualFile
 
 internal object EFQueryLensLspLifecycle {
     fun onServerInitialized(project: Project) {
+        EFQueryLensQuickDocSqlReadyHook.register(project)
+        EFQueryLensEditorHoverSqlReadyHook.register(project)
         EFQueryLensLspRequests.refreshStatus(project)
         runStartupWarmup(project)
     }
@@ -22,7 +24,7 @@ internal object EFQueryLensLspLifecycle {
             val caret = editor.caretModel.currentCaret
             val line = caret.logicalPosition.line
             val character = caret.logicalPosition.column
-            EFQueryLensLspRequests.requestWarmup(project, file.url, line, character)
+            EFQueryLensLspRequests.requestWarmup(project, EFQueryLensHoverProbe.fileUri(file), line, character)
             EFQueryLensLspRequests.refreshStatus(project)
         }
     }

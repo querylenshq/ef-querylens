@@ -18,6 +18,7 @@ public static partial class LspSyntaxHelper
         string sourceText,
         string? sourceFilePath,
         IReadOnlyList<SyntaxNode>? additionalRoots,
+        bool allowCrossFileHelperLookup,
         out string expression,
         out string? contextVariableName)
     {
@@ -37,7 +38,8 @@ public static partial class LspSyntaxHelper
                 return true;
             }
 
-            if (!string.IsNullOrWhiteSpace(sourceFilePath)
+            if (allowCrossFileHelperLookup
+                && !string.IsNullOrWhiteSpace(sourceFilePath)
                 && TryExtractFromExpressionParameterHelperCallWithLookup(
                     root,
                     ancestorInvocation,

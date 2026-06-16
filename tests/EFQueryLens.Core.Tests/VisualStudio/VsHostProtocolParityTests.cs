@@ -47,6 +47,7 @@ public sealed class VsHostProtocolParityTests
             var host = QueryLensHostStatusMapper.Map(new QueryLensHostStatusSnapshot(hostState, "msg", warmed: hostState == EFQueryLens.VisualStudio.Host.Contracts.QueryLensHostState.Ready));
 
             Assert.Equal(protocol.Text, host.Text);
+            Assert.Equal(protocol.DisplayText, host.DisplayText);
             Assert.Equal(protocol.Tooltip, host.Tooltip);
         }
     }

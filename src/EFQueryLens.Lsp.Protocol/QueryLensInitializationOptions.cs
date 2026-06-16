@@ -28,20 +28,27 @@ public sealed class QueryLensInitializationOptions
 
     public int? HoverWaitWhenWarmMs { get; set; }
 
-    public object ToClientPayload() => new
-    {
-        debugEnabled = DebugEnabled,
-        enableLspHover = EnableLspHover,
-        hoverProgressNotify = HoverProgressNotify,
-        sqlReadyNotify = SqlReadyNotify,
-        hoverProgressDelayMs = HoverProgressDelayMs,
-        hoverCacheTtlMs = HoverCacheTtlMs,
-        markdownQueueAdaptiveWaitMs = MarkdownQueueAdaptiveWaitMs,
-        structuredQueueAdaptiveWaitMs = StructuredQueueAdaptiveWaitMs,
-        warmupSuccessTtlMs = WarmupSuccessTtlMs,
-        warmupFailureCooldownMs = WarmupFailureCooldownMs,
-        hoverWaitWhenWarmMs = HoverWaitWhenWarmMs,
-    };
+    public int? HoverForegroundResolveBudgetMs { get; set; }
+
+    public bool? HoverFastProbeEnabled { get; set; }
+
+    public object ToClientPayload() =>
+        new
+        {
+            debugEnabled = DebugEnabled,
+            enableLspHover = EnableLspHover,
+            hoverProgressNotify = HoverProgressNotify,
+            sqlReadyNotify = SqlReadyNotify,
+            hoverProgressDelayMs = HoverProgressDelayMs,
+            hoverCacheTtlMs = HoverCacheTtlMs,
+            markdownQueueAdaptiveWaitMs = MarkdownQueueAdaptiveWaitMs,
+            structuredQueueAdaptiveWaitMs = StructuredQueueAdaptiveWaitMs,
+            warmupSuccessTtlMs = WarmupSuccessTtlMs,
+            warmupFailureCooldownMs = WarmupFailureCooldownMs,
+            hoverWaitWhenWarmMs = HoverWaitWhenWarmMs,
+            hoverForegroundResolveBudgetMs = HoverForegroundResolveBudgetMs,
+            hoverFastProbeEnabled = HoverFastProbeEnabled,
+        };
 
     public static object WrapForInitialize(QueryLensInitializationOptions options) =>
         new { queryLens = options.ToClientPayload() };

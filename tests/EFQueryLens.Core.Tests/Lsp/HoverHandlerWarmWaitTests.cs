@@ -53,7 +53,11 @@ public sealed class HoverHandlerWarmWaitTests
         var warmup = new WarmupHandler(documentManager, new NoOpQueryLensEngine());
         var handler = new HoverHandler(documentManager, new HoverPreviewService(new NoOpQueryLensEngine()), new NoOpQueryLensEngine());
         handler.SetWarmupHandler(warmup);
-        handler.ConfigureCachesForTests(hoverCacheTtlMs: 15_000, inQueueCacheTtlMs: 3_000, hoverWaitBudgetMs: waitBudgetMs);
+        handler.ConfigureCachesForTests(
+            hoverCacheTtlMs: 15_000,
+            inQueueCacheTtlMs: 3_000,
+            hoverWaitBudgetMs: waitBudgetMs,
+            foregroundResolveBudgetMs: 5_000);
 
         var sampleFile = Path.Combine(
             FindRepoRoot(),

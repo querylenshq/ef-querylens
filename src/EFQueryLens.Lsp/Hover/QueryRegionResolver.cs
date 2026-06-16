@@ -10,12 +10,16 @@ internal sealed class QueryRegionResolver
     private sealed record RegisteredSpan(int SpanStart, int SpanEnd, string SemanticKey);
 
     private readonly DocumentLinqChainCache _chainCache;
-    private readonly ConcurrentDictionary<string, List<RegisteredSpan>> _spanIndex =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, QueryRegion> _regionBySemanticKey =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, Lazy<Task<RegionResolveResult>>> _resolveInflight =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, List<RegisteredSpan>> _spanIndex = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+    private readonly ConcurrentDictionary<string, QueryRegion> _regionBySemanticKey = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+    private readonly ConcurrentDictionary<
+        string,
+        Lazy<Task<RegionResolveResult>>
+    > _resolveInflight = new(StringComparer.OrdinalIgnoreCase);
     private readonly Action<string>? _log;
 
     public QueryRegionResolver(DocumentLinqChainCache chainCache, Action<string>? log = null)
@@ -29,7 +33,8 @@ internal sealed class QueryRegionResolver
         string sourceText,
         int line,
         int character,
-        out string? semanticKey)
+        out string? semanticKey
+    )
     {
         semanticKey = null;
         if (!LspSyntaxHelper.TryGetAbsolutePosition(sourceText, line, character, out var position))
@@ -62,29 +67,34 @@ internal sealed class QueryRegionResolver
         string filePath,
         string sourceText,
         int line,
-        int character)
+        int character
+    )
     {
         var sw = Stopwatch.StartNew();
         var inflightKey = BuildRegionInflightKey(filePath, sourceText, line, character);
         var created = new Lazy<Task<RegionResolveResult>>(
             () => Task.Run(() => ResolveCore(filePath, sourceText, line, character)),
-            LazyThreadSafetyMode.ExecutionAndPublication);
+            LazyThreadSafetyMode.ExecutionAndPublication
+        );
         var inflight = _resolveInflight.GetOrAdd(inflightKey, created);
         var isOwner = ReferenceEquals(inflight, created);
 
         if (isOwner)
         {
             _ = inflight.Value.ContinueWith(
-                _ => _resolveInflight.TryRemove(inflightKey, out Lazy<Task<RegionResolveResult>>? _),
+                _ =>
+                    _resolveInflight.TryRemove(inflightKey, out Lazy<Task<RegionResolveResult>>? _),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+                TaskScheduler.Default
+            );
         }
 
         var result = inflight.Value.GetAwaiter().GetResult();
         _log?.Invoke(
-            $"semantic-resolve-finished line={line} char={character} found={result.Found} " +
-            $"elapsedMs={sw.ElapsedMilliseconds} source={result.Source}");
+            $"semantic-resolve-finished line={line} char={character} found={result.Found} "
+                + $"elapsedMs={sw.ElapsedMilliseconds} source={result.Source}"
+        );
         return result;
     }
 
@@ -93,36 +103,101 @@ internal sealed class QueryRegionResolver
         string sourceText,
         int line,
         int character,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var sw = Stopwatch.StartNew();
         var inflightKey = BuildRegionInflightKey(filePath, sourceText, line, character);
         var created = new Lazy<Task<RegionResolveResult>>(
-            () => Task.Run(() => ResolveCore(filePath, sourceText, line, character), cancellationToken),
-            LazyThreadSafetyMode.ExecutionAndPublication);
+            () =>
+                Task.Run(
+                    () => ResolveCore(filePath, sourceText, line, character),
+                    cancellationToken
+                ),
+            LazyThreadSafetyMode.ExecutionAndPublication
+        );
         var inflight = _resolveInflight.GetOrAdd(inflightKey, created);
         var isOwner = ReferenceEquals(inflight, created);
 
         if (isOwner)
         {
             _ = inflight.Value.ContinueWith(
-                _ => _resolveInflight.TryRemove(inflightKey, out Lazy<Task<RegionResolveResult>>? _),
+                _ =>
+                    _resolveInflight.TryRemove(inflightKey, out Lazy<Task<RegionResolveResult>>? _),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+                TaskScheduler.Default
+            );
         }
 
         var result = await inflight.Value.ConfigureAwait(false);
         _log?.Invoke(
-            $"semantic-resolve-finished line={line} char={character} found={result.Found} " +
-            $"elapsedMs={sw.ElapsedMilliseconds} source={result.Source}");
+            $"semantic-resolve-finished line={line} char={character} found={result.Found} "
+                + $"elapsedMs={sw.ElapsedMilliseconds} source={result.Source}"
+        );
         return result;
+    }
+
+    public RegionResolveResult TryResolveFast(
+        string filePath,
+        string sourceText,
+        int line,
+        int character
+    )
+    {
+        var sw = Stopwatch.StartNew();
+        var result = ResolveCore(
+            filePath,
+            sourceText,
+            line,
+            character,
+            allowCrossFileHelperLookup: false,
+            allowDocumentChainScan: false
+        );
+        _log?.Invoke(
+            $"semantic-fast-resolve-finished line={line} char={character} found={result.Found} "
+                + $"elapsedMs={sw.ElapsedMilliseconds} source={result.Source}"
+        );
+        return result;
+    }
+
+    public bool MightNeedFullResolve(string filePath, string sourceText, int line, int character)
+    {
+        if (
+            TryGetSemanticKeyByPosition(
+                filePath,
+                sourceText,
+                line,
+                character,
+                out var registeredKey
+            ) && !string.IsNullOrWhiteSpace(registeredKey)
+        )
+        {
+            return true;
+        }
+
+        return LspSyntaxHelper.TryGetEnclosingLinqStatementSpan(
+                sourceText,
+                line,
+                character,
+                out _,
+                out _
+            )
+            || LspSyntaxHelper.TryGetEnclosingInvocationSpan(
+                sourceText,
+                line,
+                character,
+                out _,
+                out _
+            )
+            || IsDeclarationKeywordHover(sourceText, line, character);
     }
 
     public IReadOnlyList<string> BuildChainSemanticKeys(
         string filePath,
         string sourceText,
-        IReadOnlyList<LinqChainInfo> chains)
+        IReadOnlyList<LinqChainInfo> chains
+    )
     {
         var keys = new string[chains.Count];
         for (var i = 0; i < chains.Count; i++)
@@ -134,7 +209,8 @@ internal sealed class QueryRegionResolver
                 chain.Expression,
                 chain.ContextVariableName,
                 chain.Line,
-                chain.Character);
+                chain.Character
+            );
             keys[i] = request is not null
                 ? BuildSemanticKey(request)
                 : $"unresolved|{chain.Line}|{chain.Character}|{NormalizeWhitespace(chain.Expression)}";
@@ -143,22 +219,39 @@ internal sealed class QueryRegionResolver
         return keys;
     }
 
-    public static string BuildSemanticKey(TranslationRequest request)
-        => TranslationRequestBuilder.BuildSemanticCacheKey(request);
+    public static string BuildSemanticKey(TranslationRequest request) =>
+        TranslationRequestBuilder.BuildSemanticCacheKey(request);
 
     public static string BuildRegionInflightKey(
         string filePath,
         string sourceText,
         int line,
-        int character)
+        int character
+    )
     {
         var normalizedPath = Path.GetFullPath(filePath);
-        if (LspSyntaxHelper.TryGetEnclosingLinqStatementSpan(sourceText, line, character, out var statementStart, out var statementEnd))
+        if (
+            LspSyntaxHelper.TryGetEnclosingLinqStatementSpan(
+                sourceText,
+                line,
+                character,
+                out var statementStart,
+                out var statementEnd
+            )
+        )
         {
             return $"{normalizedPath}|stmt|{statementStart}|{statementEnd}";
         }
 
-        if (LspSyntaxHelper.TryGetEnclosingInvocationSpan(sourceText, line, character, out var invocationStart, out var invocationEnd))
+        if (
+            LspSyntaxHelper.TryGetEnclosingInvocationSpan(
+                sourceText,
+                line,
+                character,
+                out var invocationStart,
+                out var invocationEnd
+            )
+        )
         {
             return $"{normalizedPath}|inv|{invocationStart}|{invocationEnd}";
         }
@@ -173,20 +266,68 @@ internal sealed class QueryRegionResolver
         _resolveInflight.Clear();
     }
 
+    /// <summary>
+    /// Drops per-document span/region registry state so edits cannot reuse stale semantic keys.
+    /// </summary>
+    public IReadOnlyList<(string AssemblyFingerprint, string SemanticKey)> InvalidateDocument(
+        string filePath
+    )
+    {
+        var normalizedPath = Path.GetFullPath(filePath);
+        var removed = new List<(string AssemblyFingerprint, string SemanticKey)>();
+        _spanIndex.TryRemove(normalizedPath, out _);
+
+        foreach (var inflightKey in _resolveInflight.Keys.ToList())
+        {
+            if (IsDocumentScopedKey(inflightKey, normalizedPath))
+            {
+                _resolveInflight.TryRemove(inflightKey, out _);
+            }
+        }
+
+        foreach (var pair in _regionBySemanticKey.ToList())
+        {
+            if (!IsDocumentScopedKey(pair.Value.RegionKey, normalizedPath))
+            {
+                continue;
+            }
+
+            removed.Add((pair.Value.AssemblyFingerprint, pair.Value.SemanticKey));
+            _regionBySemanticKey.TryRemove(pair.Key, out _);
+        }
+
+        return removed;
+    }
+
+    private static bool IsDocumentScopedKey(string regionKey, string normalizedPath) =>
+        regionKey.StartsWith(normalizedPath + "|", StringComparison.OrdinalIgnoreCase);
+
     private RegionResolveResult ResolveCore(
         string filePath,
         string sourceText,
         int line,
-        int character)
+        int character,
+        bool allowCrossFileHelperLookup = true,
+        bool allowDocumentChainScan = true
+    )
     {
-        if (TryGetSemanticKeyByPosition(filePath, sourceText, line, character, out var registeredKey)
+        if (
+            TryGetSemanticKeyByPosition(
+                filePath,
+                sourceText,
+                line,
+                character,
+                out var registeredKey
+            )
             && !string.IsNullOrWhiteSpace(registeredKey)
-            && _regionBySemanticKey.TryGetValue(registeredKey!, out var registeredRegion))
+            && _regionBySemanticKey.TryGetValue(registeredKey!, out var registeredRegion)
+        )
         {
             return new RegionResolveResult(
                 true,
                 registeredRegion.WithRequestPosition(line, character),
-                "span-registry");
+                "span-registry"
+            );
         }
 
         var expression = LspSyntaxHelper.TryExtractLinqExpression(
@@ -194,24 +335,49 @@ internal sealed class QueryRegionResolver
             line,
             character,
             out var contextVariableName,
-            sourceFilePath: filePath);
+            sourceFilePath: filePath,
+            allowCrossFileHelperLookup: allowCrossFileHelperLookup
+        );
 
-        if (!string.IsNullOrWhiteSpace(expression) && !string.IsNullOrWhiteSpace(contextVariableName))
+        if (
+            !string.IsNullOrWhiteSpace(expression)
+            && !string.IsNullOrWhiteSpace(contextVariableName)
+        )
         {
-            var region = CreateRegion(filePath, sourceText, expression, contextVariableName, line, character);
+            var region = CreateRegion(
+                filePath,
+                sourceText,
+                expression,
+                contextVariableName,
+                line,
+                character
+            );
             if (region is not null)
             {
                 RememberRegion(filePath, sourceText, line, character, region);
-                return new RegionResolveResult(true, region.WithRequestPosition(line, character), "extract-linq");
+                return new RegionResolveResult(
+                    true,
+                    region.WithRequestPosition(line, character),
+                    "extract-linq"
+                );
             }
 
             return new RegionResolveResult(false, null, "extract-linq");
         }
 
+        if (!allowDocumentChainScan)
+        {
+            return new RegionResolveResult(false, null, "fast-none");
+        }
+
         var chains = _chainCache.GetOrFindChains(filePath, sourceText);
-        if (TryFindChainByExpressionSpan(chains, line, character, out var expressionChain)
-            || (IsDeclarationKeywordHover(sourceText, line, character)
-                && TryFindContainingChainByStatement(chains, line, character, out expressionChain)))
+        if (
+            TryFindChainByExpressionSpan(chains, line, character, out var expressionChain)
+            || (
+                IsDeclarationKeywordHover(sourceText, line, character)
+                && TryFindContainingChainByStatement(chains, line, character, out expressionChain)
+            )
+        )
         {
             var region = CreateRegion(
                 filePath,
@@ -219,11 +385,16 @@ internal sealed class QueryRegionResolver
                 expressionChain.Expression,
                 expressionChain.ContextVariableName,
                 expressionChain.Line,
-                expressionChain.Character);
+                expressionChain.Character
+            );
             if (region is not null)
             {
                 RememberRegion(filePath, sourceText, line, character, region);
-                return new RegionResolveResult(true, region.WithRequestPosition(line, character), "chain-span");
+                return new RegionResolveResult(
+                    true,
+                    region.WithRequestPosition(line, character),
+                    "chain-span"
+                );
             }
 
             return new RegionResolveResult(false, null, "chain-span");
@@ -237,7 +408,8 @@ internal sealed class QueryRegionResolver
         string sourceText,
         int line,
         int character,
-        QueryRegion region)
+        QueryRegion region
+    )
     {
         _regionBySemanticKey[region.SemanticKey] = region;
         RegisterSpans(filePath, sourceText, line, character, region.SemanticKey);
@@ -248,19 +420,44 @@ internal sealed class QueryRegionResolver
         string sourceText,
         int line,
         int character,
-        string semanticKey)
+        string semanticKey
+    )
     {
-        if (LspSyntaxHelper.TryGetEnclosingCallArgumentSpan(sourceText, line, character, out var argumentStart, out var argumentEnd))
+        if (
+            LspSyntaxHelper.TryGetEnclosingCallArgumentSpan(
+                sourceText,
+                line,
+                character,
+                out var argumentStart,
+                out var argumentEnd
+            )
+        )
         {
             AddSpan(filePath, argumentStart, argumentEnd, semanticKey);
         }
 
-        if (LspSyntaxHelper.TryGetEnclosingInvocationSpan(sourceText, line, character, out var invocationStart, out var invocationEnd))
+        if (
+            LspSyntaxHelper.TryGetEnclosingInvocationSpan(
+                sourceText,
+                line,
+                character,
+                out var invocationStart,
+                out var invocationEnd
+            )
+        )
         {
             AddSpan(filePath, invocationStart, invocationEnd, semanticKey);
         }
 
-        if (LspSyntaxHelper.TryGetEnclosingLinqStatementSpan(sourceText, line, character, out var statementStart, out var statementEnd))
+        if (
+            LspSyntaxHelper.TryGetEnclosingLinqStatementSpan(
+                sourceText,
+                line,
+                character,
+                out var statementStart,
+                out var statementEnd
+            )
+        )
         {
             AddSpan(filePath, statementStart, statementEnd, semanticKey);
         }
@@ -274,9 +471,11 @@ internal sealed class QueryRegionResolver
         {
             foreach (var existing in spans)
             {
-                if (string.Equals(existing.SemanticKey, semanticKey, StringComparison.Ordinal)
+                if (
+                    string.Equals(existing.SemanticKey, semanticKey, StringComparison.Ordinal)
                     && existing.SpanStart == spanStart
-                    && existing.SpanEnd == spanEnd)
+                    && existing.SpanEnd == spanEnd
+                )
                 {
                     return;
                 }
@@ -292,7 +491,8 @@ internal sealed class QueryRegionResolver
         string expression,
         string contextVariableName,
         int anchorLine,
-        int anchorCharacter)
+        int anchorCharacter
+    )
     {
         var request = TranslationRequestBuilder.TryBuild(
             filePath,
@@ -300,14 +500,16 @@ internal sealed class QueryRegionResolver
             expression,
             contextVariableName,
             anchorLine,
-            anchorCharacter);
+            anchorCharacter
+        );
         if (request is null)
         {
             return null;
         }
 
-        var fingerprint = AssemblyResolver.TryGetAssemblyFingerprint(filePath)
-                          ?? $"no-assembly|{Path.GetFullPath(filePath)}";
+        var fingerprint =
+            AssemblyResolver.TryGetAssemblyFingerprint(filePath)
+            ?? $"no-assembly|{Path.GetFullPath(filePath)}";
         var semanticKey = BuildSemanticKey(request);
         var regionKey = BuildRegionInflightKey(filePath, sourceText, anchorLine, anchorCharacter);
 
@@ -318,14 +520,16 @@ internal sealed class QueryRegionResolver
             anchorLine,
             anchorCharacter,
             expression,
-            contextVariableName);
+            contextVariableName
+        );
     }
 
     private static bool TryFindChainByExpressionSpan(
         IReadOnlyList<LinqChainInfo> chains,
         int line,
         int character,
-        out LinqChainInfo chain)
+        out LinqChainInfo chain
+    )
     {
         foreach (var candidate in chains)
         {
@@ -344,7 +548,8 @@ internal sealed class QueryRegionResolver
         IReadOnlyList<LinqChainInfo> chains,
         int line,
         int character,
-        out LinqChainInfo containingChain)
+        out LinqChainInfo containingChain
+    )
     {
         containingChain = null!;
         foreach (var chain in chains)
@@ -371,7 +576,7 @@ internal sealed class QueryRegionResolver
         if (chain.StatementStartLine == chain.StatementEndLine)
         {
             return character >= chain.StatementStartCharacter
-                   && character <= chain.StatementEndCharacter;
+                && character <= chain.StatementEndCharacter;
         }
 
         if (line == chain.StatementStartLine)
@@ -396,7 +601,8 @@ internal sealed class QueryRegionResolver
 
         if (chain.StatementStartLine == chain.StatementEndLine)
         {
-            return character >= chain.StatementStartCharacter && character <= chain.StatementEndCharacter;
+            return character >= chain.StatementStartCharacter
+                && character <= chain.StatementEndCharacter;
         }
 
         if (line == chain.StatementStartLine)
@@ -428,8 +634,8 @@ internal sealed class QueryRegionResolver
 
         var prefix = textLine[..character];
         return prefix.Contains("var ", StringComparison.Ordinal)
-               || prefix.Contains("await ", StringComparison.Ordinal)
-               || prefix.TrimEnd().EndsWith('=');
+            || prefix.Contains("await ", StringComparison.Ordinal)
+            || prefix.TrimEnd().EndsWith('=');
     }
 
     internal static string NormalizeWhitespace(string value)

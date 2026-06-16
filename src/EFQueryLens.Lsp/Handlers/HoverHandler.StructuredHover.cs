@@ -10,7 +10,8 @@ internal sealed partial class HoverHandler
 {
     public async Task<QueryLensStructuredHoverResult?> HandleStructuredAsync(
         TextDocumentPositionParams request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
         var documentUri = request.TextDocument.Uri.ToString();
@@ -26,10 +27,11 @@ internal sealed partial class HoverHandler
             sourceText,
             request.Position.Line,
             request.Position.Character,
-            cancellationToken);
+            cancellationToken,
+            nonBlocking: true
+        );
 
-        if (result.Status is QueryTranslationStatus.Ready
-            && result.Structured is not null)
+        if (result.Status is QueryTranslationStatus.Ready && result.Structured is not null)
         {
             var assemblyPath = AssemblyResolver.TryGetTargetAssembly(filePath);
             if (!string.IsNullOrWhiteSpace(assemblyPath))

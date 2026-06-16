@@ -201,17 +201,6 @@ internal sealed partial class QueryLensLanguageClient : ILanguageClient, ILangua
     {
         this.rpc = rpc;
         Log("custom-message-rpc-attached");
-
-        try
-        {
-            rpc.AddLocalRpcTarget(NotificationTarget);
-            Log("custom-message-add-local-rpc-target-success");
-        }
-        catch (Exception ex)
-        {
-            Log($"custom-message-add-local-rpc-target-failed type={ex.GetType().Name} message={ex.Message}");
-        }
-
         return Task.CompletedTask;
     }
 }

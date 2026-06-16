@@ -6,7 +6,9 @@ namespace EFQueryLens.Lsp.Handlers;
 
 internal sealed partial class HoverHandler
 {
-    public async Task<Hover?> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
+    public async Task<Hover?> HandleAsync(
+        TextDocumentPositionParams request,
+        CancellationToken cancellationToken)
     {
         var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
         _assemblyChangeTracker?.CheckAndInvalidateIfChanged(filePath);

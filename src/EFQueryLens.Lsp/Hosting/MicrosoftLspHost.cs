@@ -17,8 +17,6 @@ internal static class MicrosoftLspHost
         var statusTracker = new QueryLensStatusTracker();
         statusTracker.SetDaemonReady(ready: true);
 
-        var sqlReadyNotifier = new HoverReadyNotifier();
-
         var documentManager = new DocumentManager();
         var hoverPreviewService = new HoverPreviewService(engine, debugEnabled);
         var warmupHandler = new WarmupHandler(documentManager, engine);
@@ -27,7 +25,6 @@ internal static class MicrosoftLspHost
         var hoverHandler = new HoverHandler(documentManager, hoverPreviewService, engine);
         hoverHandler.SetWarmupHandler(warmupHandler);
         hoverHandler.SetStatusTracker(statusTracker);
-        hoverHandler.SetSqlReadyNotifier(sqlReadyNotifier);
 
         var assemblyChangeTracker = new AssemblyChangeTracker(hoverHandler);
         hoverHandler.SetAssemblyChangeTracker(assemblyChangeTracker);
@@ -53,7 +50,6 @@ internal static class MicrosoftLspHost
         var rpc = new JsonRpc(msgHandler, lspHandler);
         lspHandler.JsonRpc = rpc;
         lspHandler.SetStatusTracker(statusTracker);
-        lspHandler.SetSqlReadyNotifier(sqlReadyNotifier);
 
         rpc.StartListening();
         if (debugEnabled)

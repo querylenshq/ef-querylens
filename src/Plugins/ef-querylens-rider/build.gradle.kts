@@ -24,14 +24,18 @@ dependencies {
         rider(providers.gradleProperty("platformVersion")) {
             useInstaller = false
         }
+        pluginVerifier()
     }
     // CommonMark spec-compliant Markdown to HTML (replaces custom regex conversion)
     implementation("org.commonmark:commonmark:0.27.1")
-    testImplementation(kotlin("test"))
+    testImplementation(kotlin("test-junit5"))
 }
 
 tasks.test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // Rider test classpath pulls in junit-vintage without junit:junit.
+        excludeEngines("junit-vintage")
+    }
 }
 
 val bundledRuntimeOutputDir = layout.buildDirectory.dir("generated/querylens-runtime")
@@ -186,6 +190,14 @@ intellijPlatform {
     // (used by instrumentCode) expects. This plugin has no UI forms, so skipping
     // instrumentation is safe and avoids requiring admin access under Program Files.
     instrumentCode = false
+
+    pluginVerification {
+        // Rider has no installer artifacts; verify against the same non-installer
+        // dependency declared in dependencies { intellijPlatform { rider { ... } } }.
+        ides {
+            current()
+        }
+    }
 
     pluginConfiguration {
         ideaVersion {

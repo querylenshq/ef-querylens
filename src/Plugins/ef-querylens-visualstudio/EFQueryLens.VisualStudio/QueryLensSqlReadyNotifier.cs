@@ -15,6 +15,19 @@ internal static class QueryLensSqlReadyNotifier
     private const string ActionGoToQuery = "goToQuery";
     private const string ActionOpenSql = "openSql";
 
+    private enum InfoBarHostKind
+    {
+        Document,
+        SolutionExplorer,
+    }
+
+    private static string FormatHostKind(InfoBarHostKind hostKind)
+        => hostKind switch
+        {
+            InfoBarHostKind.SolutionExplorer => "solution-explorer",
+            _ => "document",
+        };
+
     internal static void Show(QueryLensHostSqlReadyNotification notification, string message)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -25,23 +38,49 @@ internal static class QueryLensSqlReadyNotifier
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        if (TryShowInfoBar(notification, message))
+        ShowLayeredCues(notification);
+
+        if (TryShowInfoBar(notification, message, out var hostKind))
         {
+            QueryLensLanguageClient.LogSqlReadyDiagnostic($"sql-ready-infobar-host={FormatHostKind(hostKind)}");
             return true;
         }
 
         return ShowShellFallback(message);
     }
 
-    private static bool TryShowInfoBar(QueryLensHostSqlReadyNotification notification, string message)
+    private static void ShowLayeredCues(QueryLensHostSqlReadyNotification notification)
     {
-        var host = ResolveInfoBarHost();
+        var statusMessage = SqlReadyNotificationPresentationLogic.BuildStatusBarMessage(notification);
+        QueryLensSqlReadyStatusBarFlash.Show(statusMessage);
+
+        var outputLine = SqlReadyNotificationPresentationLogic.BuildOutputLine(notification);
+        QueryLensLogOpener.WriteUserNotificationLine(outputLine);
+        QueryLensLanguageClient.LogSqlReadyDiagnostic("sql-ready-output-line");
+    }
+
+    private static bool TryShowInfoBar(
+        QueryLensHostSqlReadyNotification notification,
+        string message,
+        out InfoBarHostKind hostKind)
+    {
+        hostKind = InfoBarHostKind.Document;
+
+        var host = ResolveInfoBarHost(out hostKind);
         if (host is null)
         {
             QueryLensLanguageClient.LogSqlReadyDiagnostic("sql-ready-infobar-failed no-info-bar-host");
             return false;
         }
 
+        return TryAddInfoBarToHost(host, notification, message);
+    }
+
+    private static bool TryAddInfoBarToHost(
+        IVsInfoBarHost host,
+        QueryLensHostSqlReadyNotification notification,
+        string message)
+    {
         if (Package.GetGlobalService(typeof(SVsInfoBarUIFactory)) is not IVsInfoBarUIFactory factory)
         {
             QueryLensLanguageClient.LogSqlReadyDiagnostic("sql-ready-infobar-failed no-ui-factory");
@@ -53,7 +92,7 @@ internal static class QueryLensSqlReadyNotifier
         var model = new InfoBarModel(
             new[] { new InfoBarTextSpan(message) },
             new InfoBarActionItem[] { goToQuery, openSql },
-            KnownMonikers.StatusInformation,
+            KnownMonikers.StatusOK,
             isCloseButtonVisible: true);
 
         var element = factory.CreateInfoBar(model);
@@ -96,8 +135,10 @@ internal static class QueryLensSqlReadyNotifier
         return true;
     }
 
-    private static IVsInfoBarHost? ResolveInfoBarHost()
+    private static IVsInfoBarHost? ResolveInfoBarHost(out InfoBarHostKind hostKind)
     {
+        hostKind = InfoBarHostKind.Document;
+
         if (Package.GetGlobalService(typeof(SVsShellMonitorSelection)) is IVsMonitorSelection selection)
         {
             selection.GetCurrentElementValue((uint)VSConstants.VSSELELEMID.SEID_DocumentFrame, out object frameObj);
@@ -124,6 +165,17 @@ internal static class QueryLensSqlReadyNotifier
                     {
                         return host;
                     }
+                }
+            }
+
+            if (shell.FindToolWindow(0, new Guid(ToolWindowGuids80.SolutionExplorer), out var solutionExplorerFrame) == VSConstants.S_OK
+                && solutionExplorerFrame is not null)
+            {
+                var solutionExplorerHost = TryGetInfoBarHost(solutionExplorerFrame);
+                if (solutionExplorerHost is not null)
+                {
+                    hostKind = InfoBarHostKind.SolutionExplorer;
+                    return solutionExplorerHost;
                 }
             }
         }

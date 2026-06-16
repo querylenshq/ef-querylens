@@ -39,6 +39,9 @@ class EFQueryLensLogToolWindowFactory :
 
     override fun shouldBeAvailable(project: Project): Boolean = true
 
+    override suspend fun isApplicableAsync(project: Project): Boolean =
+        shouldBeAvailable(project)
+
     override fun createToolWindowContent(
         project: Project,
         toolWindow: ToolWindow,

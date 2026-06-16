@@ -10,14 +10,17 @@ using Microsoft.VisualStudio.Shell;
 public sealed class QueryLensOptionsPage : DialogPage
 {
     private bool notifyWhenSqlReady = true;
-    private int hoverWaitWhenWarmMs = 8000;
+    private int hoverWaitWhenWarmMs;
 
     public static QueryLensOptionsPage? Current =>
-        QueryLensPackage.Instance?.GetDialogPage(typeof(QueryLensOptionsPage)) as QueryLensOptionsPage;
+        QueryLensPackage.Instance?.GetDialogPage(typeof(QueryLensOptionsPage))
+        as QueryLensOptionsPage;
 
     [Category("Notifications")]
     [DisplayName("Notify when SQL is ready")]
-    [Description("Show a notification when background SQL translation completes after a queued hover.")]
+    [Description(
+        "Show a notification when background SQL translation completes after a queued hover."
+    )]
     public bool NotifyWhenSqlReady
     {
         get => notifyWhenSqlReady;
@@ -35,7 +38,9 @@ public sealed class QueryLensOptionsPage : DialogPage
 
     [Category("Hover")]
     [DisplayName("Hover wait when warm (ms)")]
-    [Description("Maximum time to wait for SQL when the assembly is already warmed.")]
+    [Description(
+        "Maximum time to wait for SQL when the assembly is already warmed. 0 returns a processing hover immediately and notifies when SQL is ready."
+    )]
     public int HoverWaitWhenWarmMs
     {
         get => hoverWaitWhenWarmMs;

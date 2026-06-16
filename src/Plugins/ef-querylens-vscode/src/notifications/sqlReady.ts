@@ -1,10 +1,8 @@
 import { commands, window } from 'vscode';
-import { LanguageClient } from 'vscode-languageclient/node';
 
 import { revealQuerySource } from '../utils/revealQuerySource';
 import {
     buildSqlReadyToastMessage,
-    shouldShowSqlReadyNotification,
     SQL_READY_GO_TO_QUERY_ACTION,
     SQL_READY_OPEN_SQL_ACTION,
     SqlReadyNotificationPayload,
@@ -32,17 +30,4 @@ export async function showSqlReadyToast(payload: SqlReadyNotificationPayload): P
             payload.character,
         );
     }
-}
-
-export function attachSqlReadyNotifications(
-    client: LanguageClient,
-    isEnabled: () => boolean,
-): void {
-    client.onNotification('efquerylens/sqlReady', (payload: SqlReadyNotificationPayload) => {
-        if (!shouldShowSqlReadyNotification(payload, isEnabled())) {
-            return;
-        }
-
-        void showSqlReadyToast(payload);
-    });
 }

@@ -17,23 +17,58 @@ internal sealed partial class HoverHandler
     private WarmupHandler? _warmupHandler;
     private QueryLensStatusTracker? _statusTracker;
     private AssemblyChangeTracker? _assemblyChangeTracker;
-    private IHoverReadyNotifier? _sqlReadyNotifier;
     private bool _debugEnabled;
 
     public HoverHandler(
         DocumentManager documentManager,
         HoverPreviewService hoverPreviewService,
-        IQueryLensEngine? engine = null)
+        IQueryLensEngine? engine = null
+    )
     {
         _documentManager = documentManager;
         _hoverPreviewService = hoverPreviewService;
         _engine = engine;
 
-        var hoverCacheTtlMs = LspEnvironment.ReadInt("QUERYLENS_HOVER_CACHE_TTL_MS", fallback: 15_000, min: 0, max: 120_000);
-        var inQueueCacheTtlMs = LspEnvironment.ReadInt("QUERYLENS_INQUEUE_CACHE_TTL_MS", fallback: 45_000, min: 0, max: 120_000);
-        var hoverWaitBudgetMs = LspEnvironment.ReadInt("QUERYLENS_HOVER_WAIT_BUDGET_MS", fallback: 8_000, min: 0, max: 30_000);
-        var hoverQueuedAdaptiveWaitMs = LspEnvironment.ReadInt("QUERYLENS_MARKDOWN_QUEUE_ADAPTIVE_WAIT_MS", fallback: 200, min: 0, max: 2_000);
-        var structuredQueuedAdaptiveWaitMs = LspEnvironment.ReadInt("QUERYLENS_STRUCTURED_QUEUE_ADAPTIVE_WAIT_MS", fallback: 200, min: 0, max: 2_000);
+        var hoverCacheTtlMs = LspEnvironment.ReadInt(
+            "QUERYLENS_HOVER_CACHE_TTL_MS",
+            fallback: 15_000,
+            min: 0,
+            max: 120_000
+        );
+        var inQueueCacheTtlMs = LspEnvironment.ReadInt(
+            "QUERYLENS_INQUEUE_CACHE_TTL_MS",
+            fallback: 45_000,
+            min: 0,
+            max: 120_000
+        );
+        var hoverWaitBudgetMs = LspEnvironment.ReadInt(
+            "QUERYLENS_HOVER_WAIT_BUDGET_MS",
+            fallback: 0,
+            min: 0,
+            max: 30_000
+        );
+        var foregroundResolveBudgetMs = LspEnvironment.ReadInt(
+            "QUERYLENS_HOVER_FOREGROUND_RESOLVE_BUDGET_MS",
+            fallback: 75,
+            min: 0,
+            max: 5_000
+        );
+        var fastProbeEnabled = LspEnvironment.ReadBool(
+            "QUERYLENS_HOVER_FAST_PROBE_ENABLED",
+            fallback: true
+        );
+        var hoverQueuedAdaptiveWaitMs = LspEnvironment.ReadInt(
+            "QUERYLENS_MARKDOWN_QUEUE_ADAPTIVE_WAIT_MS",
+            fallback: 200,
+            min: 0,
+            max: 2_000
+        );
+        var structuredQueuedAdaptiveWaitMs = LspEnvironment.ReadInt(
+            "QUERYLENS_STRUCTURED_QUEUE_ADAPTIVE_WAIT_MS",
+            fallback: 200,
+            min: 0,
+            max: 2_000
+        );
         _debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
 
         var chainCache = new DocumentLinqChainCache();
@@ -45,10 +80,13 @@ internal sealed partial class HoverHandler
             cache,
             chainCache,
             hoverWaitBudgetMs,
+            foregroundResolveBudgetMs,
+            fastProbeEnabled,
             hoverQueuedAdaptiveWaitMs,
             structuredQueuedAdaptiveWaitMs,
             _debugEnabled ? LogHoverDebug : null,
-            LogHoverOperation);
+            LogHoverOperation
+        );
     }
 
     internal void SetWarmupHandler(WarmupHandler warmupHandler)
@@ -56,19 +94,20 @@ internal sealed partial class HoverHandler
         _warmupHandler = warmupHandler;
         _coordinator.SetAssemblyWarmChecker(assemblyPath =>
             !string.IsNullOrWhiteSpace(assemblyPath)
-            && _warmupHandler?.IsAssemblyReady(assemblyPath) == true);
+            && _warmupHandler?.IsAssemblyReady(assemblyPath) == true
+        );
     }
 
-    internal void SetAssemblyChangeTracker(AssemblyChangeTracker assemblyChangeTracker)
-        => _assemblyChangeTracker = assemblyChangeTracker;
+    internal void SetAssemblyChangeTracker(AssemblyChangeTracker assemblyChangeTracker) =>
+        _assemblyChangeTracker = assemblyChangeTracker;
 
     internal void SetStatusTracker(QueryLensStatusTracker statusTracker)
-        => _statusTracker = statusTracker;
-
-    internal void SetSqlReadyNotifier(IHoverReadyNotifier notifier)
     {
-        _sqlReadyNotifier = notifier;
-        _coordinator.SetSqlReadyNotifier(notifier);
+        _statusTracker = statusTracker;
+        _coordinator.SetAssemblyWarmStateActions(
+            assemblyPath => _statusTracker?.SetAssemblyWarmed(warmed: true, assemblyPath),
+            assemblyPath => _statusTracker?.SetAssemblyWarming(assemblyPath)
+        );
     }
 
     public void OnAssemblyChanged() => InvalidateCaches("assembly-changed");
@@ -77,7 +116,8 @@ internal sealed partial class HoverHandler
 
     public void InvalidateForConfigurationChange() => InvalidateCaches("configuration-changed");
 
-    public void OnDocumentChanged(string filePath) => _coordinator.InvalidateDocumentChains(filePath);
+    public void OnDocumentChanged(string filePath) =>
+        _coordinator.InvalidateDocument(filePath);
 
     public void ApplyClientConfiguration(LspClientConfiguration configuration)
     {
@@ -87,41 +127,83 @@ internal sealed partial class HoverHandler
             _hoverPreviewService.SetDebugEnabled(_debugEnabled);
         }
 
-        var hoverCacheTtlMs = configuration.HoverCacheTtlMs ?? LspEnvironment.ReadInt("QUERYLENS_HOVER_CACHE_TTL_MS", fallback: 15_000, min: 0, max: 120_000);
-        var inQueueCacheTtlMs = LspEnvironment.ReadInt("QUERYLENS_INQUEUE_CACHE_TTL_MS", fallback: 45_000, min: 0, max: 120_000);
-        var hoverWaitBudgetMs = configuration.HoverWaitWhenWarmMs ?? LspEnvironment.ReadInt("QUERYLENS_HOVER_WAIT_BUDGET_MS", fallback: 8_000, min: 0, max: 30_000);
-        var hoverQueuedAdaptiveWaitMs = configuration.MarkdownQueueAdaptiveWaitMs ?? LspEnvironment.ReadInt("QUERYLENS_MARKDOWN_QUEUE_ADAPTIVE_WAIT_MS", fallback: 200, min: 0, max: 2_000);
-        var structuredQueuedAdaptiveWaitMs = configuration.StructuredQueueAdaptiveWaitMs ?? LspEnvironment.ReadInt("QUERYLENS_STRUCTURED_QUEUE_ADAPTIVE_WAIT_MS", fallback: 200, min: 0, max: 2_000);
+        var hoverCacheTtlMs =
+            configuration.HoverCacheTtlMs
+            ?? LspEnvironment.ReadInt(
+                "QUERYLENS_HOVER_CACHE_TTL_MS",
+                fallback: 15_000,
+                min: 0,
+                max: 120_000
+            );
+        var inQueueCacheTtlMs = LspEnvironment.ReadInt(
+            "QUERYLENS_INQUEUE_CACHE_TTL_MS",
+            fallback: 45_000,
+            min: 0,
+            max: 120_000
+        );
+        var hoverWaitBudgetMs =
+            configuration.HoverWaitWhenWarmMs
+            ?? LspEnvironment.ReadInt(
+                "QUERYLENS_HOVER_WAIT_BUDGET_MS",
+                fallback: 0,
+                min: 0,
+                max: 30_000
+            );
+        var foregroundResolveBudgetMs =
+            configuration.HoverForegroundResolveBudgetMs
+            ?? LspEnvironment.ReadInt(
+                "QUERYLENS_HOVER_FOREGROUND_RESOLVE_BUDGET_MS",
+                fallback: 75,
+                min: 0,
+                max: 5_000
+            );
+        var fastProbeEnabled =
+            configuration.HoverFastProbeEnabled
+            ?? LspEnvironment.ReadBool("QUERYLENS_HOVER_FAST_PROBE_ENABLED", fallback: true);
+        var hoverQueuedAdaptiveWaitMs =
+            configuration.MarkdownQueueAdaptiveWaitMs
+            ?? LspEnvironment.ReadInt(
+                "QUERYLENS_MARKDOWN_QUEUE_ADAPTIVE_WAIT_MS",
+                fallback: 200,
+                min: 0,
+                max: 2_000
+            );
+        var structuredQueuedAdaptiveWaitMs =
+            configuration.StructuredQueueAdaptiveWaitMs
+            ?? LspEnvironment.ReadInt(
+                "QUERYLENS_STRUCTURED_QUEUE_ADAPTIVE_WAIT_MS",
+                fallback: 200,
+                min: 0,
+                max: 2_000
+            );
 
         _coordinator.Configure(
             hoverCacheTtlMs,
             inQueueCacheTtlMs,
             hoverWaitBudgetMs,
+            foregroundResolveBudgetMs,
+            fastProbeEnabled,
             hoverQueuedAdaptiveWaitMs,
-            structuredQueuedAdaptiveWaitMs);
-
-        if (configuration.SqlReadyNotify.HasValue && _sqlReadyNotifier is HoverReadyNotifier notifier)
-        {
-            notifier.Configure(configuration.SqlReadyNotify.Value);
-        }
+            structuredQueuedAdaptiveWaitMs
+        );
     }
 
     internal IReadOnlyList<string> BuildChainSemanticKeys(
         string filePath,
         string sourceText,
-        IReadOnlyList<LinqChainInfo> chains)
-        => _coordinator.BuildChainSemanticKeys(filePath, sourceText, chains);
+        IReadOnlyList<LinqChainInfo> chains
+    ) => _coordinator.BuildChainSemanticKeys(filePath, sourceText, chains);
 
-    internal bool IsSemanticKeyReady(string semanticKey)
-        => _coordinator.IsSemanticKeyReady(semanticKey);
+    internal bool IsSemanticKeyReady(string semanticKey) =>
+        _coordinator.IsSemanticKeyReady(semanticKey);
 
     internal void StorePrewarmedEntry(
         string filePath,
         string sourceText,
         int line,
         int character,
-        CombinedHoverResult combined)
-        => _coordinator.StorePrewarmed(filePath, sourceText, line, character, combined);
+        CombinedHoverResult combined
+    ) => _coordinator.StorePrewarmed(filePath, sourceText, line, character, combined);
 
     private void InvalidateCaches(string reason)
     {
@@ -162,10 +244,15 @@ internal sealed partial class HoverHandler
         int character,
         QueryTranslationStatus status,
         bool cached,
-        bool background = false)
+        bool background = false
+    )
     {
-        var phase = background ? "bg" : cached ? "cache" : "sync";
+        var phase =
+            background ? "bg"
+            : cached ? "cache"
+            : "sync";
         QueryLensOperationalLog.Info(
-            $"hover-{phase} file={Path.GetFileName(filePath)} line={line} char={character} status={status}");
+            $"hover-{phase} file={Path.GetFileName(filePath)} line={line} char={character} status={status}"
+        );
     }
 }

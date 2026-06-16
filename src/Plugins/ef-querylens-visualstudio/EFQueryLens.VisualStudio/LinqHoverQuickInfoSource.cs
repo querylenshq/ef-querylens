@@ -7,20 +7,25 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio.Shell;
+using EFQueryLens.VisualStudio.Host.Contracts;
 using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 
 internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQuickInfoSource
 {
-    private static readonly string logPath = Path.Combine(Path.GetTempPath(), "EFQueryLens.VisualStudio.log");
+    private static readonly string logPath = Path.Combine(
+        Path.GetTempPath(),
+        "EFQueryLens.VisualStudio.log"
+    );
     private static readonly object sessionContentMarker = new();
 
-    public void Dispose()
-    {
-    }
+    public void Dispose() { }
 
-    public async Task<QuickInfoItem?> GetQuickInfoItemAsync(IAsyncQuickInfoSession session, CancellationToken cancellationToken)
+    public async Task<QuickInfoItem?> GetQuickInfoItemAsync(
+        IAsyncQuickInfoSession session,
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -45,18 +50,30 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         }
 
         var applicableSnapshotSpan = new SnapshotSpan(snapshot, applicableSpan);
-        ITrackingSpan? applicableTrackingSpan = snapshot.CreateTrackingSpan(applicableSnapshotSpan, SpanTrackingMode.EdgeInclusive);
+        ITrackingSpan? applicableTrackingSpan = snapshot.CreateTrackingSpan(
+            applicableSnapshotSpan,
+            SpanTrackingMode.EdgeInclusive
+        );
 
         // Try structured hover first (VS-optimized path: typed SQL, always-pinned header, no markdown parsing).
-        var structuredElement = await TryGetStructuredContentAsync(triggerPoint.Value, snapshot, applicableSpan, cancellationToken);
+        var structuredElement = await TryGetStructuredContentAsync(
+            triggerPoint.Value,
+            snapshot,
+            applicableSpan,
+            cancellationToken
+        );
         if (structuredElement is not null)
         {
             return new QuickInfoItem(applicableTrackingSpan, structuredElement);
         }
 
         var documentUri = "about:blank";
-        if (textBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument unavailableDocument)
-            && !string.IsNullOrWhiteSpace(unavailableDocument.FilePath))
+        if (
+            textBuffer.Properties.TryGetProperty(
+                typeof(ITextDocument),
+                out ITextDocument unavailableDocument
+            ) && !string.IsNullOrWhiteSpace(unavailableDocument.FilePath)
+        )
         {
             documentUri = new Uri(unavailableDocument.FilePath).AbsoluteUri;
         }
@@ -64,18 +81,21 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         var startupStatus = QueryLensLanguageClient.GetStartupStatus();
         var (statusCode, statusMessage, errorMessage) = startupStatus switch
         {
-            LspStartupStatus.Starting =>
-                (2, // QueryTranslationStatus.Starting
-                 "EF QueryLens \u2014 starting engine\u2026",
-                 "Language server is initializing."),
-            LspStartupStatus.NotStarted =>
-                (2,
-                 "EF QueryLens \u2014 starting engine\u2026",
-                 "Language server has not activated yet."),
-            _ =>
-                (3, // QueryTranslationStatus.DaemonUnavailable
-                 "EF QueryLens \u2014 engine unavailable. Try Restart QueryLens.",
-                 "EF QueryLens is unavailable."),
+            LspStartupStatus.Starting => (
+                2, // QueryTranslationStatus.Starting
+                "EF QueryLens \u2014 starting engine\u2026",
+                "Language server is initializing."
+            ),
+            LspStartupStatus.NotStarted => (
+                2,
+                "EF QueryLens \u2014 starting engine\u2026",
+                "Language server has not activated yet."
+            ),
+            _ => (
+                3, // QueryTranslationStatus.DaemonUnavailable
+                "EF QueryLens \u2014 engine unavailable. Try Restart QueryLens.",
+                "EF QueryLens is unavailable."
+            ),
         };
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -92,7 +112,8 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
             },
             documentUri,
             0,
-            0);
+            0
+        );
         var item = new QuickInfoItem(applicableTrackingSpan, content);
         return item;
     }
@@ -111,10 +132,17 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         }
     }
 
-    private async Task<System.Windows.FrameworkElement?> TryGetStructuredContentAsync(SnapshotPoint triggerPoint, ITextSnapshot snapshot, Span applicableSpan, CancellationToken cancellationToken)
+    private async Task<System.Windows.FrameworkElement?> TryGetStructuredContentAsync(
+        SnapshotPoint triggerPoint,
+        ITextSnapshot snapshot,
+        Span applicableSpan,
+        CancellationToken cancellationToken
+    )
     {
-        if (!textBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document)
-            || string.IsNullOrWhiteSpace(document.FilePath))
+        if (
+            !textBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document)
+            || string.IsNullOrWhiteSpace(document.FilePath)
+        )
         {
             return null;
         }
@@ -125,19 +153,29 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         {
             cancellationToken.ThrowIfCancellationRequested();
             var attempt = attempts[i];
-            Log($"Structured hover attempt {i + 1}/{attempts.Count} ({attempt.Label}) line={attempt.Line} char={attempt.Character}");
+            Log(
+                $"Structured hover attempt {i + 1}/{attempts.Count} ({attempt.Label}) line={attempt.Line} char={attempt.Character}"
+            );
 
             var response = await PollStructuredHoverAsync(
                 document.FilePath,
                 attempt.Line,
                 attempt.Character,
-                cancellationToken);
+                cancellationToken
+            );
 
             if (response is not null)
             {
-                Log($"Structured hover resolved on attempt {i + 1} ({attempt.Label}), success={response.Success}, status={response.Status}");
+                Log(
+                    $"Structured hover resolved on attempt {i + 1} ({attempt.Label}), success={response.Success}, status={response.Status}"
+                );
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-                return LinqHoverMarkdownRenderer.CreateFromStructured(response, uri, attempt.Line, attempt.Character);
+                return LinqHoverMarkdownRenderer.CreateFromStructured(
+                    response,
+                    uri,
+                    attempt.Line,
+                    attempt.Character
+                );
             }
 
             if (i < attempts.Count - 1)
@@ -152,14 +190,16 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
 
     private const int StructuredHoverPollIntervalMs = 200;
     private const int TranslationStatusReady = 0;
+    private const int TranslationStatusInQueue = 1;
 
     private static async Task<QueryLensStructuredHoverResponse?> PollStructuredHoverAsync(
         string filePath,
         int line,
         int character,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var waitBudgetMs = Math.Max(500, QueryLensOptionsPage.Current?.HoverWaitWhenWarmMs ?? 8000);
+        var waitBudgetMs = Math.Max(500, QueryLensOptionsPage.Current?.HoverWaitWhenWarmMs ?? 0);
         var deadline = DateTime.UtcNow.AddMilliseconds(waitBudgetMs);
         QueryLensStructuredHoverResponse? last = null;
         var isFirstPoll = true;
@@ -174,7 +214,8 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
                 character,
                 cancellationToken,
                 refreshStatus: false,
-                startSqlReadyWatch: isFirstPoll);
+                startSqlReadyWatch: isFirstPoll
+            );
             isFirstPoll = false;
 
             if (response is null)
@@ -188,6 +229,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
             {
                 if (response.Success)
                 {
+                    SqlReadyHoverWatcher.CancelSqlReadyWatch(filePath, line, character);
                     _ = QueryLensLanguageClient.RefreshStatusAsync(cancellationToken);
                 }
 
@@ -204,8 +246,7 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         }
     }
 
-    private static bool IsTerminalHoverStatus(int status) =>
-        status is TranslationStatusReady or 3; // Ready or DaemonUnavailable
+    private static bool IsTerminalHoverStatus(int status) => status is TranslationStatusReady or 3; // Ready or DaemonUnavailable
 
     private static Span BuildApplicableSpan(ITextSnapshot snapshot, int position)
     {
@@ -222,10 +263,15 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
             return new Span(safePosition, 1);
         }
 
-        var lineOffset = Math.Max(0, Math.Min(safePosition - line.Start.Position, lineText.Length - 1));
-        if (!IsIdentifierChar(lineText[lineOffset])
+        var lineOffset = Math.Max(
+            0,
+            Math.Min(safePosition - line.Start.Position, lineText.Length - 1)
+        );
+        if (
+            !IsIdentifierChar(lineText[lineOffset])
             && lineOffset > 0
-            && IsIdentifierChar(lineText[lineOffset - 1]))
+            && IsIdentifierChar(lineText[lineOffset - 1])
+        )
         {
             lineOffset--;
         }
@@ -257,7 +303,11 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         return char.IsLetterOrDigit(ch) || ch == '_';
     }
 
-    private static System.Collections.Generic.List<HoverAttempt> BuildHoverAttempts(SnapshotPoint triggerPoint, ITextSnapshot snapshot, Span applicableSpan)
+    private static System.Collections.Generic.List<HoverAttempt> BuildHoverAttempts(
+        SnapshotPoint triggerPoint,
+        ITextSnapshot snapshot,
+        Span applicableSpan
+    )
     {
         var attempts = new System.Collections.Generic.List<HoverAttempt>();
         var seen = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
@@ -267,7 +317,8 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
             System.Collections.Generic.HashSet<string> dedupe,
             string label,
             int line,
-            int character)
+            int character
+        )
         {
             var key = $"{line}:{character}";
             if (!dedupe.Add(key))
@@ -281,14 +332,35 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         var triggerLine = triggerPoint.GetContainingLine();
         var triggerChar = Math.Max(0, triggerPoint.Position - triggerLine.Start.Position);
         AddAttempt(attempts, seen, "trigger", triggerLine.LineNumber, triggerChar);
-        AddAttemptFromAbsolute(snapshot, attempts, seen, "trigger-prev", Math.Max(0, triggerPoint.Position - 1));
-        AddAttemptFromAbsolute(snapshot, attempts, seen, "trigger-next", Math.Min(snapshot.Length - 1, triggerPoint.Position + 1));
+        AddAttemptFromAbsolute(
+            snapshot,
+            attempts,
+            seen,
+            "trigger-prev",
+            Math.Max(0, triggerPoint.Position - 1)
+        );
+        AddAttemptFromAbsolute(
+            snapshot,
+            attempts,
+            seen,
+            "trigger-next",
+            Math.Min(snapshot.Length - 1, triggerPoint.Position + 1)
+        );
 
         if (snapshot.Length > 0)
         {
             var startPos = Math.Max(0, Math.Min(applicableSpan.Start, snapshot.Length - 1));
-            var endPos = Math.Max(0, Math.Min(Math.Max(applicableSpan.End - 1, applicableSpan.Start), snapshot.Length - 1));
-            var midPos = Math.Max(0, Math.Min(applicableSpan.Start + (applicableSpan.Length / 2), snapshot.Length - 1));
+            var endPos = Math.Max(
+                0,
+                Math.Min(
+                    Math.Max(applicableSpan.End - 1, applicableSpan.Start),
+                    snapshot.Length - 1
+                )
+            );
+            var midPos = Math.Max(
+                0,
+                Math.Min(applicableSpan.Start + (applicableSpan.Length / 2), snapshot.Length - 1)
+            );
 
             AddAttemptFromAbsolute(snapshot, attempts, seen, "span-start", startPos);
             AddAttemptFromAbsolute(snapshot, attempts, seen, "span-mid", midPos);
@@ -303,7 +375,8 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         System.Collections.Generic.List<HoverAttempt> attempts,
         System.Collections.Generic.HashSet<string> dedupe,
         string label,
-        int absolutePosition)
+        int absolutePosition
+    )
     {
         if (snapshot.Length == 0)
         {
@@ -337,7 +410,8 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
     {
         try
         {
-            var line = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}Z] {message}{Environment.NewLine}";
+            var line =
+                $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}Z] {message}{Environment.NewLine}";
             File.AppendAllText(logPath, line);
         }
         catch
@@ -346,4 +420,3 @@ internal sealed class LinqHoverQuickInfoSource(ITextBuffer textBuffer) : IAsyncQ
         }
     }
 }
-
