@@ -1,5 +1,6 @@
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
+using EFQueryLens.Lsp.Engine;
 using EFQueryLens.Lsp.Handlers;
 using EFQueryLens.Lsp.Services;
 using StreamJsonRpc;
@@ -8,14 +9,14 @@ namespace EFQueryLens.Lsp.Hosting;
 
 internal static class MicrosoftLspHost
 {
-    public static async Task RunAsync(IQueryLensEngine engine)
+    public static async Task RunAsync(Func<CancellationToken, Task<IQueryLensEngine>> engineFactory)
     {
         var debugEnabled = LspEnvironment.ReadBool("QUERYLENS_DEBUG", fallback: false);
         if (debugEnabled)
             Console.Error.WriteLine("[QL-LSP] host-run debug=true");
 
         var statusTracker = new QueryLensStatusTracker();
-        statusTracker.SetDaemonReady(ready: true);
+        await using var engine = new LazyQueryLensEngine(engineFactory, statusTracker, debugEnabled);
 
         var documentManager = new DocumentManager();
         var hoverPreviewService = new HoverPreviewService(engine, debugEnabled);

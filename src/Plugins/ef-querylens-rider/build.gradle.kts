@@ -1,3 +1,7 @@
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
+
 plugins {
     kotlin("jvm") version "2.4.0"
     id("org.jetbrains.intellij.platform") version "2.16.0"
@@ -9,6 +13,9 @@ version = providers.gradleProperty("pluginVersion").get()
 
 kotlin {
     jvmToolchain(21)
+    compilerOptions {
+        jvmDefault.set(JvmDefaultMode.NO_COMPATIBILITY)
+    }
 }
 
 repositories {
@@ -194,8 +201,17 @@ intellijPlatform {
     pluginVerification {
         // Rider has no installer artifacts; verify against the same non-installer
         // dependency declared in dependencies { intellijPlatform { rider { ... } } }.
+        failureLevel =
+            listOf(
+                VerifyPluginTask.FailureLevel.INVALID_PLUGIN,
+                VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
+                VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
+                VerifyPluginTask.FailureLevel.EXPERIMENTAL_API_USAGES,
+                VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES,
+            )
+
         ides {
-            current()
+            create(IntelliJPlatformType.Rider, providers.gradleProperty("platformVersion").get())
         }
     }
 
@@ -214,6 +230,7 @@ intellijPlatform {
 
 tasks {
     publishPlugin {
+        dependsOn(bundleQueryLensRuntime)
         channels = listOf(providers.gradleProperty("pluginChannel").get())
         // Token is supplied via JETBRAINS_PUBLISH_TOKEN env var in CI.
         // For local publishing: set JETBRAINS_PUBLISH_TOKEN in your shell.
@@ -227,6 +244,10 @@ tasks {
         from(bundledRuntimeOutputDir) {
             into(pluginRootInArchive)
         }
+    }
+
+    buildPlugin {
+        dependsOn(bundleQueryLensRuntime)
     }
 
     runIde {

@@ -6,6 +6,12 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+- Rider plugin: minimum supported Rider version is now 2026.1 (build `261+`).
+
+### Removed
+- Rider plugin: removed support for Rider 2025.3 and earlier.
+
 ## [1.0.23] - 2026-06-16
 
 ### Changed

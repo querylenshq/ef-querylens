@@ -27,6 +27,7 @@ import { registerQueryLensCommands } from './commands/registry';
 import { createSqlActionHandlers } from './commands/sqlActions';
 import { createServerLogChannel } from './logging/serverLogChannel';
 import { cancelSqlReadyWatch, watchSqlReadyIfQueued } from './notifications/sqlReadyHoverWatcher';
+import { checkRequiredDotnetRuntimes, resolveDotnetPath } from './runtime/dotnet';
 import { createQueryLensStatusBar, runStartupWarmup } from './status/statusBar';
 import { QueryLensSettings } from './types';
 
@@ -66,6 +67,35 @@ export function activate(context: ExtensionContext) {
     logOutput(`activate workspace=${workspaceRoot}`);
     logOutput(`[EFQueryLens] runtime source=packaged lsp=${packagedLspDir} daemon=${packagedDaemonDir}`);
 
+    const dotnetPath = resolveDotnetPath(currentSettings, logOutput);
+    if (!dotnetPath) {
+        const message =
+            'EF QueryLens could not find the dotnet executable. Install .NET 10, launch VS Code from a shell where dotnet is on PATH, or set efquerylens.dotnetPath.';
+        logOutput(`[EFQueryLens] ${message}`);
+        void window.showErrorMessage(message, 'Open Output').then(selection => {
+            if (selection === 'Open Output') {
+                queryLensOutputChannel?.show();
+            }
+        });
+        return;
+    }
+
+    const runtimeCheck = checkRequiredDotnetRuntimes(dotnetPath);
+    if (!runtimeCheck.ok) {
+        const message =
+            `EF QueryLens requires .NET 10 Runtime and ASP.NET Core Runtime. ${runtimeCheck.message ?? ''}`.trim();
+        logOutput(`[EFQueryLens] ${message}`);
+        if (runtimeCheck.runtimes) {
+            logOutput(`[EFQueryLens] installed runtimes:\n${runtimeCheck.runtimes.trim()}`);
+        }
+        void window.showErrorMessage(message, 'Open Output').then(selection => {
+            if (selection === 'Open Output') {
+                queryLensOutputChannel?.show();
+            }
+        });
+        return;
+    }
+
     const serverEnv: NodeJS.ProcessEnv = {
         ...process.env,
         QUERYLENS_CLIENT: 'vscode',
@@ -101,7 +131,7 @@ export function activate(context: ExtensionContext) {
     }
 
     const serverOptions: ServerOptions = {
-        command: 'dotnet',
+        command: dotnetPath,
         args: [serverPath],
         options: {
             cwd: workspaceRoot,
@@ -318,7 +348,8 @@ function extractHoverMarkdown(hover: Hover): string {
 
 function requiresLanguageServerRestart(previous: QueryLensSettings, next: QueryLensSettings): boolean {
     return previous.codeLensDebounceMs !== next.codeLensDebounceMs
-        || previous.codeLensUseModelFilter !== next.codeLensUseModelFilter;
+        || previous.codeLensUseModelFilter !== next.codeLensUseModelFilter
+        || previous.dotnetPath !== next.dotnetPath;
 }
 
 function buildLspInitializationOptions(settings: QueryLensSettings): unknown {

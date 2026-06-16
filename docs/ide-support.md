@@ -141,6 +141,34 @@ If SQL or factory state looks wrong after a **terminal rebuild** (without saving
 2. With `QUERYLENS_DEBUG=1`, check logs for `factory-miss` lines (`source=`, `shadow=`, `fingerprint=`).
 3. Escape hatch: delete `%LocalAppData%\EFQueryLens\shadow` and restart the daemon.
 
+### Troubleshooting VS Code on Ubuntu
+
+If VS Code shows `Server initialization failed`, `Pending response rejected since connection got disposed`, or `Server process exited with code 134`, the QueryLens LSP process could not start the bundled backend.
+
+Verify the runtime first:
+
+```bash
+which dotnet
+dotnet --list-runtimes | grep -E 'Microsoft\.(NETCore|AspNetCore)\.App 10'
+```
+
+Both `Microsoft.NETCore.App 10.x` and `Microsoft.AspNetCore.App 10.x` must be installed. If `dotnet` works in a terminal but not in GUI-launched VS Code, set the extension setting:
+
+```json
+{
+  "efquerylens.dotnetPath": "/usr/share/dotnet/dotnet"
+}
+```
+
+For deeper diagnostics, run the packaged daemon and LSP directly:
+
+```bash
+EXT="$HOME/.vscode/extensions/efquerylens.ef-querylens-vscode-1.0.22-linux-x64"
+QUERYLENS_DEBUG=1 dotnet "$EXT/daemon/EFQueryLens.Daemon.dll" --workspace "$HOME/Desktop/ef-querylens"
+QUERYLENS_DEBUG=1 QUERYLENS_DAEMON_DLL="$EXT/daemon/EFQueryLens.Daemon.dll" QUERYLENS_WORKSPACE="$HOME/Desktop/ef-querylens" dotnet "$EXT/server/EFQueryLens.Lsp.dll"
+ls -lt /tmp/querylens-crash-*.log 2>/dev/null | head -3
+```
+
 ### IDE-specific settings
 
 | IDE | Settings location |

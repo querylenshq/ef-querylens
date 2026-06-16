@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Parsing;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
@@ -20,6 +21,8 @@ internal sealed partial class LanguageServerHandler
         }
 
         var chains = LspSyntaxHelper.FindAllLinqChains(sourceText);
+        var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
+        var hasQueryLensFactorySource = AssemblyResolver.HostProjectHasQueryLensFactorySource(filePath);
 
         var result = new List<CodeLens>();
         foreach (var chain in chains)
@@ -38,6 +41,21 @@ internal sealed partial class LanguageServerHandler
                     Position = new Position(chain.Line, chain.Character)
                 }
             };
+
+            if (!hasQueryLensFactorySource)
+            {
+                result.Add(new CodeLens
+                {
+                    Range = range,
+                    Command = new Command
+                    {
+                        Title = "Set up QueryLens",
+                        CommandIdentifier = "efquerylens.setup",
+                        Arguments = arg
+                    }
+                });
+                continue;
+            }
 
             // 1. SQL Preview — shows popup inline
             result.Add(new CodeLens

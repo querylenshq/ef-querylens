@@ -19,6 +19,7 @@ internal sealed class QueryLensStatusTracker
     private int _inflightPrewarms;
     private bool _daemonReady;
     private bool _daemonConfigured;
+    private string? _daemonUnavailableMessage;
     private bool _assemblyWarmed;
     private string? _assemblyPath;
     private readonly ConcurrentDictionary<string, bool> _assemblyWarmState = new(
@@ -38,10 +39,25 @@ internal sealed class QueryLensStatusTracker
         {
             _daemonConfigured = true;
             _daemonReady = ready;
+            _daemonUnavailableMessage = ready ? null : _daemonUnavailableMessage;
             if (!string.IsNullOrWhiteSpace(assemblyPath))
             {
                 _assemblyPath = assemblyPath;
             }
+        }
+
+        PublishIfChanged();
+    }
+
+    public void SetDaemonUnavailable(string message)
+    {
+        lock (_gate)
+        {
+            _daemonConfigured = true;
+            _daemonReady = false;
+            _daemonUnavailableMessage = string.IsNullOrWhiteSpace(message)
+                ? "QueryLens engine is unavailable."
+                : message;
         }
 
         PublishIfChanged();
@@ -191,7 +207,7 @@ internal sealed class QueryLensStatusTracker
         {
             return new QueryLensStatusSnapshot(
                 QueryLensHostState.Unavailable,
-                "QueryLens engine is unavailable.",
+                _daemonUnavailableMessage ?? "QueryLens engine is unavailable.",
                 _assemblyPath,
                 _inflightComputes,
                 _assemblyWarmed

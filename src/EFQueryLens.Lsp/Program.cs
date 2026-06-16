@@ -38,11 +38,7 @@ try
         };
     }
 
-    // 1. Initialize the engine
-    await using var engine = await LspProgramHelpers.CreateEngineAsync(debugEnabled);
-
-    // 2. Run the Microsoft protocol-based host.
-    await MicrosoftLspHost.RunAsync(engine);
+    await MicrosoftLspHost.RunAsync(_ => LspProgramHelpers.CreateEngineAsync(debugEnabled));
 }
 catch (Exception ex)
 {
@@ -51,6 +47,7 @@ catch (Exception ex)
         System.IO.Path.GetTempPath(),
         $"querylens-crash-{timestamp}-pid{Environment.ProcessId}.log");
     System.IO.File.WriteAllText(path, ex.ToString());
+    Console.Error.WriteLine($"[QL-LSP] fatal crashLog={path} type={ex.GetType().Name} message={ex.Message}");
     throw;
 }
 finally

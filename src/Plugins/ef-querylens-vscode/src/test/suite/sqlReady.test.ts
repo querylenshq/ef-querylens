@@ -183,5 +183,6 @@ function createSettings(): QueryLensSettings {
         hoverWaitWhenWarmMs: 0,
         hoverProgressNotify: false,
         notifyWhenSqlReady: true,
+        dotnetPath: '',
     };
 }

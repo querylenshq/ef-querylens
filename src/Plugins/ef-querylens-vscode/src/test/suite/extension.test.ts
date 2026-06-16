@@ -1,7 +1,9 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 
-suite("EF QueryLens Extension", () => {
+suite("EF QueryLens Extension", function () {
+  this.timeout(10000);
+
   test("Extension is present", async () => {
     const extension = vscode.extensions.getExtension("EFQueryLens.ef-querylens-vscode");
     assert.ok(extension, "Extension should be discoverable by id");

@@ -32,6 +32,7 @@ export function readSettings(): QueryLensSettings {
     );
     const hoverProgressNotify = config.get<boolean>('hoverProgressNotify', false);
     const notifyWhenSqlReady = config.get<boolean>('notifyWhenSqlReady', true);
+    const dotnetPath = config.get<string>('dotnetPath', '').trim();
 
     return {
         maxCodeLensPerDocument,
@@ -44,6 +45,7 @@ export function readSettings(): QueryLensSettings {
         hoverWaitWhenWarmMs,
         hoverProgressNotify,
         notifyWhenSqlReady,
+        dotnetPath,
     };
 }
 

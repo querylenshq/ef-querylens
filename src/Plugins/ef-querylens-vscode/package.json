@@ -136,6 +136,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show a toast with an Open SQL action when a background hover translation finishes."
+        },
+        "efquerylens.dotnetPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional full path to the dotnet executable. Use this when GUI-launched VS Code cannot find dotnet on PATH."
         }
       }
     }

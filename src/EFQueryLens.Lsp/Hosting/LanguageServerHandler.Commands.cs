@@ -351,6 +351,13 @@ internal sealed partial class LanguageServerHandler
                 return new JObject { ["success"] = false, ["message"] = "Missing setup request payload." };
             }
 
+            if (IsRiderClient() && JsonRpc is not null)
+            {
+                _ = JsonRpc.NotifyAsync("efquerylens/runSetup", CreateRiderSetupPayload(req));
+
+                return new JObject { ["success"] = true, ["message"] = "Setup request sent to Rider." };
+            }
+
             return await SetupAsync(req, ct);
         }
 
@@ -360,4 +367,18 @@ internal sealed partial class LanguageServerHandler
             ["message"] = $"Unsupported command '{command}'.",
         };
     }
+
+    private static bool IsRiderClient()
+        => string.Equals(
+            Environment.GetEnvironmentVariable("QUERYLENS_CLIENT"),
+            "rider",
+            StringComparison.OrdinalIgnoreCase);
+
+    internal static JObject CreateRiderSetupPayload(TextDocumentPositionParams request)
+        => new()
+        {
+            ["fileUri"] = request.TextDocument.Uri.ToString(),
+            ["line"] = request.Position.Line,
+            ["character"] = request.Position.Character,
+        };
 }

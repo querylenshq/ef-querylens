@@ -3,8 +3,8 @@ package efquerylens
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.AnActionResult
 import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.ex.AnActionListener
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
@@ -38,14 +38,13 @@ internal object EFQueryLensQuickDocSqlReadyHook {
                         }
                     }
 
-                    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
                     override fun afterActionPerformed(
                         action: AnAction,
-                        dataContext: DataContext,
                         event: AnActionEvent,
+                        result: AnActionResult,
                     ) {
                         if (isQuickDocumentationAction(action)) {
-                            CommonDataKeys.EDITOR.getData(dataContext)?.let { editor ->
+                            event.getData(CommonDataKeys.EDITOR)?.let { editor ->
                                 scheduleProbeAtCaret(project, editor, delayMs = 0)
                                 scheduleProbeAtCaret(project, editor, delayMs = 200)
                             }

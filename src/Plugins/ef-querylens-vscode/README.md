@@ -42,6 +42,33 @@ EF QueryLens for VS Code connects to the QueryLens language server and shows gen
 | `efquerylens.sql.formatOnShow` | boolean | `true` | Format SQL before showing or copying. |
 | `efquerylens.sql.dialect` | string | `auto` | SQL formatter dialect. |
 | `efquerylens.debug.enableVerboseLogs` | boolean | `false` | Enable verbose client/server logs. |
+| `efquerylens.dotnetPath` | string | `""` | Optional full path to `dotnet` when VS Code cannot find it on PATH. |
+
+## Ubuntu Troubleshooting
+
+If VS Code reports `Server initialization failed` or `Server process exited with code 134`, check the runtime from the same environment VS Code uses:
+
+```bash
+which dotnet
+dotnet --list-runtimes | grep -E 'Microsoft\.(NETCore|AspNetCore)\.App 10'
+```
+
+EF QueryLens requires both `Microsoft.NETCore.App 10.x` and `Microsoft.AspNetCore.App 10.x`. On Linux desktop sessions, GUI-launched VS Code may not inherit the shell PATH where `dotnet` works. Set `efquerylens.dotnetPath` to the full executable path, for example:
+
+```json
+{
+  "efquerylens.dotnetPath": "/usr/share/dotnet/dotnet"
+}
+```
+
+You can also run the packaged backend directly to capture startup errors:
+
+```bash
+EXT="$HOME/.vscode/extensions/efquerylens.ef-querylens-vscode-1.0.22-linux-x64"
+QUERYLENS_DEBUG=1 dotnet "$EXT/daemon/EFQueryLens.Daemon.dll" --workspace "$HOME/Desktop/ef-querylens"
+QUERYLENS_DEBUG=1 QUERYLENS_DAEMON_DLL="$EXT/daemon/EFQueryLens.Daemon.dll" QUERYLENS_WORKSPACE="$HOME/Desktop/ef-querylens" dotnet "$EXT/server/EFQueryLens.Lsp.dll"
+ls -lt /tmp/querylens-crash-*.log 2>/dev/null | head -3
+```
 
 ## Build From Source
 

@@ -35,4 +35,5 @@ export type QueryLensSettings = {
     hoverWaitWhenWarmMs: number;
     hoverProgressNotify: boolean;
     notifyWhenSqlReady: boolean;
+    dotnetPath: string;
 };

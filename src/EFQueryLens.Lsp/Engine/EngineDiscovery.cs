@@ -263,6 +263,7 @@ internal static partial class EngineDiscovery
 
         if (newPort is null)
         {
+            TryDeletePortFile(portFile, logger);
             throw new InvalidOperationException(
                 $"Failed to start QueryLens engine for workspace '{workspacePath}'.");
         }
@@ -279,6 +280,22 @@ internal static partial class EngineDiscovery
         }
 
         return newPort.Value;
+    }
+
+    private static void TryDeletePortFile(string portFile, Action<string>? logger)
+    {
+        try
+        {
+            if (File.Exists(portFile))
+            {
+                File.Delete(portFile);
+                logger?.Invoke($"engine-discovery removed-stale-port-file path={portFile}");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.Invoke($"engine-discovery port-file-delete-failed path={portFile} type={ex.GetType().Name} message={ex.Message}");
+        }
     }
 
     // --- Private helpers ---

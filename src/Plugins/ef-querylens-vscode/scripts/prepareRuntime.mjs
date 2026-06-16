@@ -37,6 +37,7 @@ const daemonDestination = daemonOutputRoot;
 
 copyDirectory(lspSource, lspDestination);
 copyDirectory(daemonSource, daemonDestination);
+ensureUnixLauncherExecutable(runtimeIdentifier, daemonDestination);
 
 console.log(`[EFQueryLens] bundled runtime prepared:`);
 console.log(`  lsp:    ${lspSource} -> ${lspDestination}`);
@@ -160,6 +161,19 @@ function copyDirectory(sourceDir, destinationDir) {
     `[EFQueryLens] Could not fully replace ${destinationDir} because files are locked. Falling back to in-place copy.`
   );
   copyDirectoryBestEffort(sourceDir, destinationDir);
+}
+
+function ensureUnixLauncherExecutable(runtime, daemonDir) {
+  if (!runtime || (!runtime.startsWith('linux-') && !runtime.startsWith('osx-'))) {
+    return;
+  }
+
+  const launcher = path.join(daemonDir, 'EFQueryLens.Daemon');
+  if (!fs.existsSync(launcher)) {
+    return;
+  }
+
+  fs.chmodSync(launcher, 0o755);
 }
 
 function removeDirectoryWithRetry(directoryPath) {

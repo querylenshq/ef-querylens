@@ -1,34 +1,34 @@
 package efquerylens
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.CustomStatusBarWidget
 import com.intellij.openapi.wm.StatusBar
 import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.WindowManager
-import com.intellij.util.Consumer
+import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.JComponent
+import javax.swing.JLabel
 
 internal class EFQueryLensStatusBarWidget(
     private val project: Project,
-) : StatusBarWidget {
+) : CustomStatusBarWidget {
     private val refreshListener = Runnable { refreshWidget() }
-
-    private val presentation =
-        object : StatusBarWidget.TextPresentation {
-            override fun getText(): String = EFQueryLensHostStatus.displayText
-
-            override fun getTooltipText(): String = EFQueryLensHostStatus.tooltipText
-
-            override fun getAlignment(): Float = 0f
-
-            override fun getClickConsumer(): Consumer<MouseEvent> =
-                Consumer {
-                    ToolWindowManager
-                        .getInstance(project)
-                        .getToolWindow(EFQueryLensLogToolWindowFactory.TOOL_WINDOW_ID)
-                        ?.activate(null)
-                }
+    private val component =
+        lazy {
+            JLabel(EFQueryLensHostStatus.displayText).apply {
+                toolTipText = EFQueryLensHostStatus.tooltipText
+                addMouseListener(
+                    object : MouseAdapter() {
+                        override fun mouseClicked(event: MouseEvent) {
+                            openToolWindow()
+                        }
+                    },
+                )
+            }
         }
 
     override fun ID(): String = WIDGET_ID
@@ -43,14 +43,32 @@ internal class EFQueryLensStatusBarWidget(
         EFQueryLensHostStatus.removeListener(refreshListener)
     }
 
-    override fun getPresentation(): StatusBarWidget.WidgetPresentation = presentation
+    override fun getComponent(): JComponent = component.value
 
     private fun refreshWidget() {
         if (project.isDisposed) {
             return
         }
 
-        WindowManager.getInstance().getStatusBar(project)?.updateWidget(WIDGET_ID)
+        ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) {
+                return@invokeLater
+            }
+
+            if (component.isInitialized()) {
+                component.value.text = EFQueryLensHostStatus.displayText
+                component.value.toolTipText = EFQueryLensHostStatus.tooltipText
+            }
+
+            WindowManager.getInstance().getStatusBar(project)?.updateWidget(WIDGET_ID)
+        }
+    }
+
+    private fun openToolWindow() {
+        ToolWindowManager
+            .getInstance(project)
+            .getToolWindow(EFQueryLensLogToolWindowFactory.TOOL_WINDOW_ID)
+            ?.activate(null)
     }
 
     companion object {

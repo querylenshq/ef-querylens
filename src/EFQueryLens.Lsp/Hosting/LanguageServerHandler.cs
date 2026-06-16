@@ -149,7 +149,8 @@ internal sealed partial class LanguageServerHandler
                         "efquerylens.showsqlpopup",
                         "efquerylens.opensqleditor",
                         "efquerylens.copysql",
-                        "efquerylens.reanalyze")
+                        "efquerylens.reanalyze",
+                        "efquerylens.setup")
                 },
             },
         };

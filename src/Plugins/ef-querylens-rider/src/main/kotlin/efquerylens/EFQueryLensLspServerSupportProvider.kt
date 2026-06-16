@@ -4,6 +4,7 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
@@ -105,9 +106,13 @@ private class EFQueryLensServerDescriptor(
                 .applyQueryLensEnvironment(workspaceRoot, lspLogFilePath)
         }
 
-        val lspDll = resolvePackagedLspDll()
+        val runtimeResolution = resolvePackagedLspRuntime()
+        val lspDll = runtimeResolution.lspDll
         if (lspDll == null) {
-            error("Cannot locate EFQueryLens packaged runtime (server/EFQueryLens.Lsp.dll). Set $LSP_DLL_OVERRIDE_ENV_VAR to override.")
+            error(
+                "Cannot locate EFQueryLens packaged runtime (server/EFQueryLens.Lsp.dll). " +
+                    "Set $LSP_DLL_OVERRIDE_ENV_VAR to override. ${runtimeResolution.diagnostics}",
+            )
         }
 
         logInfo("[EFQueryLens] Starting EF QueryLens LSP from packaged runtime '${lspDll.pathString}'")
@@ -135,9 +140,13 @@ private class EFQueryLensServerDescriptor(
         }
     }
 
-    private fun resolvePackagedLspDll(): Path? {
-        val pluginRoot = resolvePluginRoot() ?: return null
-        val serverDirs = listOfNotNull(pluginRoot.resolve("server"), pluginRoot.parent?.resolve("server")).distinct()
+    private data class PackagedRuntimeResolution(
+        val lspDll: Path?,
+        val diagnostics: String,
+    )
+
+    private fun resolvePackagedLspRuntime(): PackagedRuntimeResolution {
+        val serverDirs = resolvePackagedRuntimeRoots().map { it.resolve("server") }.distinct()
         val candidates =
             serverDirs.flatMap { serverDir ->
                 listOf(
@@ -145,30 +154,105 @@ private class EFQueryLensServerDescriptor(
                     serverDir.resolve("publish").resolve("EFQueryLens.Lsp.dll"),
                 )
             }
-        return candidates.firstOrNull { it.exists() && it.isRegularFile() }
+        val lspDll = candidates.firstOrNull { it.exists() && it.isRegularFile() }
+        return PackagedRuntimeResolution(
+            lspDll,
+            buildString {
+                append("codeSource='")
+                append(resolveCodeSourcePath()?.pathString ?: "<unavailable>")
+                append("'; pluginRoot='")
+                append(resolvePluginRoot()?.pathString ?: "<unavailable>")
+                append("'; pluginsDir='")
+                append(resolvePluginsDirPath()?.pathString ?: "<unavailable>")
+                append("'; runtimeRoots=[")
+                append(resolvePackagedRuntimeRoots().joinToString { "'${it.pathString}'" })
+                append("]; checked=[")
+                append(candidates.joinToString { "'${it.pathString}' exists=${it.exists()} file=${it.isRegularFile()}" })
+                append("]")
+            },
+        )
     }
 
-    private fun resolvePluginRoot(): Path? =
+    private fun resolveCodeSourcePath(): Path? =
         try {
             val location =
                 EFQueryLensLspServerSupportProvider::class.java.protectionDomain.codeSource
                     ?.location ?: return null
-            val codeSourcePath = Path.of(location.toURI()).toAbsolutePath().normalize()
-            if (codeSourcePath.isRegularFile()) {
-                val parent = codeSourcePath.parent ?: return null
-                if (parent.name.equals("lib", ignoreCase = true)) parent.parent else parent
-            } else {
-                var current: Path? = codeSourcePath
-                while (current != null) {
-                    if (current.resolve("server").isDirectory()) return current
-                    if (current.name.equals("lib", ignoreCase = true)) return current.parent
-                    current = current.parent
-                }
-                null
-            }
+            Path.of(location.toURI()).toAbsolutePath().normalize()
         } catch (e: Exception) {
             null
         }
+
+    private fun resolvePluginRoot(): Path? =
+        try {
+            val codeSourcePath = resolveCodeSourcePath() ?: return null
+            val start = if (codeSourcePath.isRegularFile()) codeSourcePath.parent else codeSourcePath
+            var current: Path? = start
+            while (current != null) {
+                if (current.resolve("server").isDirectory() || current.resolve("daemon").isDirectory()) {
+                    return current
+                }
+                if (current.name.equals("lib", ignoreCase = true)) {
+                    return current.parent
+                }
+                current = current.parent
+            }
+            start
+        } catch (e: Exception) {
+            null
+        }
+
+    private fun resolvePluginsDirPath(): Path? =
+        try {
+            PathManager.getPluginsDir().toAbsolutePath().normalize()
+        } catch (e: Exception) {
+            null
+        }
+
+    private fun resolvePackagedRuntimeRoots(): List<Path> {
+        val roots = linkedSetOf<Path>()
+
+        resolvePluginRoot()?.let { pluginRoot ->
+            roots.add(pluginRoot)
+            pluginRoot.parent?.let { roots.add(it) }
+
+            runCatching {
+                Files.list(pluginRoot).use { children ->
+                    children
+                        .filter { it.isDirectory() }
+                        .filter { it.resolve("server").isDirectory() || it.resolve("daemon").isDirectory() }
+                        .forEach { roots.add(it) }
+                }
+            }
+        }
+
+        roots.addAll(resolveRuntimeRootsFromPluginsDir())
+
+        return roots.toList()
+    }
+
+    private fun resolveRuntimeRootsFromPluginsDir(): List<Path> {
+        val pluginsDir = resolvePluginsDirPath() ?: return emptyList()
+        if (!pluginsDir.isDirectory()) {
+            return emptyList()
+        }
+
+        val roots = linkedSetOf<Path>()
+        runCatching {
+            Files.walk(pluginsDir, 5).use { paths ->
+                paths
+                    .filter { it.name == "EFQueryLens.Lsp.dll" }
+                    .filter { it.parent?.name.equals("server", ignoreCase = true) }
+                    .map { it.parent.parent }
+                    .filter { it != null }
+                    .forEach { roots.add(it) }
+            }
+        }.onFailure { error ->
+            logWarn("[EFQueryLens] Could not scan plugins directory for packaged runtime '$pluginsDir'", error)
+        }
+
+        return roots.toList()
+    }
 
     private fun GeneralCommandLine.applyQueryLensEnvironment(
         workspaceRoot: Path,
@@ -235,11 +319,10 @@ private class EFQueryLensServerDescriptor(
     }
 
     private fun resolvePackagedDaemonExecutable(): Path? {
-        val pluginRoot = resolvePluginRoot() ?: return null
         val rid = currentRid()
         val isWindows = rid.startsWith("win")
         val exeName = if (isWindows) "EFQueryLens.Daemon.exe" else "EFQueryLens.Daemon"
-        val daemonDirs = listOfNotNull(pluginRoot.resolve("daemon"), pluginRoot.parent?.resolve("daemon")).distinct()
+        val daemonDirs = resolvePackagedRuntimeRoots().map { it.resolve("daemon") }.distinct()
         // Prefer the platform-specific AppHost inside daemon/<rid>/; fall back to root daemon dir.
         val candidates =
             daemonDirs.flatMap { daemonDir ->
@@ -252,9 +335,8 @@ private class EFQueryLensServerDescriptor(
     }
 
     private fun resolvePackagedDaemonAssembly(): Path? {
-        val pluginRoot = resolvePluginRoot() ?: return null
         val rid = currentRid()
-        val daemonDirs = listOfNotNull(pluginRoot.resolve("daemon"), pluginRoot.parent?.resolve("daemon")).distinct()
+        val daemonDirs = resolvePackagedRuntimeRoots().map { it.resolve("daemon") }.distinct()
         // Prefer the RID-specific directory so EngineDiscovery also finds the adjacent AppHost.
         // Fall back to the root daemon dir (framework-dependent DLL without AppHost).
         val candidates =
@@ -334,6 +416,17 @@ private class EFQueryLensClient(
         }
 
         opener.showSqlPopup(project, preview)
+    }
+
+    @JsonNotification("efquerylens/runSetup")
+    @Suppress("UNCHECKED_CAST")
+    fun runSetup(payload: Any?) {
+        val root = payload as? Map<String, Any?> ?: return
+        val fileUri = root["fileUri"] as? String ?: return
+        val line = (root["line"] as? Number)?.toInt() ?: 0
+        val character = (root["character"] as? Number)?.toInt() ?: 0
+
+        EFQueryLensSetupService.run(project, fileUri, line, character)
     }
 
     @JsonNotification("efquerylens/statusChanged")

@@ -46,7 +46,7 @@ To wait for SQL in Quick Doc on first hover, increase **Hover wait when warm**. 
 
 ## Requirements
 
-- JetBrains Rider (2025.2+)
+- JetBrains Rider 2026.1+
 - .NET 10 Runtime + ASP.NET Core Runtime (required to run the bundled QueryLens backend)
 - .NET 10 SDK (only for local development/build)
 - EF Core project

@@ -235,10 +235,12 @@ class EFQueryLensUrlOpener : UrlOpener() {
 
         val status = (hover["Status"] as? Number)?.toInt() ?: 0
         val success = hover["Success"] as? Boolean ?: false
+        val mode = (hover["Mode"] as? String)?.trim()?.takeIf { it.isNotBlank() }
 
         val statusMessage =
             (hover["StatusMessage"] as? String)?.takeIf { it.isNotBlank() }
                 ?: (hover["ErrorMessage"] as? String)?.takeIf { it.isNotBlank() }
+        val dialogStatusMessage = statusMessage?.let(::toDialogMessage)
 
         val statements =
             ((hover["Statements"] as? List<*>) ?: emptyList<Any?>())
@@ -264,7 +266,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
                 subtitle = "$fallbackFileUri:${fallbackLine + 1}",
                 statusCode = status,
                 statusText = toStatusText(status),
-                statusMessage = statusMessage ?: "No SQL preview available at this location.",
+                statusMessage = dialogStatusMessage ?: "No SQL preview available at this location.",
                 avgTranslationMs = 0.0,
                 sqlText = "",
                 actionSqlText = "",
@@ -273,6 +275,20 @@ class EFQueryLensUrlOpener : UrlOpener() {
         }
 
         if (status == 0 && sqlText.isNullOrBlank()) {
+            if (mode.equals("factory-prompt", ignoreCase = true) || dialogStatusMessage != null) {
+                return StructuredSqlPreview(
+                    title = "QueryLens · setup required",
+                    subtitle = "$fallbackFileUri:${fallbackLine + 1}",
+                    statusCode = status,
+                    statusText = toStatusText(status),
+                    statusMessage = dialogStatusMessage ?: "Set up QueryLens and rebuild the project to enable SQL preview.",
+                    avgTranslationMs = 0.0,
+                    sqlText = "",
+                    actionSqlText = "",
+                    warnings = warnings,
+                )
+            }
+
             return null
         }
 
@@ -312,13 +328,22 @@ class EFQueryLensUrlOpener : UrlOpener() {
             subtitle = subtitle,
             statusCode = status,
             statusText = statusText,
-            statusMessage = statusMessage,
+            statusMessage = dialogStatusMessage,
             avgTranslationMs = avgTranslationMs,
             sqlText = sqlText ?: "",
             actionSqlText = actionSqlText ?: "",
             warnings = warnings,
         )
     }
+
+    private fun toDialogMessage(message: String): String =
+        message
+            .replace(Regex("""\[(.+?)]\(.+?\)"""), "$1")
+            .replace(Regex("""[*_`#>]"""), "")
+            .lines()
+            .map { it.trim().removePrefix("-").trim() }
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
 
     private fun renderStatements(statements: List<StructuredStatement>): String {
         if (statements.isEmpty()) {
