@@ -22,7 +22,6 @@ import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerManager
-import org.eclipse.lsp4j.ExecuteCommandParams
 import java.awt.Dimension
 import java.awt.datatransfer.StringSelection
 import java.io.File
@@ -212,31 +211,17 @@ class EFQueryLensUrlOpener : UrlOpener() {
         line: Int,
         character: Int,
     ): StructuredSqlPreview? {
-        val server =
-            LspServerManager
-                .getInstance(project)
-                .getServersForProvider(EFQueryLensLspServerSupportProvider::class.java)
-                .firstOrNull() ?: return null
+        val normalizedFileUri = EFQueryLensHoverProbe.normalizeFileUri(fileUri)
+        val hover =
+            EFQueryLensLspRequests.requestStructuredHover(
+                project,
+                normalizedFileUri,
+                line,
+                character,
+                startSqlReadyWatch = true,
+            ) ?: return null
 
-        val payload =
-            mapOf(
-                "textDocument" to mapOf("uri" to fileUri),
-                "position" to mapOf("line" to line, "character" to character),
-            )
-
-        val response =
-            runCatching {
-                server.sendRequestSync(10_000) {
-                    it.workspaceService.executeCommand(
-                        ExecuteCommandParams(
-                            "efquerylens.preview.structuredHover",
-                            listOf(payload),
-                        ),
-                    )
-                }
-            }.getOrNull() ?: return null
-
-        return extractStructuredPreview(response, fileUri, line)
+        return extractStructuredPreview(mapOf("hover" to hover), normalizedFileUri, line)
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -359,7 +344,7 @@ class EFQueryLensUrlOpener : UrlOpener() {
             else -> "READY"
         }
 
-    private fun fallbackStatusMessage(statusCode: Int): String =
+    internal fun fallbackStatusMessage(statusCode: Int): String =
         when (statusCode) {
             3 -> "EF QueryLens — engine unavailable. Try Restart QueryLens."
             2 -> "EF QueryLens — starting engine…"

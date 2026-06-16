@@ -16,13 +16,17 @@ internal sealed class SqlReadyHoverWatcherCore
     private readonly Action<string> log;
     private readonly object sync = new();
     private readonly HashSet<string> activeWatches = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CancellationTokenSource> watchCancellation = new(
+        StringComparer.OrdinalIgnoreCase
+    );
 
     internal SqlReadyHoverWatcherCore(
         ISqlReadyHoverPoller poller,
         ISqlReadyNotificationSink sink,
         Func<int> getNotificationWaitBudgetMs,
         Func<TimeSpan, CancellationToken, Task> delayAsync,
-        Action<string> log)
+        Action<string> log
+    )
     {
         this.poller = poller;
         this.sink = sink;
@@ -42,7 +46,43 @@ internal sealed class SqlReadyHoverWatcherCore
         }
     }
 
-    internal void Watch(string filePath, int line, int character, CancellationToken cancellationToken = default)
+    internal void Cancel(string filePath, int line, int character)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return;
+        }
+
+        string fileUri;
+        try
+        {
+            fileUri = new Uri(filePath).AbsoluteUri;
+        }
+        catch
+        {
+            return;
+        }
+
+        var key = SqlReadyWatchKey.Build(fileUri, line, character);
+        CancellationTokenSource? cts;
+        lock (sync)
+        {
+            watchCancellation.TryGetValue(key, out cts);
+        }
+
+        if (cts is not null)
+        {
+            log($"sql-ready-watch-cancelled key={key} reason=inline-ready");
+            cts.Cancel();
+        }
+    }
+
+    internal void Watch(
+        string filePath,
+        int line,
+        int character,
+        CancellationToken cancellationToken = default
+    )
     {
         if (string.IsNullOrWhiteSpace(filePath))
         {
@@ -70,10 +110,21 @@ internal sealed class SqlReadyHoverWatcherCore
         }
 
         log($"sql-ready-watch-started key={key}");
-        _ = RunWatchAsync(filePath, line, character, key, cancellationToken);
+        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (sync)
+        {
+            watchCancellation[key] = linkedCts;
+        }
+
+        _ = RunWatchAsync(filePath, line, character, key, linkedCts.Token);
     }
 
-    internal Task WatchForTestsAsync(string filePath, int line, int character, CancellationToken cancellationToken = default)
+    internal Task WatchForTestsAsync(
+        string filePath,
+        int line,
+        int character,
+        CancellationToken cancellationToken = default
+    )
     {
         if (string.IsNullOrWhiteSpace(filePath))
         {
@@ -107,13 +158,14 @@ internal sealed class SqlReadyHoverWatcherCore
         int line,
         int character,
         string key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
             var waitBudgetMs = getNotificationWaitBudgetMs();
             var deadlineUtc = DateTime.UtcNow.AddMilliseconds(waitBudgetMs);
-            var sawInQueue = false;
+            var sawInQueue = true;
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -130,19 +182,24 @@ internal sealed class SqlReadyHoverWatcherCore
                 }
                 else if (QueryLensHostHoverPollResult.IsTerminal(response.Status))
                 {
-                    if (response.Status == QueryLensHostHoverPollStatus.Ready
-                        && (!response.Success || response.CommandCount <= 0))
+                    if (
+                        response.Status == QueryLensHostHoverPollStatus.Ready
+                        && (!response.Success || response.CommandCount <= 0)
+                    )
                     {
                         log(
-                            $"sql-ready-watch-exit key={key} reason=terminal-not-ready " +
-                            $"success={response.Success} commands={response.CommandCount}");
+                            $"sql-ready-watch-exit key={key} reason=terminal-not-ready "
+                                + $"success={response.Success} commands={response.CommandCount}"
+                        );
                         return;
                     }
 
-                    if (sawInQueue
+                    if (
+                        sawInQueue
                         && response.Status == QueryLensHostHoverPollStatus.Ready
                         && response.Success
-                        && response.CommandCount > 0)
+                        && response.CommandCount > 0
+                    )
                     {
                         log($"sql-ready-watch-ready key={key} commands={response.CommandCount}");
                         sink.RaiseFromWatch(filePath, line, character, response);
@@ -157,7 +214,9 @@ internal sealed class SqlReadyHoverWatcherCore
 
                 if (DateTime.UtcNow >= deadlineUtc)
                 {
-                    log($"sql-ready-watch-timeout key={key} budgetMs={waitBudgetMs} status={response.Status}");
+                    log(
+                        $"sql-ready-watch-timeout key={key} budgetMs={waitBudgetMs} status={response.Status}"
+                    );
                     return;
                 }
 
@@ -177,6 +236,7 @@ internal sealed class SqlReadyHoverWatcherCore
             lock (sync)
             {
                 activeWatches.Remove(key);
+                watchCancellation.Remove(key);
             }
         }
     }

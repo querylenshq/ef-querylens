@@ -15,7 +15,8 @@ public static partial class LspSyntaxHelper
         int character,
         out string? contextVariableName,
         IReadOnlyList<SyntaxNode>? additionalRoots = null,
-        string? sourceFilePath = null)
+        string? sourceFilePath = null,
+        bool allowCrossFileHelperLookup = true)
     {
         contextVariableName = null;
 
@@ -45,6 +46,7 @@ public static partial class LspSyntaxHelper
                 sourceText,
                 sourceFilePath,
                 additionalRoots,
+                allowCrossFileHelperLookup,
                 out var composedExpression,
                 out var composedContextVariableName))
         {
@@ -89,14 +91,14 @@ public static partial class LspSyntaxHelper
                     out var synthesizedExpression,
                     out var synthesizedContextVariableName,
                     additionalRoots)
-                || TryExtractFromExpressionParameterHelperCallWithLookup(
+                || (allowCrossFileHelperLookup && TryExtractFromExpressionParameterHelperCallWithLookup(
                     root,
                     finalInvocation,
                     position,
                     sourceText,
                     sourceFilePath,
                     out synthesizedExpression,
-                    out synthesizedContextVariableName))
+                    out synthesizedContextVariableName)))
             {
                 contextVariableName = synthesizedContextVariableName;
                 return synthesizedExpression;
@@ -159,6 +161,7 @@ public static partial class LspSyntaxHelper
                     sourceText,
                     sourceFilePath,
                     additionalRoots,
+                    allowCrossFileHelperLookup,
                     out composedExpression,
                     out composedContextVariableName))
             {

@@ -25,7 +25,9 @@ internal sealed partial class QueryLensLanguageClient
             StructuredQueueAdaptiveWaitMs = 200,
             WarmupSuccessTtlMs = 60_000,
             WarmupFailureCooldownMs = 5_000,
-            HoverWaitWhenWarmMs = options?.HoverWaitWhenWarmMs ?? 8000,
+            HoverWaitWhenWarmMs = options?.HoverWaitWhenWarmMs ?? 0,
+            HoverForegroundResolveBudgetMs = 75,
+            HoverFastProbeEnabled = true,
         };
     }
 }

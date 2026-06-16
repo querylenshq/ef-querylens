@@ -117,22 +117,23 @@ export function mapStatusSnapshot(snapshot: QueryLensStatusSnapshot | undefined)
     const assembly = snapshot?.AssemblyPath?.trim();
     const inflight = snapshot?.InflightCount ?? 0;
 
-    const text = (() => {
+    const statusText = (() => {
         switch (state) {
             case 'Warming':
-                return '$(sync~spin) QueryLens: Warming…';
+                return 'QueryLens: Warming…';
             case 'Computing':
-                return '$(sync~spin) QueryLens: Computing SQL…';
+                return 'QueryLens: Computing SQL…';
             case 'Ready':
-                return '$(check) QueryLens: Ready';
+                return 'QueryLens: Ready';
             case 'Unavailable':
-                return '$(error) QueryLens: Unavailable';
+                return 'QueryLens: Unavailable';
             default:
-                return '$(loading~spin) QueryLens: Starting…';
+                return 'QueryLens: Starting…';
         }
     })();
+    const text = `${stateIcon(state)} QueryLens`;
 
-    const tooltipParts = [message];
+    const tooltipParts = [`State: ${statusText}`, message];
     if (assembly) {
         tooltipParts.push(`Assembly: ${assembly}`);
     }
@@ -151,6 +152,20 @@ export function mapStatusSnapshot(snapshot: QueryLensStatusSnapshot | undefined)
         tooltip: tooltipParts.join('\n'),
         backgroundColor,
     };
+}
+
+function stateIcon(state: QueryLensHostState): string {
+    switch (state) {
+        case 'Warming':
+        case 'Computing':
+            return '$(sync~spin)';
+        case 'Ready':
+            return '$(check)';
+        case 'Unavailable':
+            return '$(error)';
+        default:
+            return '$(loading~spin)';
+    }
 }
 
 function normalizeHostState(raw: QueryLensHostState | number | undefined): QueryLensHostState {

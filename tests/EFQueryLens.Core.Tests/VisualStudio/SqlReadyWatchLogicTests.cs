@@ -5,11 +5,11 @@ namespace EFQueryLens.Core.Tests.VisualStudio;
 public sealed class SqlReadyWatchLogicTests
 {
     [Theory]
-    [InlineData(8000, 60_000)]
-    [InlineData(30_000, 60_000)]
+    [InlineData(8000, 15_000)]
+    [InlineData(30_000, 30_000)]
     [InlineData(90_000, 90_000)]
     [InlineData(200_000, 120_000)]
-    public void WatchBudget_UsesMinimumSixtySecondsAndCapsAtOneTwenty(int inputMs, int expectedMs)
+    public void WatchBudget_UsesTranslateTimeoutFloorAndCapsAtOneTwenty(int inputMs, int expectedMs)
     {
         Assert.Equal(expectedMs, SqlReadyWatchBudget.ComputeNotificationWaitMs(inputMs));
     }

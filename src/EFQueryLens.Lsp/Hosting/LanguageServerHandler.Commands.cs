@@ -1,5 +1,6 @@
 using EFQueryLens.Core.Scaffolding;
 using EFQueryLens.Lsp.Handlers;
+using EFQueryLens.Lsp.Protocol;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
@@ -224,7 +225,7 @@ internal sealed partial class LanguageServerHandler
         {
             var arguments = request["arguments"] as JArray;
             var structuredHoverRequest = arguments?.Count > 0
-                ? arguments[0].ToObject<TextDocumentPositionParams>()
+                ? arguments[0].ToObject<HoverRequestParams>()
                 : null;
 
             if (structuredHoverRequest is null)
@@ -236,7 +237,9 @@ internal sealed partial class LanguageServerHandler
                 };
             }
 
-            var hover = await _hover.HandleStructuredAsync(structuredHoverRequest, ct);
+            var hover = await _hover.HandleStructuredAsync(
+                structuredHoverRequest,
+                ct);
             return new JObject
             {
                 ["success"] = hover is not null,
@@ -261,7 +264,8 @@ internal sealed partial class LanguageServerHandler
                 {
                     ["hover"] = JObject.FromObject(hover),
                     ["fallbackFileUri"] = req.TextDocument.Uri.ToString(),
-                    ["fallbackLine"] = req.Position.Line
+                    ["fallbackLine"] = req.Position.Line,
+                    ["fallbackCharacter"] = req.Position.Character
                 });
             }
 
@@ -291,7 +295,8 @@ internal sealed partial class LanguageServerHandler
                 {
                     ["hover"] = JObject.FromObject(hover),
                     ["fallbackFileUri"] = req.TextDocument.Uri.ToString(),
-                    ["fallbackLine"] = req.Position.Line
+                    ["fallbackLine"] = req.Position.Line,
+                    ["fallbackCharacter"] = req.Position.Character
                 };
                 
                 _ = JsonRpc?.NotifyAsync("efquerylens/showSqlPreview", payload);

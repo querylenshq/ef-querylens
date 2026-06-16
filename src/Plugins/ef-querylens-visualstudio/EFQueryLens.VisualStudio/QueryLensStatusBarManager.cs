@@ -18,8 +18,8 @@ internal static class QueryLensStatusBarManager
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         var mapped = QueryLensHostStatusMapper.Map(snapshot);
-        currentText = mapped.Text;
-        SetStatusText(mapped.Text, mapped.Tooltip);
+        currentText = mapped.DisplayText;
+        SetStatusText(mapped.DisplayText, mapped.Tooltip);
     }
 
     internal static void SetStatusText(string text, string? tooltip = null)

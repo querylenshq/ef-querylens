@@ -93,8 +93,7 @@ internal sealed class HoverResultCache
             }
 
             if (!IsExpired(pair.Value)
-                && pair.Value.Status is QueryTranslationStatus.Ready
-                && pair.Value.Markdown is not null)
+                && IsDurableReady(pair.Value))
             {
                 return true;
             }
@@ -142,7 +141,9 @@ internal sealed class HoverResultCache
         }
 
         var key = BuildCacheKey(region.AssemblyFingerprint, region.SemanticKey);
-        if (result.Status is QueryTranslationStatus.Ready && !HoverFormatting.IsCacheableTranslation(result))
+        if (result.Status is QueryTranslationStatus.Ready
+            && !HoverFormatting.IsCacheableTranslation(result)
+            && result.Markdown is null)
         {
             _entries.TryRemove(key, out _);
             return;
@@ -165,13 +166,18 @@ internal sealed class HoverResultCache
 
     private bool IsExpired(CachedEntry entry)
     {
-        if (entry.Status is QueryTranslationStatus.Ready)
+        if (IsDurableReady(entry))
         {
             return false;
         }
 
         return entry.CreatedAtTicks + TimeSpan.FromMilliseconds(_inQueueCacheTtlMs).Ticks <= DateTime.UtcNow.Ticks;
     }
+
+    private static bool IsDurableReady(CachedEntry entry)
+        => entry.Status is QueryTranslationStatus.Ready
+           && entry.Markdown is not null
+           && entry.Structured?.Success != false;
 
     private static HoverResult ToHoverResult(CachedEntry cached, bool fromCache)
         => new(cached.Status, cached.Markdown, cached.Structured, fromCache);

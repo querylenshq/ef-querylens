@@ -21,6 +21,8 @@ internal object EFQueryLensLspConfiguration {
                     "warmupSuccessTtlMs" to 60_000,
                     "warmupFailureCooldownMs" to 5_000,
                     "hoverWaitWhenWarmMs" to settings.hoverWaitWhenWarmMs,
+                    "hoverForegroundResolveBudgetMs" to 75,
+                    "hoverFastProbeEnabled" to true,
                 ),
         )
     }

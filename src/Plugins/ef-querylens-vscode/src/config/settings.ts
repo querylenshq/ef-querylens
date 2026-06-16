@@ -25,10 +25,10 @@ export function readSettings(): QueryLensSettings {
     const debugLogsEnabled = config.get<boolean>('debug.enableVerboseLogs', false);
     const showStatusBar = config.get<boolean>('showStatusBar', true);
     const hoverWaitWhenWarmMs = clampNumber(
-        config.get<number>('hoverWaitWhenWarmMs', 8000),
+        config.get<number>('hoverWaitWhenWarmMs', 0),
         0,
         30000,
-        8000
+        0
     );
     const notifyWhenSqlReady = config.get<boolean>('notifyWhenSqlReady', true);
 

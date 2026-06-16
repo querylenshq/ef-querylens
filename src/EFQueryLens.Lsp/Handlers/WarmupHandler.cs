@@ -8,7 +8,12 @@ using Microsoft.VisualStudio.LanguageServer.Protocol;
 
 namespace EFQueryLens.Lsp.Handlers;
 
-internal sealed record WarmupResponse(bool Success, bool Cached, string? AssemblyPath, string? Message);
+internal sealed record WarmupResponse(
+    bool Success,
+    bool Cached,
+    string? AssemblyPath,
+    string? Message
+);
 
 internal sealed partial class WarmupHandler
 {
@@ -18,8 +23,9 @@ internal sealed partial class WarmupHandler
     private bool _debugEnabled;
     private int _successTtlMs;
     private int _failureCooldownMs;
-    private readonly ConcurrentDictionary<string, CachedWarmup> _warmCache =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedWarmup> _warmCache = new(
+        StringComparer.OrdinalIgnoreCase
+    );
     private readonly ConcurrentDictionary<string, Lazy<Task<WarmupResponse>>> _inflightWarmups =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -34,16 +40,18 @@ internal sealed partial class WarmupHandler
             "QUERYLENS_WARMUP_SUCCESS_TTL_MS",
             fallback: 60_000,
             min: 0,
-            max: 600_000);
+            max: 600_000
+        );
         _failureCooldownMs = LspEnvironment.ReadInt(
             "QUERYLENS_WARMUP_FAILURE_COOLDOWN_MS",
             fallback: 5_000,
             min: 0,
-            max: 120_000);
+            max: 120_000
+        );
     }
 
-    internal void SetAssemblyChangeTracker(AssemblyChangeTracker assemblyChangeTracker)
-        => _assemblyChangeTracker = assemblyChangeTracker;
+    internal void SetAssemblyChangeTracker(AssemblyChangeTracker assemblyChangeTracker) =>
+        _assemblyChangeTracker = assemblyChangeTracker;
 
     public void ApplyClientConfiguration(LspClientConfiguration configuration)
     {
@@ -63,7 +71,10 @@ internal sealed partial class WarmupHandler
         }
     }
 
-    public async Task<WarmupResponse> HandleAsync(TextDocumentPositionParams request, CancellationToken cancellationToken)
+    public async Task<WarmupResponse> HandleAsync(
+        TextDocumentPositionParams request,
+        CancellationToken cancellationToken
+    )
     {
         var filePath = DocumentPathResolver.Resolve(request.TextDocument.Uri);
         _assemblyChangeTracker?.CheckAndInvalidateIfChanged(filePath);
@@ -76,16 +87,20 @@ internal sealed partial class WarmupHandler
         }
 
         var targetAssembly = AssemblyResolver.TryGetTargetAssembly(filePath);
-        if (string.IsNullOrWhiteSpace(targetAssembly)
+        if (
+            string.IsNullOrWhiteSpace(targetAssembly)
             || targetAssembly.StartsWith("DEBUG_FAIL", StringComparison.Ordinal)
-            || !File.Exists(targetAssembly))
+            || !File.Exists(targetAssembly)
+        )
         {
             return new WarmupResponse(false, false, targetAssembly, "assembly-not-found");
         }
 
         if (TryGetCachedWarmup(targetAssembly, out var cached))
         {
-            LogDebug($"warmup-cache-hit assembly={targetAssembly} success={cached.Success} message={cached.Message}");
+            LogDebug(
+                $"warmup-cache-hit assembly={targetAssembly} success={cached.Success} message={cached.Message}"
+            );
             if (cached.Success)
             {
                 _statusTracker?.SetAssemblyWarmed(warmed: true, targetAssembly);
@@ -94,14 +109,18 @@ internal sealed partial class WarmupHandler
             return new WarmupResponse(cached.Success, true, targetAssembly, cached.Message);
         }
 
+        _statusTracker?.SetAssemblyWarming(targetAssembly);
+
         var dbContextTypeName = TryResolveDbContextTypeName(
             sourceText,
             request.Position.Line,
-            request.Position.Character);
+            request.Position.Character
+        );
 
         var created = new Lazy<Task<WarmupResponse>>(
             () => ExecuteWarmupAsync(targetAssembly, dbContextTypeName),
-            LazyThreadSafetyMode.ExecutionAndPublication);
+            LazyThreadSafetyMode.ExecutionAndPublication
+        );
         var inflight = _inflightWarmups.GetOrAdd(targetAssembly, created);
         var isOwner = ReferenceEquals(inflight, created);
 
@@ -111,33 +130,44 @@ internal sealed partial class WarmupHandler
                 completedTask => _inflightWarmups.TryRemove(targetAssembly, out _),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+                TaskScheduler.Default
+            );
         }
         else
         {
-            LogDebug($"warmup-inflight-join assembly={targetAssembly} context={dbContextTypeName ?? "<auto>"}");
+            LogDebug(
+                $"warmup-inflight-join assembly={targetAssembly} context={dbContextTypeName ?? "<auto>"}"
+            );
         }
 
         using var warmupScope = _statusTracker?.BeginWarmup();
         return await inflight.Value.WaitAsync(cancellationToken);
     }
 
-    private async Task<WarmupResponse> ExecuteWarmupAsync(string targetAssembly, string? dbContextTypeName)
+    private async Task<WarmupResponse> ExecuteWarmupAsync(
+        string targetAssembly,
+        string? dbContextTypeName
+    )
     {
         var sw = Stopwatch.StartNew();
 
         try
         {
-            await _engine.InspectModelAsync(new ModelInspectionRequest
-            {
-                AssemblyPath = targetAssembly,
-                DbContextTypeName = dbContextTypeName,
-            }, CancellationToken.None);
+            await _engine.InspectModelAsync(
+                new ModelInspectionRequest
+                {
+                    AssemblyPath = targetAssembly,
+                    DbContextTypeName = dbContextTypeName,
+                },
+                CancellationToken.None
+            );
 
             sw.Stop();
             CacheWarmup(targetAssembly, success: true, "ready");
             _statusTracker?.SetAssemblyWarmed(warmed: true, targetAssembly);
-            LogDebug($"warmup-success assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} context={dbContextTypeName ?? "<auto>"}");
+            LogDebug(
+                $"warmup-success assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} context={dbContextTypeName ?? "<auto>"}"
+            );
             return new WarmupResponse(true, false, targetAssembly, "ready");
         }
         catch (Exception ex)
@@ -150,14 +180,17 @@ internal sealed partial class WarmupHandler
             {
                 CacheWarmup(targetAssembly, success: true, "skipped-multi-dbcontext");
                 _statusTracker?.SetAssemblyWarmed(warmed: true, targetAssembly);
-                LogDebug($"warmup-skipped assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} reason=multi-dbcontext context={dbContextTypeName ?? "<auto>"}");
+                LogDebug(
+                    $"warmup-skipped assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} reason=multi-dbcontext context={dbContextTypeName ?? "<auto>"}"
+                );
                 return new WarmupResponse(true, false, targetAssembly, "skipped-multi-dbcontext");
             }
 
             CacheWarmup(targetAssembly, success: false, ex.GetType().Name);
-            LogDebug($"warmup-failed assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} type={ex.GetType().Name} message={ex.Message} context={dbContextTypeName ?? "<auto>"}");
+            LogDebug(
+                $"warmup-failed assembly={targetAssembly} elapsedMs={sw.ElapsedMilliseconds} type={ex.GetType().Name} message={ex.Message} context={dbContextTypeName ?? "<auto>"}"
+            );
             return new WarmupResponse(false, false, targetAssembly, ex.GetType().Name);
         }
     }
-
 }

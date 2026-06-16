@@ -35,6 +35,28 @@ internal object EFQueryLensLspRequests {
         }
     }
 
+    internal fun requestStructuredHover(
+        project: Project,
+        fileUri: String,
+        line: Int,
+        character: Int,
+        startSqlReadyWatch: Boolean = true,
+    ): Map<String, Any?>? {
+        val normalizedFileUri = EFQueryLensHoverProbe.normalizeFileUri(fileUri)
+        val safeLine = line.coerceAtLeast(0)
+        val safeCharacter = character.coerceAtLeast(0)
+        val payload =
+            mapOf(
+                "textDocument" to mapOf("uri" to normalizedFileUri),
+                "position" to mapOf("line" to safeLine, "character" to safeCharacter),
+            )
+        val response = sendCustomRequest(project, "efquerylens/hover", payload)
+        if (startSqlReadyWatch) {
+            EFQueryLensHoverProbe.handleStructuredHover(project, normalizedFileUri, safeLine, safeCharacter, response)
+        }
+        return response
+    }
+
     internal fun requestWarmup(
         project: Project,
         fileUri: String,
@@ -130,6 +152,11 @@ internal object EFQueryLensLspRequests {
                 "efquerylens/setup/apply" ->
                     server.sendRequestSync(REQUEST_TIMEOUT_MS) { languageServer ->
                         (languageServer as EFQueryLensLspServer).setupApply(payload)
+                    }
+
+                "efquerylens/hover" ->
+                    server.sendRequestSync(REQUEST_TIMEOUT_MS) { languageServer ->
+                        (languageServer as EFQueryLensLspServer).structuredHover(payload)
                     }
 
                 else -> return null

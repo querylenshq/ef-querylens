@@ -3,7 +3,6 @@ using EFQueryLens.Core;
 using EFQueryLens.Core.Contracts;
 using EFQueryLens.Lsp;
 using EFQueryLens.Lsp.Parsing;
-using EFQueryLens.Lsp.Protocol;
 using EFQueryLens.Lsp.Services;
 
 namespace EFQueryLens.Lsp.HoverPipeline;
@@ -18,22 +17,20 @@ internal sealed class HoverRequestCoordinator
     private readonly QueryRegionResolver _resolver;
     private readonly HoverResultCache _cache;
     private readonly DocumentLinqChainCache _chainCache;
-    private readonly ConcurrentDictionary<string, Lazy<Task<HoverResult>>> _pipelineInflight =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _pendingSqlReadyNotify =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, SqlReadyNotification> _completedAwaitingSqlReady =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _suppressedSqlReadyNotify =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<Task<HoverResult>>> _pipelineInflight = new(
+        StringComparer.OrdinalIgnoreCase
+    );
     private readonly Action<string>? _log;
     private readonly Action<string, int, int, QueryTranslationStatus, bool, bool>? _logOperation;
-    private IHoverReadyNotifier? _sqlReadyNotifier;
 
     private int _hoverWaitBudgetMs;
+    private int _foregroundResolveBudgetMs;
+    private bool _fastProbeEnabled;
     private int _hoverQueuedAdaptiveWaitMs;
     private int _structuredQueuedAdaptiveWaitMs;
     private Func<string, bool>? _isAssemblyWarm;
+    private Action<string>? _markAssemblyWarm;
+    private Action<string>? _markAssemblyWarming;
 
     public HoverRequestCoordinator(
         HoverPreviewService previewService,
@@ -41,16 +38,21 @@ internal sealed class HoverRequestCoordinator
         HoverResultCache cache,
         DocumentLinqChainCache chainCache,
         int hoverWaitBudgetMs,
+        int foregroundResolveBudgetMs,
+        bool fastProbeEnabled,
         int hoverQueuedAdaptiveWaitMs,
         int structuredQueuedAdaptiveWaitMs,
         Action<string>? log = null,
-        Action<string, int, int, QueryTranslationStatus, bool, bool>? logOperation = null)
+        Action<string, int, int, QueryTranslationStatus, bool, bool>? logOperation = null
+    )
     {
         _previewService = previewService;
         _resolver = resolver;
         _cache = cache;
         _chainCache = chainCache;
         _hoverWaitBudgetMs = hoverWaitBudgetMs;
+        _foregroundResolveBudgetMs = foregroundResolveBudgetMs;
+        _fastProbeEnabled = fastProbeEnabled;
         _hoverQueuedAdaptiveWaitMs = hoverQueuedAdaptiveWaitMs;
         _structuredQueuedAdaptiveWaitMs = structuredQueuedAdaptiveWaitMs;
         _log = log;
@@ -67,26 +69,35 @@ internal sealed class HoverRequestCoordinator
         int hoverCacheTtlMs,
         int inQueueCacheTtlMs,
         int hoverWaitBudgetMs,
+        int foregroundResolveBudgetMs,
+        bool fastProbeEnabled,
         int hoverQueuedAdaptiveWaitMs,
-        int structuredQueuedAdaptiveWaitMs)
+        int structuredQueuedAdaptiveWaitMs
+    )
     {
         _cache.Configure(hoverCacheTtlMs, inQueueCacheTtlMs);
         _hoverWaitBudgetMs = hoverWaitBudgetMs;
+        _foregroundResolveBudgetMs = foregroundResolveBudgetMs;
+        _fastProbeEnabled = fastProbeEnabled;
         _hoverQueuedAdaptiveWaitMs = hoverQueuedAdaptiveWaitMs;
         _structuredQueuedAdaptiveWaitMs = structuredQueuedAdaptiveWaitMs;
     }
 
     public void SetAssemblyWarmChecker(Func<string, bool>? checker) => _isAssemblyWarm = checker;
 
-    public void SetSqlReadyNotifier(IHoverReadyNotifier? notifier) => _sqlReadyNotifier = notifier;
+    public void SetAssemblyWarmStateActions(Action<string>? markWarm, Action<string>? markWarming)
+    {
+        _markAssemblyWarm = markWarm;
+        _markAssemblyWarming = markWarming;
+    }
 
     public bool IsSemanticKeyReady(string semanticKey) => _cache.IsSemanticKeyReady(semanticKey);
 
     public IReadOnlyList<string> BuildChainSemanticKeys(
         string filePath,
         string sourceText,
-        IReadOnlyList<LinqChainInfo> chains)
-        => _resolver.BuildChainSemanticKeys(filePath, sourceText, chains);
+        IReadOnlyList<LinqChainInfo> chains
+    ) => _resolver.BuildChainSemanticKeys(filePath, sourceText, chains);
 
     public void InvalidateDocumentChains(string filePath) => _chainCache.Invalidate(filePath);
 
@@ -96,9 +107,6 @@ internal sealed class HoverRequestCoordinator
         _resolver.Clear();
         _chainCache.Clear();
         _pipelineInflight.Clear();
-        _pendingSqlReadyNotify.Clear();
-        _completedAwaitingSqlReady.Clear();
-        _suppressedSqlReadyNotify.Clear();
     }
 
     public void StorePrewarmed(
@@ -106,7 +114,8 @@ internal sealed class HoverRequestCoordinator
         string sourceText,
         int line,
         int character,
-        CombinedHoverResult combined)
+        CombinedHoverResult combined
+    )
     {
         if (!_cache.IsEnabled)
         {
@@ -125,7 +134,13 @@ internal sealed class HoverRequestCoordinator
             return;
         }
 
-        if (_cache.TryGetReady(resolve.Region.AssemblyFingerprint, resolve.Region.SemanticKey, out _))
+        if (
+            _cache.TryGetReady(
+                resolve.Region.AssemblyFingerprint,
+                resolve.Region.SemanticKey,
+                out _
+            )
+        )
         {
             _log?.Invoke($"prewarm-skip-existing line={line} char={character}");
             return;
@@ -140,27 +155,189 @@ internal sealed class HoverRequestCoordinator
         string sourceText,
         int line,
         int character,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool nonBlocking = false
+    )
     {
         _log?.Invoke($"hover-request path={filePath} line={line} char={character}");
 
-        if (_resolver.TryGetSemanticKeyByPosition(filePath, sourceText, line, character, out var spanSemanticKey)
+        if (
+            _resolver.TryGetSemanticKeyByPosition(
+                filePath,
+                sourceText,
+                line,
+                character,
+                out var spanSemanticKey
+            )
             && !string.IsNullOrWhiteSpace(spanSemanticKey)
-            && TryGetReadyForSemanticKey(filePath, spanSemanticKey!, out var spanHit))
+            && TryGetReadyForSemanticKey(filePath, spanSemanticKey!, out var spanHit)
+        )
         {
             _log?.Invoke($"hover-span-cache-hit line={line} char={character}");
-            LogOperation(filePath, line, character, spanHit.Status, cached: true);
-            return spanHit;
+            LogOperation(filePath, line, character, spanHit!.Status, cached: true);
+            return spanHit!;
         }
 
         if (!_cache.IsEnabled)
         {
-            return await ComputeImmediateAsync(filePath, sourceText, line, character, cancellationToken);
+            return await ComputeImmediateAsync(
+                filePath,
+                sourceText,
+                line,
+                character,
+                cancellationToken
+            );
         }
 
-        var regionKey = QueryRegionResolver.BuildRegionInflightKey(filePath, sourceText, line, character);
-        var pipeline = GetOrStartPipeline(regionKey, filePath, sourceText, line, character, out var isOwner);
+        if (
+            _fastProbeEnabled
+            && !_resolver.MightNeedFullResolve(filePath, sourceText, line, character)
+        )
+        {
+            _log?.Invoke($"hover-foreground-fast-none line={line} char={character}");
+            return NoQueryResult();
+        }
 
+        if (nonBlocking)
+        {
+            return QueueBackgroundAndReturnPlaceholder(filePath, sourceText, line, character);
+        }
+
+        var resolveTask = _resolver.TryResolveAsync(
+            filePath,
+            sourceText,
+            line,
+            character,
+            cancellationToken
+        );
+        var resolve = await TryWaitForForegroundResolveAsync(
+            resolveTask,
+            filePath,
+            line,
+            character,
+            cancellationToken
+        );
+
+        if (resolve is null)
+        {
+            return QueueBackgroundAndReturnPlaceholder(filePath, sourceText, line, character);
+        }
+
+        if (!resolve.Found || resolve.Region is null)
+        {
+            return NoQueryResult();
+        }
+
+        _markAssemblyWarming?.Invoke(ResolveAssemblyPath(filePath));
+
+        if (
+            _cache.TryGetReady(
+                resolve.Region.AssemblyFingerprint,
+                resolve.Region.SemanticKey,
+                out var cachedRegion
+            )
+        )
+        {
+            LogOperation(filePath, line, character, cachedRegion!.Status, cached: true);
+            return cachedRegion!;
+        }
+
+        var pipeline = GetOrStartPipeline(
+            resolve.Region.RegionKey,
+            filePath,
+            sourceText,
+            line,
+            character,
+            out var isOwner
+        );
+        LogPipelineState(line, character, isOwner);
+
+        if (_hoverWaitBudgetMs > 0 && ShouldWaitSynchronously(filePath))
+        {
+            var finished = await Task.WhenAny(
+                pipeline,
+                Task.Delay(_hoverWaitBudgetMs, cancellationToken)
+            );
+            if (finished == pipeline)
+            {
+                var waited = await pipeline.ConfigureAwait(false);
+                if (HoverFormatting.IsResolvedForSync(waited))
+                {
+                    _log?.Invoke(
+                        $"hover-wait-resolved line={line} char={character} status={waited.Status}"
+                    );
+                    LogOperation(filePath, line, character, waited.Status, cached: false);
+                    return waited;
+                }
+            }
+        }
+
+        LogOperation(filePath, line, character, QueryTranslationStatus.InQueue, cached: false);
+        return HoverFormatting.InQueuePlaceholder();
+    }
+
+    private HoverResult QueueBackgroundAndReturnPlaceholder(
+        string filePath,
+        string sourceText,
+        int line,
+        int character
+    )
+    {
+        var regionKey = QueryRegionResolver.BuildRegionInflightKey(
+            filePath,
+            sourceText,
+            line,
+            character
+        );
+        var pipeline = GetOrStartPipeline(
+            regionKey,
+            filePath,
+            sourceText,
+            line,
+            character,
+            out var isOwner
+        );
+        _ = pipeline;
+        LogPipelineState(line, character, isOwner);
+        _log?.Invoke($"hover-foreground-fast-return line={line} char={character}");
+        LogOperation(filePath, line, character, QueryTranslationStatus.InQueue, cached: false);
+        return HoverFormatting.InQueuePlaceholder();
+    }
+
+    private async Task<QueryRegionResolver.RegionResolveResult?> TryWaitForForegroundResolveAsync(
+        Task<QueryRegionResolver.RegionResolveResult> resolveTask,
+        string filePath,
+        int line,
+        int character,
+        CancellationToken cancellationToken
+    )
+    {
+        if (_foregroundResolveBudgetMs <= 0)
+        {
+            _log?.Invoke($"hover-foreground-resolve-skipped line={line} char={character}");
+            return null;
+        }
+
+        var finished = await Task.WhenAny(
+            resolveTask,
+            Task.Delay(_foregroundResolveBudgetMs, cancellationToken)
+        );
+        if (finished == resolveTask)
+        {
+            _log?.Invoke($"hover-foreground-resolve-completed line={line} char={character}");
+            return await resolveTask.ConfigureAwait(false);
+        }
+
+        _log?.Invoke(
+            $"hover-foreground-resolve-timeout line={line} char={character} budgetMs={_foregroundResolveBudgetMs}"
+        );
+        return null;
+    }
+
+    private static HoverResult NoQueryResult() => new(QueryTranslationStatus.Ready, null, null);
+
+    private void LogPipelineState(int line, int character, bool isOwner)
+    {
         if (isOwner)
         {
             _log?.Invoke($"hover-pipeline-queued line={line} char={character}");
@@ -169,43 +346,12 @@ internal sealed class HoverRequestCoordinator
         {
             _log?.Invoke($"hover-pipeline-join line={line} char={character}");
         }
+    }
 
-        if (_hoverWaitBudgetMs > 0 && ShouldWaitSynchronously(filePath))
-        {
-            var finished = await Task.WhenAny(pipeline, Task.Delay(_hoverWaitBudgetMs, cancellationToken));
-            if (finished == pipeline)
-            {
-                var waited = await pipeline.ConfigureAwait(false);
-                if (HoverFormatting.IsResolvedForSync(waited))
-                {
-                    _log?.Invoke($"hover-wait-resolved line={line} char={character} status={waited.Status}");
-                    ClearPendingSqlReady(regionKey);
-                    LogOperation(filePath, line, character, waited.Status, cached: false);
-                    return waited;
-                }
-            }
-        }
-        else if (!isOwner)
-        {
-            var joined = await pipeline.ConfigureAwait(false);
-            if (HoverFormatting.IsResolvedForSync(joined))
-            {
-                ClearPendingSqlReady(regionKey);
-                LogOperation(filePath, line, character, joined.Status, cached: true);
-                return joined;
-            }
-        }
-
-        if (TryGetReadyAfterPipeline(filePath, sourceText, line, character, out var ready))
-        {
-            ClearPendingSqlReady(regionKey);
-            LogOperation(filePath, line, character, ready.Status, cached: true);
-            return ready;
-        }
-
-        MarkPendingSqlReady(regionKey);
-        LogOperation(filePath, line, character, QueryTranslationStatus.InQueue, cached: false);
-        return HoverFormatting.InQueuePlaceholder();
+    private static string ResolveAssemblyPath(string filePath)
+    {
+        var assembly = AssemblyResolver.TryGetTargetAssembly(filePath);
+        return string.IsNullOrWhiteSpace(assembly) ? string.Empty : assembly;
     }
 
     private Task<HoverResult> GetOrStartPipeline(
@@ -214,11 +360,13 @@ internal sealed class HoverRequestCoordinator
         string sourceText,
         int line,
         int character,
-        out bool isOwner)
+        out bool isOwner
+    )
     {
         var created = new Lazy<Task<HoverResult>>(
             () => RunPipelineAsync(filePath, sourceText, line, character),
-            LazyThreadSafetyMode.ExecutionAndPublication);
+            LazyThreadSafetyMode.ExecutionAndPublication
+        );
         var inflight = _pipelineInflight.GetOrAdd(regionKey, created);
         isOwner = ReferenceEquals(inflight, created);
 
@@ -228,7 +376,8 @@ internal sealed class HoverRequestCoordinator
                 _ => _pipelineInflight.TryRemove(regionKey, out Lazy<Task<HoverResult>>? _),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+                TaskScheduler.Default
+            );
         }
 
         return inflight.Value;
@@ -238,46 +387,88 @@ internal sealed class HoverRequestCoordinator
         string filePath,
         string sourceText,
         int line,
-        int character)
+        int character
+    )
     {
-        var regionKey = QueryRegionResolver.BuildRegionInflightKey(filePath, sourceText, line, character);
         try
         {
-            var resolve = await _resolver.TryResolveAsync(filePath, sourceText, line, character, CancellationToken.None)
+            var resolve = await _resolver
+                .TryResolveAsync(filePath, sourceText, line, character, CancellationToken.None)
                 .ConfigureAwait(false);
 
             if (resolve.Found && resolve.Region is not null)
             {
                 var region = resolve.Region.WithRequestPosition(line, character);
-                if (_cache.TryGetReady(region.AssemblyFingerprint, region.SemanticKey, out var cached))
+                var assemblyPath = ResolveAssemblyPath(filePath);
+                _markAssemblyWarming?.Invoke(assemblyPath);
+                if (
+                    _cache.TryGetReady(
+                        region.AssemblyFingerprint,
+                        region.SemanticKey,
+                        out var cached
+                    )
+                )
                 {
-                    ClearPendingSqlReady(regionKey);
                     return cached!;
                 }
 
                 _cache.TryStoreInQueue(region.AssemblyFingerprint, region.SemanticKey);
-                var computed = await ComputeForRegionAsync(filePath, sourceText, region, CancellationToken.None)
+                var computed = await ComputeForRegionAsync(
+                        filePath,
+                        sourceText,
+                        region,
+                        CancellationToken.None
+                    )
                     .ConfigureAwait(false);
                 _cache.Store(region, computed);
-                TryNotifySqlReady(filePath, region, computed, regionKey);
-                _log?.Invoke($"hover-pipeline-finished key={region.SemanticKey} status={computed.Status}");
-                LogOperation(filePath, line, character, computed.Status, cached: false, background: true);
+                if (HoverFormatting.IsCacheableTranslation(computed))
+                {
+                    _markAssemblyWarm?.Invoke(assemblyPath);
+                }
+
+                _log?.Invoke(
+                    $"hover-pipeline-finished key={region.SemanticKey} status={computed.Status}"
+                );
+                LogOperation(
+                    filePath,
+                    line,
+                    character,
+                    computed.Status,
+                    cached: false,
+                    background: true
+                );
                 return computed;
             }
 
-            var fallback = await ComputeImmediateAsync(filePath, sourceText, line, character, CancellationToken.None)
+            var fallback = await ComputeImmediateAsync(
+                    filePath,
+                    sourceText,
+                    line,
+                    character,
+                    CancellationToken.None
+                )
                 .ConfigureAwait(false);
-            ClearPendingSqlReady(regionKey);
-            _log?.Invoke($"hover-pipeline-finished line={line} char={character} status={fallback.Status} source=no-region");
-            LogOperation(filePath, line, character, fallback.Status, cached: false, background: true);
+            _log?.Invoke(
+                $"hover-pipeline-finished line={line} char={character} status={fallback.Status} source=no-region"
+            );
+            LogOperation(
+                filePath,
+                line,
+                character,
+                fallback.Status,
+                cached: false,
+                background: true
+            );
             return fallback;
         }
         catch (Exception ex)
         {
-            ClearPendingSqlReady(regionKey);
-            _log?.Invoke($"hover-pipeline-failed line={line} char={character} type={ex.GetType().Name} message={ex.Message}");
+            _log?.Invoke(
+                $"hover-pipeline-failed line={line} char={character} type={ex.GetType().Name} message={ex.Message}"
+            );
             QueryLensOperationalLog.Info(
-                $"hover-failed file={Path.GetFileName(filePath)} line={line} char={character} error={ex.GetType().Name}");
+                $"hover-failed file={Path.GetFileName(filePath)} line={line} char={character} error={ex.GetType().Name}"
+            );
             return HoverFormatting.InQueuePlaceholder();
         }
     }
@@ -286,7 +477,8 @@ internal sealed class HoverRequestCoordinator
         string filePath,
         string sourceText,
         QueryRegion region,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var combined = await _previewService.BuildCombinedAsync(
             filePath,
@@ -295,7 +487,8 @@ internal sealed class HoverRequestCoordinator
             region.AnchorCharacter,
             cancellationToken,
             region.Expression,
-            region.ContextVariableName);
+            region.ContextVariableName
+        );
 
         combined = await ApplyAdaptiveWaitAsync(
             filePath,
@@ -305,7 +498,8 @@ internal sealed class HoverRequestCoordinator
             combined,
             cancellationToken,
             region.Expression,
-            region.ContextVariableName);
+            region.ContextVariableName
+        );
 
         return HoverFormatting.FromCombined(combined);
     }
@@ -315,16 +509,25 @@ internal sealed class HoverRequestCoordinator
         string sourceText,
         int line,
         int character,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var combined = await _previewService.BuildCombinedAsync(
             filePath,
             sourceText,
             line,
             character,
-            cancellationToken);
+            cancellationToken
+        );
 
-        combined = await ApplyAdaptiveWaitAsync(filePath, sourceText, line, character, combined, cancellationToken);
+        combined = await ApplyAdaptiveWaitAsync(
+            filePath,
+            sourceText,
+            line,
+            character,
+            combined,
+            cancellationToken
+        );
         return HoverFormatting.FromCombined(combined);
     }
 
@@ -336,17 +539,23 @@ internal sealed class HoverRequestCoordinator
         CombinedHoverResult combined,
         CancellationToken cancellationToken,
         string? preresolvedExpression = null,
-        string? preresolvedContextVariable = null)
+        string? preresolvedContextVariable = null
+    )
     {
         var adaptiveWaitMs = Math.Max(_hoverQueuedAdaptiveWaitMs, _structuredQueuedAdaptiveWaitMs);
-        if (combined.Markdown.Status is QueryTranslationStatus.InQueue or QueryTranslationStatus.Starting
+        if (
+            combined.Markdown.Status
+                is QueryTranslationStatus.InQueue
+                    or QueryTranslationStatus.Starting
             && combined.Markdown.AvgTranslationMs > 0
             && combined.Markdown.AvgTranslationMs < adaptiveWaitMs
-            && adaptiveWaitMs > 0)
+            && adaptiveWaitMs > 0
+        )
         {
             _log?.Invoke(
-                $"hover-adaptive-wait line={line} char={character} " +
-                $"waitMs={adaptiveWaitMs} avgMs={combined.Markdown.AvgTranslationMs:0.##}");
+                $"hover-adaptive-wait line={line} char={character} "
+                    + $"waitMs={adaptiveWaitMs} avgMs={combined.Markdown.AvgTranslationMs:0.##}"
+            );
 
             await Task.Delay(adaptiveWaitMs, cancellationToken);
             combined = await _previewService.BuildCombinedAsync(
@@ -356,43 +565,23 @@ internal sealed class HoverRequestCoordinator
                 character,
                 cancellationToken,
                 preresolvedExpression,
-                preresolvedContextVariable);
+                preresolvedContextVariable
+            );
         }
 
         return combined;
     }
 
-    private bool TryGetReadyForSemanticKey(string filePath, string semanticKey, out HoverResult? result)
-    {
-        var fingerprint = AssemblyResolver.TryGetAssemblyFingerprint(filePath)
-                          ?? $"no-assembly|{Path.GetFullPath(filePath)}";
-        return _cache.TryGetReady(fingerprint, semanticKey, out result);
-    }
-
-    private bool TryGetReadyAfterPipeline(
+    private bool TryGetReadyForSemanticKey(
         string filePath,
-        string sourceText,
-        int line,
-        int character,
-        out HoverResult? result)
+        string semanticKey,
+        out HoverResult? result
+    )
     {
-        if (_resolver.TryGetSemanticKeyByPosition(filePath, sourceText, line, character, out var semanticKey)
-            && !string.IsNullOrWhiteSpace(semanticKey)
-            && TryGetReadyForSemanticKey(filePath, semanticKey!, out result))
-        {
-            return true;
-        }
-
-        var resolve = _resolver.TryResolve(filePath, sourceText, line, character);
-        if (resolve.Found
-            && resolve.Region is not null
-            && _cache.TryGetReady(resolve.Region.AssemblyFingerprint, resolve.Region.SemanticKey, out result))
-        {
-            return true;
-        }
-
-        result = null;
-        return false;
+        var fingerprint =
+            AssemblyResolver.TryGetAssemblyFingerprint(filePath)
+            ?? $"no-assembly|{Path.GetFullPath(filePath)}";
+        return _cache.TryGetReady(fingerprint, semanticKey, out result);
     }
 
     private bool ShouldWaitSynchronously(string filePath)
@@ -407,86 +596,9 @@ internal sealed class HoverRequestCoordinator
         int character,
         QueryTranslationStatus status,
         bool cached,
-        bool background = false)
+        bool background = false
+    )
     {
         _logOperation?.Invoke(filePath, line, character, status, cached, background);
-    }
-
-    private void MarkPendingSqlReady(string regionKey)
-    {
-        _suppressedSqlReadyNotify.TryRemove(regionKey, out _);
-        _pendingSqlReadyNotify.TryAdd(regionKey, 0);
-        if (_completedAwaitingSqlReady.TryRemove(regionKey, out var completed))
-        {
-            DispatchSqlReadyNotification(completed);
-        }
-    }
-
-    private void ClearPendingSqlReady(string regionKey)
-    {
-        _pendingSqlReadyNotify.TryRemove(regionKey, out _);
-        _completedAwaitingSqlReady.TryRemove(regionKey, out _);
-        _suppressedSqlReadyNotify.TryAdd(regionKey, 0);
-    }
-
-    private void TryNotifySqlReady(
-        string filePath,
-        QueryRegion region,
-        HoverResult computed,
-        string regionKey)
-    {
-        var notifier = _sqlReadyNotifier;
-        if (notifier is null || !notifier.IsEnabled)
-        {
-            return;
-        }
-
-        if (!HoverFormatting.IsCacheableTranslation(computed))
-        {
-            return;
-        }
-
-        var commandCount = computed.Structured?.CommandCount ?? 0;
-        var payload = new SqlReadyNotification(
-            DocumentPathResolver.ToUri(filePath),
-            region.AnchorLine,
-            region.AnchorCharacter,
-            Path.GetFileName(filePath),
-            commandCount);
-
-        if (!SqlReadyNotificationLogic.ShouldNotify(payload))
-        {
-            return;
-        }
-
-        if (_pendingSqlReadyNotify.TryRemove(regionKey, out _))
-        {
-            DispatchSqlReadyNotification(payload);
-            return;
-        }
-
-        if (_suppressedSqlReadyNotify.ContainsKey(regionKey))
-        {
-            return;
-        }
-
-        // Pipeline finished before the hover returned InQueue — hold until MarkPendingSqlReady runs.
-        _completedAwaitingSqlReady[regionKey] = payload;
-        _log?.Invoke(
-            $"sql-ready-awaiting-pending file={payload.FileName} line={payload.Line} char={payload.Character}");
-    }
-
-    private void DispatchSqlReadyNotification(SqlReadyNotification payload)
-    {
-        var notifier = _sqlReadyNotifier;
-        if (notifier is null || !notifier.IsEnabled)
-        {
-            return;
-        }
-
-        _ = notifier.NotifyAsync(payload);
-        _log?.Invoke(
-            $"sql-ready-notify file={payload.FileName} line={payload.Line} char={payload.Character} " +
-            $"commands={payload.CommandCount}");
     }
 }

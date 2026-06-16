@@ -61,29 +61,26 @@ All IDE clients are thin wrappers around the same `EFQueryLens.Lsp` server. Shar
 
 Standard LSP `textDocument/hover` is used by VS Code and Rider for markdown hovers. Both routes share `HoverRequestCoordinator` on the server.
 
+### SQL-ready notifications (client-polled)
+
+When an uncached hover returns **InQueue**, clients start a background poll on `efquerylens/hover` (or structured preview) until status is **Ready** or a timeout (at least 15s, up to 120s). Then they show a toast with **Go to Query** / **Open SQL**. Cached hovers return SQL immediately and do not start a toast watch.
+
+The server no longer pushes `efquerylens/sqlReady`. That notification name is **deprecated**.
+
+Clients dedupe by `(fileUri, line, character)` for 30 seconds and respect `sqlReadyNotify` / **Notify when SQL is ready** from client settings.
+
 ### Custom notifications (server → client)
 
 | Notification | Purpose |
 |--------------|---------|
-| `efquerylens/sqlReady` | Background SQL finished after a queued hover; client shows toast with **Go to Query** / **Open SQL** |
 | `efquerylens/statusChanged` | Push updated host status snapshot |
 | `efquerylens/showSqlPreview` | Open SQL in editor (optional server-driven) |
 | `efquerylens/showSqlPopup` | Show SQL popup (optional server-driven) |
 | `efquerylens/copySqlToClipboard` | Copy SQL text |
 
-#### `efquerylens/sqlReady` payload
+#### Deprecated: `efquerylens/sqlReady`
 
-```json
-{
-  "fileUri": "file:///path/to/Query.cs",
-  "line": 12,
-  "character": 8,
-  "fileName": "Query.cs",
-  "commandCount": 1
-}
-```
-
-Clients dedupe by `(fileUri, line, character)` for 30 seconds and respect `sqlReadyNotify` from client configuration.
+Previously used for server-push SQL-ready toasts. Clients now poll hover status instead.
 
 #### `efquerylens/statusChanged` payload
 
@@ -116,24 +113,24 @@ Sent on LSP initialize and via `workspace/didChangeConfiguration`:
     "structuredQueueAdaptiveWaitMs": 200,
     "warmupSuccessTtlMs": 60000,
     "warmupFailureCooldownMs": 5000,
-    "hoverWaitWhenWarmMs": 8000
+    "hoverWaitWhenWarmMs": 0
   }
 }
 ```
 
 | Key | Description |
 |-----|-------------|
-| `sqlReadyNotify` | Show toast when background SQL completes (default: `true`) |
+| `sqlReadyNotify` | Enable SQL-ready toasts when background poll sees Ready (default: `true`) |
 | `enableLspHover` | `false` for VS structured Quick Info; `true` for markdown hover IDEs |
-| `hoverWaitWhenWarmMs` | Max wait for SQL when assembly is already warm |
+| `hoverWaitWhenWarmMs` | Max wait for SQL when assembly is already warm. Default `0` returns processing immediately and notifies when background SQL is ready. |
 
 ### Parity checklist (all IDEs)
 
 1. Hover a LINQ query → see **InQueue** / warming status while translation runs.
-2. When background work completes → **sqlReady** toast with **Go to Query** and **Open SQL**.
+2. Dismiss hover early → client polls until Ready → toast with **Go to Query** and **Open SQL**.
 3. Status bar shows **Warming** until warmup completes, then **Ready** with `Warmed=true`.
-4. Second hover on the same query → fast cached path; no duplicate toast (dedupe).
-5. Disable **Notify when SQL is ready** → no toast; server honors `sqlReadyNotify: false`.
+4. Second hover on the same query → fast cached path; inline SQL in hover (no toast).
+5. Disable **Notify when SQL is ready** → no toast.
 6. VS structured hover and Rider/VS Code markdown hover produce the same SQL (shared coordinator).
 
 ### Troubleshooting stale assemblies

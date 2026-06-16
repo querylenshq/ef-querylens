@@ -82,4 +82,21 @@ public sealed class QueryLensStatusTrackerTests
         Assert.True(snapshot.Warmed);
         Assert.Equal(QueryLensHostState.Ready, snapshot.State);
     }
+
+    [Fact]
+    public void SetAssemblyWarming_ForDifferentAssembly_ReturnsToWarming()
+    {
+        var tracker = new QueryLensStatusTracker();
+        tracker.SetDaemonReady(ready: true, assemblyPath: @"C:\app\a.dll");
+        tracker.SetAssemblyWarmed(warmed: true, assemblyPath: @"C:\app\a.dll");
+
+        tracker.SetAssemblyWarming(@"C:\app\b.dll");
+
+        var snapshot = tracker.GetSnapshot();
+        Assert.Equal(QueryLensHostState.Warming, snapshot.State);
+        Assert.False(snapshot.Warmed);
+        Assert.Equal(@"C:\app\b.dll", snapshot.AssemblyPath);
+        Assert.True(tracker.IsAssemblyWarmed(@"C:\app\a.dll"));
+        Assert.False(tracker.IsAssemblyWarmed(@"C:\app\b.dll"));
+    }
 }

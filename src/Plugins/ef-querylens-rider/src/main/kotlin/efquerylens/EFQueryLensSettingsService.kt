@@ -13,7 +13,7 @@ class EFQueryLensSettingsService(
 ) : PersistentStateComponent<EFQueryLensSettingsService.State> {
     data class State(
         var notifyWhenSqlReady: Boolean = true,
-        var hoverWaitWhenWarmMs: Int = 8000,
+        var hoverWaitWhenWarmMs: Int = 0,
         var showStatusBar: Boolean = true,
     )
 

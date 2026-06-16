@@ -40,6 +40,8 @@ class EFQueryLensLspServerSupportProvider : LspServerSupportProvider {
         }
 
         logInfo(project, "[EFQueryLens] Ensuring LSP server is started for '${file.path}'")
+        EFQueryLensQuickDocSqlReadyHook.register(project)
+        EFQueryLensEditorHoverSqlReadyHook.register(project)
         serverStarter.ensureServerStarted(EFQueryLensServerDescriptor(project))
     }
 
@@ -297,10 +299,19 @@ private class EFQueryLensClient(
         val root = payload as? Map<String, Any?> ?: return
         val fallbackFileUri = root["fallbackFileUri"] as? String ?: ""
         val fallbackLine = (root["fallbackLine"] as? Number)?.toInt() ?: 0
+        val fallbackCharacter = (root["fallbackCharacter"] as? Number)?.toInt() ?: 0
 
         val opener = EFQueryLensUrlOpener()
+        val hover = root["hover"] as? Map<String, Any?>
+        EFQueryLensHoverProbe.handleStructuredHover(project, fallbackFileUri, fallbackLine, fallbackCharacter, hover)
         val preview = opener.extractStructuredPreview(root, fallbackFileUri, fallbackLine)
         if (preview != null) {
+            if (preview.statusCode != 0 || preview.actionSqlText.isBlank()) {
+                val message = preview.statusMessage ?: opener.fallbackStatusMessage(preview.statusCode)
+                opener.showStatusMessage(project, preview.statusCode, message)
+                return
+            }
+
             opener.openSqlInEditor(project, preview)
         }
     }
@@ -311,21 +322,18 @@ private class EFQueryLensClient(
         val root = payload as? Map<String, Any?> ?: return
         val fallbackFileUri = root["fallbackFileUri"] as? String ?: ""
         val fallbackLine = (root["fallbackLine"] as? Number)?.toInt() ?: 0
+        val fallbackCharacter = (root["fallbackCharacter"] as? Number)?.toInt() ?: 0
         val opener = EFQueryLensUrlOpener()
+        val hover = root["hover"] as? Map<String, Any?>
+        EFQueryLensHoverProbe.handleStructuredHover(project, fallbackFileUri, fallbackLine, fallbackCharacter, hover)
         val preview = opener.extractStructuredPreview(root, fallbackFileUri, fallbackLine) ?: return
-        opener.showSqlPopup(project, preview)
-    }
-
-    @JsonNotification("efquerylens/sqlReady")
-    fun sqlReady(payload: Any?) {
-        val root = payload as? Map<*, *>
-        if (root == null) {
-            thisLogger().warn("[EFQueryLens] sqlReady ignored: payload is not a map (${payload?.javaClass?.name})")
+        if (preview.statusCode != 0 || preview.sqlText.isBlank()) {
+            val message = preview.statusMessage ?: opener.fallbackStatusMessage(preview.statusCode)
+            opener.showStatusMessage(project, preview.statusCode, message)
             return
         }
 
-        thisLogger().info("[EFQueryLens] sqlReady notification received")
-        EFQueryLensSqlReadyHandler.handle(project, root)
+        opener.showSqlPopup(project, preview)
     }
 
     @JsonNotification("efquerylens/statusChanged")

@@ -11,7 +11,7 @@
         <platform.lsp.serverSupportProvider implementation="efquerylens.EFQueryLensLspServerSupportProvider" />
         <projectService serviceImplementation="efquerylens.EFQueryLensSettingsService" />
         <projectConfigurable provider="efquerylens.EFQueryLensSettingsConfigurableProvider" />
-        <toolWindow id="EF QueryLens" factoryClass="efquerylens.EFQueryLensLogToolWindowFactory" anchor="bottom" />
+        <toolWindow id="EF QueryLens" factoryClass="efquerylens.EFQueryLensLogToolWindowFactory" anchor="bottom" doNotActivateOnStart="true" />
         <statusBarWidgetFactory implementation="efquerylens.EFQueryLensStatusBarWidgetFactory" id="EFQueryLensStatusBar" order="last" />
         <notificationGroup id="EF QueryLens" displayType="BALLOON" isLogByDefault="false" />
         <intentionAction>

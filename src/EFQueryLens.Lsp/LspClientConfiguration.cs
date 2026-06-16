@@ -13,14 +13,19 @@ internal sealed record LspClientConfiguration(
     int? StructuredQueueAdaptiveWaitMs = null,
     int? WarmupSuccessTtlMs = null,
     int? WarmupFailureCooldownMs = null,
-    int? HoverWaitWhenWarmMs = null)
+    int? HoverWaitWhenWarmMs = null,
+    int? HoverForegroundResolveBudgetMs = null,
+    bool? HoverFastProbeEnabled = null
+)
 {
     internal static LspClientConfiguration FromInitializeRequest(JToken? initializeRequest)
     {
         return FromToken(initializeRequest?["initializationOptions"]);
     }
 
-    internal static LspClientConfiguration FromConfigurationChangeRequest(JToken? configurationChangeRequest)
+    internal static LspClientConfiguration FromConfigurationChangeRequest(
+        JToken? configurationChangeRequest
+    )
     {
         return FromToken(configurationChangeRequest?["settings"]);
     }
@@ -45,11 +50,34 @@ internal sealed record LspClientConfiguration(
             SqlReadyNotify: ReadBool(config, "sqlReadyNotify"),
             HoverProgressDelayMs: ReadInt(config, "hoverProgressDelayMs", min: 0, max: 5_000),
             HoverCacheTtlMs: ReadInt(config, "hoverCacheTtlMs", min: 0, max: 120_000),
-            MarkdownQueueAdaptiveWaitMs: ReadInt(config, "markdownQueueAdaptiveWaitMs", min: 0, max: 2_000),
-            StructuredQueueAdaptiveWaitMs: ReadInt(config, "structuredQueueAdaptiveWaitMs", min: 0, max: 2_000),
+            MarkdownQueueAdaptiveWaitMs: ReadInt(
+                config,
+                "markdownQueueAdaptiveWaitMs",
+                min: 0,
+                max: 2_000
+            ),
+            StructuredQueueAdaptiveWaitMs: ReadInt(
+                config,
+                "structuredQueueAdaptiveWaitMs",
+                min: 0,
+                max: 2_000
+            ),
             WarmupSuccessTtlMs: ReadInt(config, "warmupSuccessTtlMs", min: 0, max: 600_000),
-            WarmupFailureCooldownMs: ReadInt(config, "warmupFailureCooldownMs", min: 0, max: 120_000),
-            HoverWaitWhenWarmMs: ReadInt(config, "hoverWaitWhenWarmMs", min: 0, max: 30_000));
+            WarmupFailureCooldownMs: ReadInt(
+                config,
+                "warmupFailureCooldownMs",
+                min: 0,
+                max: 120_000
+            ),
+            HoverWaitWhenWarmMs: ReadInt(config, "hoverWaitWhenWarmMs", min: 0, max: 30_000),
+            HoverForegroundResolveBudgetMs: ReadInt(
+                config,
+                "hoverForegroundResolveBudgetMs",
+                min: 0,
+                max: 5_000
+            ),
+            HoverFastProbeEnabled: ReadBool(config, "hoverFastProbeEnabled")
+        );
     }
 
     private static bool? ReadBool(JObject config, string propertyName)
@@ -77,8 +105,8 @@ internal sealed record LspClientConfiguration(
         }
 
         return raw.Equals("1", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
-               || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
+            || raw.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("on", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int? ReadInt(JObject config, string propertyName, int min, int max)

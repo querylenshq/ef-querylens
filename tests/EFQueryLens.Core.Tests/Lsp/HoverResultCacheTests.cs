@@ -108,7 +108,7 @@ public sealed class HoverResultCacheTests
     }
 
     [Fact]
-    public void Store_TranslationError_DoesNotCacheReady()
+    public void Store_TranslationError_CachesTerminalFailureBriefly()
     {
         var cache = CreateCache();
         var region = CreateRegion();
@@ -137,8 +137,40 @@ public sealed class HoverResultCacheTests
 
         cache.Store(region, error);
 
-        Assert.False(cache.TryGetReady(Fingerprint, SemanticKey, out _));
+        Assert.True(cache.TryGetReady(Fingerprint, SemanticKey, out var cached));
+        Assert.False(cached!.Structured!.Success);
         Assert.False(cache.IsSemanticKeyReady(SemanticKey));
+    }
+
+    [Fact]
+    public void Store_TranslationError_ExpiresWithInQueueTtl()
+    {
+        var cache = new HoverResultCache(hoverCacheTtlMs: 15_000, inQueueCacheTtlMs: 0);
+        var region = CreateRegion();
+        var error = new HoverResult(
+            QueryTranslationStatus.Ready,
+            new Hover(),
+            new QueryLensStructuredHoverResult(
+                Success: false,
+                ErrorMessage: "Type is not supported.",
+                Statements: [],
+                CommandCount: 0,
+                SourceExpression: null,
+                ExecutedExpression: null,
+                DbContextType: null,
+                ProviderName: null,
+                SourceFile: null,
+                SourceLine: 0,
+                Warnings: [],
+                EnrichedSql: null,
+                Mode: null,
+                Status: QueryTranslationStatus.Ready,
+                StatusMessage: "Type is not supported.",
+                AvgTranslationMs: 0));
+
+        cache.Store(region, error);
+
+        Assert.False(cache.TryGetReady(Fingerprint, SemanticKey, out _));
     }
 
     private static HoverResultCache CreateCache()
