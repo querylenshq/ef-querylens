@@ -30,6 +30,7 @@ export function readSettings(): QueryLensSettings {
         30000,
         0
     );
+    const hoverProgressNotify = config.get<boolean>('hoverProgressNotify', false);
     const notifyWhenSqlReady = config.get<boolean>('notifyWhenSqlReady', true);
 
     return {
@@ -41,6 +42,7 @@ export function readSettings(): QueryLensSettings {
         debugLogsEnabled,
         showStatusBar,
         hoverWaitWhenWarmMs,
+        hoverProgressNotify,
         notifyWhenSqlReady,
     };
 }

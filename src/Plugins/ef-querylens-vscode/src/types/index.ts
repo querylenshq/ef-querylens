@@ -33,5 +33,6 @@ export type QueryLensSettings = {
     debugLogsEnabled: boolean;
     showStatusBar: boolean;
     hoverWaitWhenWarmMs: number;
+    hoverProgressNotify: boolean;
     notifyWhenSqlReady: boolean;
 };

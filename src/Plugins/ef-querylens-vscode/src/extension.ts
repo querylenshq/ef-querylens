@@ -331,7 +331,7 @@ function buildLspRuntimeConfiguration(settings: QueryLensSettings): Record<strin
     return {
         debugEnabled: settings.debugLogsEnabled,
         enableLspHover: true,
-        hoverProgressNotify: false,
+        hoverProgressNotify: settings.hoverProgressNotify,
         sqlReadyNotify: settings.notifyWhenSqlReady,
         hoverProgressDelayMs: 350,
         hoverCacheTtlMs: 15_000,

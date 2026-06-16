@@ -181,6 +181,7 @@ function createSettings(): QueryLensSettings {
         debugLogsEnabled: false,
         showStatusBar: true,
         hoverWaitWhenWarmMs: 0,
+        hoverProgressNotify: false,
         notifyWhenSqlReady: true,
     };
 }

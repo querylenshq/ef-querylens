@@ -283,6 +283,29 @@ public sealed class HoverRequestCoordinatorTests
         Assert.True(result.Found);
     }
 
+    [Fact]
+    public void OnDocumentChanged_ClearsRegisteredSpanIndex()
+    {
+        var handler = new HoverHandler(
+            new DocumentManager(),
+            new HoverPreviewService(new NoOpQueryLensEngine())
+        );
+        const string path = "file.cs";
+        const string source = "var q = db.Orders.Where(o => o.Id == 1).ToList();";
+
+        _ = handler.RegionResolver.TryResolve(path, source, 0, 12);
+        Assert.True(
+            handler.RegionResolver.TryGetSemanticKeyByPosition(path, source, 0, 12, out var keyBefore)
+        );
+        Assert.False(string.IsNullOrWhiteSpace(keyBefore));
+
+        handler.OnDocumentChanged(path);
+
+        Assert.False(
+            handler.RegionResolver.TryGetSemanticKeyByPosition(path, source, 0, 12, out _)
+        );
+    }
+
     private static (int line, int character) FindPosition(string source, string marker)
     {
         var index = source.IndexOf(marker, StringComparison.Ordinal);

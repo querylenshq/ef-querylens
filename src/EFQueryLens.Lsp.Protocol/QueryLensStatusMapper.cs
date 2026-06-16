@@ -5,13 +5,23 @@ public static class QueryLensStatusMapper
 {
     public sealed class MappedStatus
     {
-        public MappedStatus(string text, string tooltip)
+        public MappedStatus(
+            string text,
+            string displayText,
+            QueryLensHostState state,
+            string tooltip)
         {
             Text = text;
+            DisplayText = displayText;
+            State = state;
             Tooltip = tooltip;
         }
 
         public string Text { get; }
+
+        public string DisplayText { get; }
+
+        public QueryLensHostState State { get; }
 
         public string Tooltip { get; }
     }
@@ -43,7 +53,8 @@ public static class QueryLensStatusMapper
             _ => "QueryLens: Starting…",
         };
 
-        var tooltipParts = new System.Collections.Generic.List<string> { message };
+        var displayText = $"{GetDisplayMarker(state)} QueryLens";
+        var tooltipParts = new System.Collections.Generic.List<string> { $"State: {text}", message };
         if (!string.IsNullOrWhiteSpace(assembly))
         {
             tooltipParts.Add($"Assembly: {assembly}");
@@ -55,9 +66,19 @@ public static class QueryLensStatusMapper
         }
 
         tooltipParts.Add("Click to open EF QueryLens output");
-        return new MappedStatus(text, string.Join("\n", tooltipParts));
+        return new MappedStatus(text, displayText, state, string.Join("\n", tooltipParts));
     }
 
     private static QueryLensHostState NormalizeHostState(QueryLensHostState? raw) =>
         raw ?? QueryLensHostState.Starting;
+
+    private static string GetDisplayMarker(QueryLensHostState state) =>
+        state switch
+        {
+            QueryLensHostState.Warming => "[W]",
+            QueryLensHostState.Computing => "[C]",
+            QueryLensHostState.Ready => "[R]",
+            QueryLensHostState.Unavailable => "[!]",
+            _ => "[S]",
+        };
 }

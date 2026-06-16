@@ -266,6 +266,42 @@ internal sealed class QueryRegionResolver
         _resolveInflight.Clear();
     }
 
+    /// <summary>
+    /// Drops per-document span/region registry state so edits cannot reuse stale semantic keys.
+    /// </summary>
+    public IReadOnlyList<(string AssemblyFingerprint, string SemanticKey)> InvalidateDocument(
+        string filePath
+    )
+    {
+        var normalizedPath = Path.GetFullPath(filePath);
+        var removed = new List<(string AssemblyFingerprint, string SemanticKey)>();
+        _spanIndex.TryRemove(normalizedPath, out _);
+
+        foreach (var inflightKey in _resolveInflight.Keys.ToList())
+        {
+            if (IsDocumentScopedKey(inflightKey, normalizedPath))
+            {
+                _resolveInflight.TryRemove(inflightKey, out _);
+            }
+        }
+
+        foreach (var pair in _regionBySemanticKey.ToList())
+        {
+            if (!IsDocumentScopedKey(pair.Value.RegionKey, normalizedPath))
+            {
+                continue;
+            }
+
+            removed.Add((pair.Value.AssemblyFingerprint, pair.Value.SemanticKey));
+            _regionBySemanticKey.TryRemove(pair.Key, out _);
+        }
+
+        return removed;
+    }
+
+    private static bool IsDocumentScopedKey(string regionKey, string normalizedPath) =>
+        regionKey.StartsWith(normalizedPath + "|", StringComparison.OrdinalIgnoreCase);
+
     private RegionResolveResult ResolveCore(
         string filePath,
         string sourceText,

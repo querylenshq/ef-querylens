@@ -117,7 +117,7 @@ internal sealed partial class HoverHandler
     public void InvalidateForConfigurationChange() => InvalidateCaches("configuration-changed");
 
     public void OnDocumentChanged(string filePath) =>
-        _coordinator.InvalidateDocumentChains(filePath);
+        _coordinator.InvalidateDocument(filePath);
 
     public void ApplyClientConfiguration(LspClientConfiguration configuration)
     {

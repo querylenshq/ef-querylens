@@ -99,7 +99,28 @@ internal sealed class HoverRequestCoordinator
         IReadOnlyList<LinqChainInfo> chains
     ) => _resolver.BuildChainSemanticKeys(filePath, sourceText, chains);
 
-    public void InvalidateDocumentChains(string filePath) => _chainCache.Invalidate(filePath);
+    public void InvalidateDocumentChains(string filePath) => InvalidateDocument(filePath);
+
+    public void InvalidateDocument(string filePath)
+    {
+        foreach (var (assemblyFingerprint, semanticKey) in _resolver.InvalidateDocument(filePath))
+        {
+            _cache.Remove(assemblyFingerprint, semanticKey);
+        }
+
+        var normalizedPath = Path.GetFullPath(filePath);
+        foreach (var pipelineKey in _pipelineInflight.Keys.ToList())
+        {
+            if (
+                pipelineKey.StartsWith(normalizedPath + "|", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                _pipelineInflight.TryRemove(pipelineKey, out _);
+            }
+        }
+
+        _chainCache.Invalidate(filePath);
+    }
 
     public void InvalidateAll()
     {
