@@ -6,14 +6,20 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.23] - 2026-06-16
+
 ### Changed
 - SQL-ready notifications are **client-polled** (background watch on `efquerylens/hover` after InQueue) instead of server-push `efquerylens/sqlReady`. Simplifies VS/Rider/VS Code delivery; watcher budget uses translate-timeout floor (15s+, cap 120s), decoupled from QuickInfo poll budget.
 - Hover now defaults to non-blocking SQL generation: uncached queries show a processing hover immediately and the client shows the SQL-ready toast when background translation finishes.
 - VS extension: layered SQL-ready notifications (InfoBar, status bar flash, output pane) when **Notify when SQL is ready** is enabled.
 - Removed LSP coordinator sql-ready pending state, `sqlReadyEligible` hover parameter, and `HoverReadyNotifier`.
+- IDE status bars use fixed-width labels (`QueryLens` + state marker) with details in the tooltip, avoiding layout jitter in VS Code, Rider, and Visual Studio.
 
 ### Fixed
 - VS dismiss-early scenario: `SqlReadyHoverWatcher` now outlasts slow translations so toasts appear without relying on broken JsonRpc push delivery.
+- Hover span/region cache is invalidated on document edits so stale SQL is not served after source changes.
+- VS Code passes `hoverProgressNotify` from settings to the LSP init options.
+- Shared protocol status mapper aligned with stable display fields used by IDE hosts.
 
 ## [1.0.22] - 2026-06-12
 
