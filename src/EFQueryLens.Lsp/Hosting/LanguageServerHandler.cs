@@ -62,7 +62,7 @@ internal sealed partial class LanguageServerHandler
         var configuration = LspClientConfiguration.FromInitializeRequest(request);
         ApplyClientConfiguration(configuration);
 
-        return CreateInitializeResult(_enableLspHover);
+        return CreateInitializeResult(_enableLspHover, advertiseSetupCommand: IsRiderClient());
     }
 
     [JsonRpcMethod("initialized")]
@@ -122,7 +122,9 @@ internal sealed partial class LanguageServerHandler
         }
     }
 
-    private static JObject CreateInitializeResult(bool enableLspHover)
+    private static JObject CreateInitializeResult(
+        bool enableLspHover,
+        bool advertiseSetupCommand)
     {
         return new JObject
         {
@@ -141,18 +143,29 @@ internal sealed partial class LanguageServerHandler
                 },
                 ["executeCommandProvider"] = new JObject
                 {
-                    ["commands"] = new JArray(
-                        "efquerylens.warmup",
-                        "efquerylens.daemon.restart",
-                        "efquerylens.preview.recalculate",
-                        "efquerylens.preview.structuredHover",
-                        "efquerylens.showsqlpopup",
-                        "efquerylens.opensqleditor",
-                        "efquerylens.copysql",
-                        "efquerylens.reanalyze",
-                        "efquerylens.setup")
+                    ["commands"] = CreateExecuteCommandList(advertiseSetupCommand)
                 },
             },
         };
+    }
+
+    private static JArray CreateExecuteCommandList(bool includeSetupCommand)
+    {
+        var commands = new JArray(
+            "efquerylens.warmup",
+            "efquerylens.daemon.restart",
+            "efquerylens.preview.recalculate",
+            "efquerylens.preview.structuredHover",
+            "efquerylens.showsqlpopup",
+            "efquerylens.opensqleditor",
+            "efquerylens.copysql",
+            "efquerylens.reanalyze");
+
+        if (includeSetupCommand)
+        {
+            commands.Add("efquerylens.setup");
+        }
+
+        return commands;
     }
 }

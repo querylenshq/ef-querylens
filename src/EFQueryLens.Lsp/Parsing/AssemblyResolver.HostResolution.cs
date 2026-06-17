@@ -11,7 +11,8 @@ public static partial class AssemblyResolver
         DateTime TimestampUtc,
         bool HasFactory,
         bool HasRuntimeArtifacts,
-        bool LooksLikeRefOrObj);
+        bool LooksLikeRefOrObj,
+        bool IsDiscouragedHost);
 
     /// <summary>
     /// Scans the host project's source files for an <c>IQueryLensDbContextFactory&lt;T&gt;</c>
@@ -283,6 +284,7 @@ public static partial class AssemblyResolver
         foreach (var (csprojPath, exeAssemblyName) in candidates)
         {
             var projDir = Path.GetDirectoryName(csprojPath)!;
+            var isDiscouragedHost = IsDiscouragedHostProject(csprojPath, exeAssemblyName);
 
             // Resolve all output paths for this host executable (bin glob + MSBuild fallback)
             var hostDllPaths = FindProjectOutputDllPaths(csprojPath, exeAssemblyName, ref debugLog);
@@ -318,14 +320,16 @@ public static partial class AssemblyResolver
 
                 debugLog +=
                     $"  -> {exeAssemblyName}: found at {hostDll} (timestamp: {ts:u}, hasFactory: {hasFactory}, " +
-                    $"hasRuntimeArtifacts: {hasRuntimeArtifacts}, looksLikeRefOrObj: {looksLikeRefOrObj})\n";
+                    $"hasRuntimeArtifacts: {hasRuntimeArtifacts}, looksLikeRefOrObj: {looksLikeRefOrObj}, " +
+                    $"isDiscouragedHost: {isDiscouragedHost})\n";
 
                 scored.Add(new CandidateAssembly(
                     hostDll,
                     ts,
                     hasFactory,
                     hasRuntimeArtifacts,
-                    looksLikeRefOrObj));
+                    looksLikeRefOrObj,
+                    isDiscouragedHost));
             }
         }
 
@@ -334,11 +338,13 @@ public static partial class AssemblyResolver
             .Select(g => g
                 .OrderByDescending(x => x.HasFactory ? 1 : 0)
                 .ThenByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
+                .ThenByDescending(x => x.IsDiscouragedHost ? 0 : 1)
                 .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
                 .ThenByDescending(x => x.TimestampUtc)
                 .First())
             .OrderByDescending(x => x.HasFactory ? 1 : 0)
             .ThenByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
+            .ThenByDescending(x => x.IsDiscouragedHost ? 0 : 1)
             .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
             .ThenByDescending(x => x.TimestampUtc)
             .Select(x => x.DllPath)
@@ -491,7 +497,8 @@ public static partial class AssemblyResolver
                 File.GetLastWriteTimeUtc(path),
                 HasFactory: false,
                 HasRuntimeArtifacts: HasExecutableRuntimeArtifacts(path),
-                LooksLikeRefOrObj: LooksLikeRefOrObjPath(path)))
+                LooksLikeRefOrObj: LooksLikeRefOrObjPath(path),
+                IsDiscouragedHost: false))
             .OrderByDescending(x => x.HasRuntimeArtifacts ? 1 : 0)
             .ThenByDescending(x => x.LooksLikeRefOrObj ? 0 : 1)
             .ThenByDescending(x => x.TimestampUtc)
@@ -555,5 +562,25 @@ public static partial class AssemblyResolver
         var normalized = path.Replace('\\', '/');
         return normalized.Contains("/ref/", StringComparison.OrdinalIgnoreCase)
             || normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDiscouragedHostProject(string csprojPath, string assemblyName)
+    {
+        var projectName = Path.GetFileNameWithoutExtension(csprojPath);
+        var normalizedPath = csprojPath.Replace('\\', '/');
+
+        return IsDiscouragedHostName(projectName)
+            || IsDiscouragedHostName(assemblyName)
+            || normalizedPath.Contains("/tests/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.Contains("/test/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDiscouragedHostName(string value)
+    {
+        return value.EndsWith(".Tests", StringComparison.OrdinalIgnoreCase)
+            || value.EndsWith(".Test", StringComparison.OrdinalIgnoreCase)
+            || value.Contains(".Tests.", StringComparison.OrdinalIgnoreCase)
+            || value.Contains(".Test.", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("Migrations", StringComparison.OrdinalIgnoreCase);
     }
 }

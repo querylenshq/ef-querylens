@@ -52,15 +52,27 @@ public sealed class LanguageServerHandlerCodeLensTests
     }
 
     [Fact]
-    public void Initialize_AdvertisesSetupCommand()
+    public void Initialize_ForVsCode_DoesNotAdvertiseSetupCommand()
     {
-        var handler = CreateHandler(new DocumentManager());
+        var commands = WithQueryLensClient("vscode", () =>
+        {
+            var handler = CreateHandler(new DocumentManager());
+            return GetAdvertisedCommands(handler.Initialize());
+        });
 
-        var result = handler.Initialize();
-        var commands = result["capabilities"]?["executeCommandProvider"]?["commands"] as JArray;
+        Assert.DoesNotContain("efquerylens.setup", commands);
+    }
 
-        Assert.NotNull(commands);
-        Assert.Contains(commands!.Values<string>(), command => command == "efquerylens.setup");
+    [Fact]
+    public void Initialize_ForRider_AdvertisesSetupCommand()
+    {
+        var commands = WithQueryLensClient("rider", () =>
+        {
+            var handler = CreateHandler(new DocumentManager());
+            return GetAdvertisedCommands(handler.Initialize());
+        });
+
+        Assert.Contains("efquerylens.setup", commands);
     }
 
     [Fact]
@@ -99,6 +111,28 @@ public sealed class LanguageServerHandlerCodeLensTests
                     Uri = new Uri(uri),
                 },
             });
+    }
+
+    private static string[] GetAdvertisedCommands(JObject initializeResult)
+    {
+        var commands = initializeResult["capabilities"]?["executeCommandProvider"]?["commands"] as JArray;
+
+        Assert.NotNull(commands);
+        return commands!.Values<string>().OfType<string>().ToArray();
+    }
+
+    private static T WithQueryLensClient<T>(string value, Func<T> action)
+    {
+        var previous = Environment.GetEnvironmentVariable("QUERYLENS_CLIENT");
+        Environment.SetEnvironmentVariable("QUERYLENS_CLIENT", value);
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUERYLENS_CLIENT", previous);
+        }
     }
 
     private static LanguageServerHandler CreateHandler(DocumentManager documentManager)

@@ -101,6 +101,76 @@ public sealed class AssemblyResolverHostResolutionTests
         Assert.Contains($"{Path.DirectorySeparatorChar}net10.0{Path.DirectorySeparatorChar}", resolved!.Replace('/', Path.DirectorySeparatorChar));
     }
 
+    [Fact]
+    public void TryGetTargetAssembly_PrefersAppHostOverNewerMigrationTestHost()
+    {
+        using var workspace = new HostResolutionWorkspace();
+        workspace.WriteSlnx("""
+            <Solution>
+              <Project Path="src/Share.Medics.Applications.Api/Share.Medics.Applications.Api.csproj" />
+              <Project Path="src/Share.Medics.Applications.Core/Share.Medics.Applications.Core.csproj" />
+              <Project Path="tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests.csproj" />
+            </Solution>
+            """);
+        workspace.WriteExecutableCsproj(
+            "src/Share.Medics.Applications.Api/Share.Medics.Applications.Api.csproj",
+            "Share.Medics.Applications.Api");
+        workspace.WriteLibraryCsproj(
+            "src/Share.Medics.Applications.Core/Share.Medics.Applications.Core.csproj",
+            "Share.Medics.Applications.Core");
+        workspace.WriteExecutableCsproj(
+            "tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests.csproj",
+            "Share.Medics.Applications.EFCoreMigrations.Dev.Tests");
+        workspace.WriteDll(
+            "src/Share.Medics.Applications.Core/bin/Debug/net10.0/Share.Medics.Applications.Core.dll",
+            utcTimestamp: DateTime.UtcNow.AddMinutes(-10));
+        workspace.WriteDll(
+            "src/Share.Medics.Applications.Api/bin/Debug/net10.0/Share.Medics.Applications.Api.dll",
+            utcTimestamp: DateTime.UtcNow.AddMinutes(-5));
+        workspace.WriteDll(
+            "src/Share.Medics.Applications.Api/bin/Debug/net10.0/Share.Medics.Applications.Core.dll",
+            utcTimestamp: DateTime.UtcNow.AddMinutes(-5));
+        workspace.WriteDll(
+            "tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/bin/Debug/net10.0/Share.Medics.Applications.EFCoreMigrations.Dev.Tests.dll",
+            utcTimestamp: DateTime.UtcNow.AddMinutes(5));
+        workspace.WriteDll(
+            "tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/bin/Debug/net10.0/Share.Medics.Applications.Core.dll",
+            utcTimestamp: DateTime.UtcNow.AddMinutes(5));
+        workspace.WriteSourceFile("src/Share.Medics.Applications.Core/Application/Services/ProductService.cs");
+
+        var resolved = AssemblyResolver.TryGetTargetAssembly(workspace.SourceFilePath);
+
+        Assert.NotNull(resolved);
+        Assert.EndsWith("Share.Medics.Applications.Api.dll", resolved!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryGetTargetAssembly_UsesMigrationTestHostWhenItIsOnlyValidHost()
+    {
+        using var workspace = new HostResolutionWorkspace();
+        workspace.WriteSlnx("""
+            <Solution>
+              <Project Path="src/Share.Medics.Applications.Core/Share.Medics.Applications.Core.csproj" />
+              <Project Path="tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests.csproj" />
+            </Solution>
+            """);
+        workspace.WriteLibraryCsproj(
+            "src/Share.Medics.Applications.Core/Share.Medics.Applications.Core.csproj",
+            "Share.Medics.Applications.Core");
+        workspace.WriteExecutableCsproj(
+            "tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests.csproj",
+            "Share.Medics.Applications.EFCoreMigrations.Dev.Tests");
+        workspace.WriteDll("src/Share.Medics.Applications.Core/bin/Debug/net10.0/Share.Medics.Applications.Core.dll");
+        workspace.WriteDll("tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/bin/Debug/net10.0/Share.Medics.Applications.EFCoreMigrations.Dev.Tests.dll");
+        workspace.WriteDll("tests/Share.Medics.Applications.EFCoreMigrations.Dev.Tests/bin/Debug/net10.0/Share.Medics.Applications.Core.dll");
+        workspace.WriteSourceFile("src/Share.Medics.Applications.Core/Application/Services/ProductService.cs");
+
+        var resolved = AssemblyResolver.TryGetTargetAssembly(workspace.SourceFilePath);
+
+        Assert.NotNull(resolved);
+        Assert.EndsWith("Share.Medics.Applications.EFCoreMigrations.Dev.Tests.dll", resolved!, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("  -> EXCEPTION: No .slnx or .sln file found.\n", "Could not locate a .slnx or .sln file above this project.")]
     [InlineData("  -> EXCEPTION: No executable project references this library.\n", "No executable host project was found in the solution.")]
