@@ -129,8 +129,13 @@ public sealed class HoverRequestCoordinatorTests
         Assert.True(elapsed.ElapsedMilliseconds < 500);
 
         engine.Complete();
-        var ready = await owner.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(QueryTranslationStatus.Ready, ready.Status);
+        await WaitUntilReadyAsync(
+            coordinator,
+            project.SourceFilePath,
+            source,
+            position.line,
+            position.character
+        );
     }
 
     [Fact]
