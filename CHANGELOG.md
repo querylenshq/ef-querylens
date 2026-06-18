@@ -6,11 +6,21 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-06-17
+
 ### Changed
 - Rider plugin: minimum supported Rider version is now 2026.1 (build `261+`).
+- LSP engine startup is deferred until the first translation request, reducing IDE open-time cost.
+- VS Code: improved bundled .NET runtime detection and startup messaging when the daemon cannot launch.
 
 ### Removed
 - Rider plugin: removed support for Rider 2025.3 and earlier.
+- LSP initialize no longer advertises `efquerylens.setup` to VS Code clients, avoiding command registration collisions.
+
+### Fixed
+- Host assembly resolution now prefers real app executables over newer EF Core migration/test projects when both are valid in the same solution.
+- Rider setup CodeLens clicks route through Rider UI actions instead of the generic LSP execute-command path.
+- Stabilized a flaky hover coordinator test on slower CI runners.
 
 ## [1.0.23] - 2026-06-16
 
