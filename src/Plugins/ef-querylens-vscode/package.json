@@ -160,7 +160,7 @@
     "test": "node ./out/test/runTest.js"
   },
   "dependencies": {
-    "sql-formatter": "^15.8.1",
+    "sql-formatter": "^15.8.2",
     "vscode-languageclient": "^10.0.0"
   },
   "devDependencies": {
