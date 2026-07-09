@@ -171,6 +171,6 @@
     "glob": "^13.0.6",
     "mocha": "^11.7.6",
     "prettier": "^3.8.3",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
