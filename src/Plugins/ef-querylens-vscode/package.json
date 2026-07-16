@@ -170,7 +170,7 @@
     "@vscode/test-electron": "^2.5.2",
     "glob": "^13.0.6",
     "mocha": "^11.7.6",
-    "prettier": "^3.8.3",
+    "prettier": "^3.9.5",
     "typescript": "^6.0.3"
   }
 }
