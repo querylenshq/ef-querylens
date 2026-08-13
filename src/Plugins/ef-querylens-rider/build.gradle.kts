@@ -34,7 +34,7 @@ dependencies {
         pluginVerifier()
     }
     // CommonMark spec-compliant Markdown to HTML (replaces custom regex conversion)
-    implementation("org.commonmark:commonmark:0.27.1")
+    implementation("org.commonmark:commonmark:0.30.0")
     testImplementation(kotlin("test-junit5"))
 }
 
