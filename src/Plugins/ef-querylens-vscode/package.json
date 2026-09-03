@@ -161,7 +161,7 @@
   },
   "dependencies": {
     "sql-formatter": "^15.8.1",
-    "vscode-languageclient": "^10.0.0"
+    "vscode-languageclient": "^10.1.1"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
